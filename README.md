@@ -26,6 +26,23 @@ zig build
 zig build test
 ```
 
+## Testing
+
+The project includes a comprehensive test suite to verify the functionality of all components. The build system is configured to run tests for each module separately, making it easy to identify which component has issues.
+
+### Running Tests
+
+```bash
+# Run all tests
+zig build test
+
+# Run tests for specific components
+zig build test-matrix     # Run matrix operation tests
+zig build test-activation # Run activation function tests
+zig build test-layer      # Run neural network layer tests
+zig build test-network    # Run full network tests
+```
+
 ## Learning Goals
 
 This project serves as a learning exercise for:

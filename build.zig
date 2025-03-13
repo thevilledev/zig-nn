@@ -42,17 +42,52 @@ pub fn build(b: *std.Build) void {
     // running `zig build`).
     b.installArtifact(lib);
 
-    // Creates a step for unit testing. This only builds the test executable
-    // but does not run it.
-    const lib_unit_tests = b.addTest(.{
-        .root_module = lib_mod,
+    // Main test step that will run all tests
+    const test_step = b.step("test", "Run all unit tests");
+
+    // Create individual test steps for each source file
+    // Run them in a logical order: matrix -> activation -> layer -> network
+    var prev_step = addTestStep(b, test_step, "matrix", "src/matrix.zig", null);
+    prev_step = addTestStep(b, test_step, "activation", "src/activation.zig", prev_step);
+    prev_step = addTestStep(b, test_step, "layer", "src/layer.zig", prev_step);
+    _ = addTestStep(b, test_step, "network", "src/network.zig", prev_step);
+}
+
+// Helper function to create a test step for a specific file
+fn addTestStep(
+    b: *std.Build,
+    main_test_step: *std.Build.Step,
+    name: []const u8,
+    path: []const u8,
+    prev_step: ?*std.Build.Step,
+) *std.Build.Step {
+    // Create a system command to run zig test directly
+    const test_cmd = b.addSystemCommand(&[_][]const u8{
+        "zig", "test", path,
     });
+    
+    // Print the test name with a separator for better visibility
+    const echo_step = b.addSystemCommand(&[_][]const u8{
+        "echo", b.fmt("\n=== Running {s} tests ===", .{name}),
+    });
+    
+    // Make sure echo runs before the test
+    test_cmd.step.dependOn(&echo_step.step);
+    
+    // If there's a previous step, make this step depend on it
+    // This ensures sequential execution
+    if (prev_step) |step| {
+        echo_step.step.dependOn(step);
+    }
 
-    const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
-
-    // Similar to creating the run step earlier, this exposes a `test` step to
-    // the `zig build --help` menu, providing a way for the user to request
-    // running the unit tests.
-    const test_step = b.step("test", "Run unit tests");
-    test_step.dependOn(&run_lib_unit_tests.step);
+    // Create an individual step for this test
+    const test_name = b.fmt("test-{s}", .{name});
+    const test_desc = b.fmt("Run {s} tests", .{name});
+    const file_test_step = b.step(test_name, test_desc);
+    file_test_step.dependOn(&test_cmd.step);
+    
+    // Add this test to the main test step
+    main_test_step.dependOn(&test_cmd.step);
+    
+    return &test_cmd.step;
 }
