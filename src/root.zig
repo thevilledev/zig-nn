@@ -10,15 +10,8 @@ const activation_mod = @import("activation.zig");
 const layer_mod = @import("layer.zig");
 const network_mod = @import("network.zig");
 
-// Export the main components of the library
-pub const Matrix = matrix_mod.Matrix;
-pub const Activation = activation_mod.Activation;
-pub const Layer = layer_mod.Layer;
-pub const GatedLayer = layer_mod.GatedLayer;
-pub const Network = network_mod.Network;
-pub const LayerType = network_mod.LayerType;
-pub const LayerVariant = network_mod.LayerVariant;
-
+/// Library usage example:
+///
 /// Simple example of creating and using a neural network
 ///
 /// ```zig
@@ -43,3 +36,10 @@ pub const LayerVariant = network_mod.LayerVariant;
 /// // Get the result
 /// const result = output.get(0, 0);
 /// ```
+pub const Matrix = matrix_mod.Matrix;
+pub const Activation = activation_mod.Activation;
+pub const Layer = layer_mod.Layer;
+pub const GatedLayer = layer_mod.GatedLayer;
+pub const Network = network_mod.Network;
+pub const LayerType = network_mod.LayerType;
+pub const LayerVariant = network_mod.LayerVariant;

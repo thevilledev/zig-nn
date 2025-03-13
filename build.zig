@@ -45,55 +45,55 @@ pub fn build(b: *std.Build) void {
     // Create a step for building examples
     const examples_step = b.step("examples", "Build all examples");
 
-    // Build the gated_network example
-    const gated_network_exe = b.addExecutable(.{
-        .name = "gated_network",
-        .root_source_file = b.path("examples/gated_network/gated_network.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
+    // Define all examples in a single place for easier maintenance
+    inline for ([_]struct {
+        name: []const u8,
+        src: []const u8,
+        description: []const u8,
+    }{
+        .{
+            .name = "gated_network",
+            .src = "examples/gated_network/gated_network.zig",
+            .description = "Run the gated network example"
+        },
+        .{
+            .name = "simple_xor",
+            .src = "examples/simple_xor/simple_xor.zig",
+            .description = "Run the simple XOR example"
+        },
+        // Add new examples here in the future
+    }) |example| {
+        // Build the example executable
+        const exe = b.addExecutable(.{
+            .name = example.name,
+            .root_source_file = b.path(example.src),
+            .target = target,
+            .optimize = optimize,
+        });
 
-    // Add the library module to the example executable
-    gated_network_exe.root_module.addImport("zig-nn", lib_mod);
+        // Add the library module to the example executable
+        exe.root_module.addImport("zig-nn", lib_mod);
 
-    // Install the example executable
-    b.installArtifact(gated_network_exe);
+        // Install the example executable
+        b.installArtifact(exe);
 
-    // Create a run step for the gated_network example
-    const run_gated_network_cmd = b.addRunArtifact(gated_network_exe);
-    run_gated_network_cmd.step.dependOn(b.getInstallStep());
+        // Create a run step for the example
+        const run_cmd = b.addRunArtifact(exe);
+        run_cmd.step.dependOn(b.getInstallStep());
 
-    // Add a separate step to run the gated_network example
-    const run_gated_network_step = b.step("run-gated-network", "Run the gated network example");
-    run_gated_network_step.dependOn(&run_gated_network_cmd.step);
+        // Add command line arguments if provided
+        if (b.args) |args| {
+            run_cmd.addArgs(args);
+        }
 
-    // Add the gated_network example to the examples step
-    examples_step.dependOn(&gated_network_exe.step);
+        // Add a separate step to run the example
+        const step_name = "run_" ++ example.name;
+        const run_step = b.step(step_name, example.description);
+        run_step.dependOn(&run_cmd.step);
 
-    // Build the simple_xor example
-    const simple_xor_exe = b.addExecutable(.{
-        .name = "simple_xor",
-        .root_source_file = b.path("examples/simple_xor/simple_xor.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
-    // Add the library module to the example executable
-    simple_xor_exe.root_module.addImport("zig-nn", lib_mod);
-
-    // Install the example executable
-    b.installArtifact(simple_xor_exe);
-
-    // Create a run step for the simple_xor example
-    const run_simple_xor_cmd = b.addRunArtifact(simple_xor_exe);
-    run_simple_xor_cmd.step.dependOn(b.getInstallStep());
-
-    // Add a separate step to run the simple_xor example
-    const run_simple_xor_step = b.step("run-simple-xor", "Run the simple XOR example");
-    run_simple_xor_step.dependOn(&run_simple_xor_cmd.step);
-
-    // Add the simple_xor example to the examples step
-    examples_step.dependOn(&simple_xor_exe.step);
+        // Add the example to the examples step
+        examples_step.dependOn(&exe.step);
+    }
 
     // Main test step that will run all tests
     const test_step = b.step("test", "Run all unit tests");
