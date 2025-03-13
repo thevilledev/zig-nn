@@ -70,6 +70,31 @@ pub fn build(b: *std.Build) void {
     // Add the gated_network example to the examples step
     examples_step.dependOn(&gated_network_exe.step);
 
+    // Build the simple_xor example
+    const simple_xor_exe = b.addExecutable(.{
+        .name = "simple_xor",
+        .root_source_file = b.path("examples/simple_xor/simple_xor.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // Add the library module to the example executable
+    simple_xor_exe.root_module.addImport("zig-nn", lib_mod);
+
+    // Install the example executable
+    b.installArtifact(simple_xor_exe);
+
+    // Create a run step for the simple_xor example
+    const run_simple_xor_cmd = b.addRunArtifact(simple_xor_exe);
+    run_simple_xor_cmd.step.dependOn(b.getInstallStep());
+
+    // Add a separate step to run the simple_xor example
+    const run_simple_xor_step = b.step("run-simple-xor", "Run the simple XOR example");
+    run_simple_xor_step.dependOn(&run_simple_xor_cmd.step);
+
+    // Add the simple_xor example to the examples step
+    examples_step.dependOn(&simple_xor_exe.step);
+
     // Main test step that will run all tests
     const test_step = b.step("test", "Run all unit tests");
 

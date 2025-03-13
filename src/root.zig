@@ -19,10 +19,27 @@ pub const Network = network_mod.Network;
 pub const LayerType = network_mod.LayerType;
 pub const LayerVariant = network_mod.LayerVariant;
 
-pub export fn add(a: i32, b: i32) i32 {
-    return a + b;
-}
-
-test "basic add functionality" {
-    try testing.expect(add(3, 7) == 10);
-}
+/// Simple example of creating and using a neural network
+///
+/// ```zig
+/// // Create a neural network
+/// var network = Network.init(allocator);
+/// defer network.deinit();
+///
+/// // Add layers (input -> hidden -> output)
+/// try network.addLayer(2, 3, Activation.relu, Activation.relu_derivative);
+/// try network.addLayer(3, 1, Activation.sigmoid, Activation.sigmoid_derivative);
+///
+/// // Create input data
+/// var input = try Matrix.init(allocator, 1, 2);
+/// defer input.deinit();
+/// input.set(0, 0, 0.5);
+/// input.set(0, 1, 0.8);
+///
+/// // Forward pass
+/// var output = try network.forward(input);
+/// defer output.deinit();
+///
+/// // Get the result
+/// const result = output.get(0, 0);
+/// ```
