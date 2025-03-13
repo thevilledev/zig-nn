@@ -40,7 +40,7 @@ pub const Activation = struct {
     /// Apply activation function to matrix
     pub fn apply(matrix: Matrix, func: *const fn (f64) f64, allocator: std.mem.Allocator) !Matrix {
         var result = try Matrix.init(allocator, matrix.rows, matrix.cols);
-        
+
         for (0..matrix.rows) |i| {
             for (0..matrix.cols) |j| {
                 const value = matrix.get(i, j);
@@ -73,10 +73,10 @@ test "tanh function" {
 
 test "activation function application to matrix" {
     const allocator = testing.allocator;
-    
+
     var m = try Matrix.init(allocator, 2, 2);
     defer m.deinit();
-    
+
     m.set(0, 0, -1.0);
     m.set(0, 1, 0.0);
     m.set(1, 0, 1.0);

@@ -65,15 +65,15 @@ fn addTestStep(
     const test_cmd = b.addSystemCommand(&[_][]const u8{
         "zig", "test", path,
     });
-    
+
     // Print the test name with a separator for better visibility
     const echo_step = b.addSystemCommand(&[_][]const u8{
         "echo", b.fmt("\n=== Running {s} tests ===", .{name}),
     });
-    
+
     // Make sure echo runs before the test
     test_cmd.step.dependOn(&echo_step.step);
-    
+
     // If there's a previous step, make this step depend on it
     // This ensures sequential execution
     if (prev_step) |step| {
@@ -85,9 +85,9 @@ fn addTestStep(
     const test_desc = b.fmt("Run {s} tests", .{name});
     const file_test_step = b.step(test_name, test_desc);
     file_test_step.dependOn(&test_cmd.step);
-    
+
     // Add this test to the main test step
     main_test_step.dependOn(&test_cmd.step);
-    
+
     return &test_cmd.step;
 }

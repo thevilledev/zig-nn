@@ -73,7 +73,7 @@ pub const Layer = struct {
 // Tests
 test "layer initialization" {
     const allocator = testing.allocator;
-    
+
     var layer = try Layer.init(
         allocator,
         3,  // input size
@@ -89,7 +89,7 @@ test "layer initialization" {
 
 test "layer forward propagation" {
     const allocator = testing.allocator;
-    
+
     // Create a layer with known weights and biases for testing
     var layer = try Layer.init(
         allocator,
@@ -121,4 +121,4 @@ test "layer forward propagation" {
         output.get(0, 0),
         0.0001
     );
-} 
+}

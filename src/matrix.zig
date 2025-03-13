@@ -47,7 +47,7 @@ pub const Matrix = struct {
     pub fn randomize(self: *Matrix, min: f64, max: f64) void {
         var prng = std.Random.DefaultPrng.init(@intCast(std.time.milliTimestamp()));
         const rand = prng.random();
-        
+
         for (0..self.rows) |i| {
             for (0..self.cols) |j| {
                 const rand_float = rand.float(f64);
@@ -64,7 +64,7 @@ pub const Matrix = struct {
         }
 
         var result = try Matrix.init(allocator, self.rows, other.cols);
-        
+
         for (0..self.rows) |i| {
             for (0..other.cols) |j| {
                 var sum: f64 = 0;
@@ -85,7 +85,7 @@ pub const Matrix = struct {
         }
 
         var result = try Matrix.init(allocator, self.rows, self.cols);
-        
+
         for (0..self.rows) |i| {
             for (0..self.cols) |j| {
                 const sum = self.get(i, j) + other.get(i, j);
@@ -113,11 +113,11 @@ pub const Matrix = struct {
 // Tests
 test "matrix basic operations" {
     const allocator = testing.allocator;
-    
+
     // Test initialization
     var m = try Matrix.init(allocator, 2, 3);
     defer m.deinit();
-    
+
     try testing.expectEqual(@as(usize, 2), m.rows);
     try testing.expectEqual(@as(usize, 3), m.cols);
 
@@ -125,7 +125,7 @@ test "matrix basic operations" {
     m.set(0, 0, 1.0);
     m.set(0, 1, 2.0);
     m.set(1, 0, 3.0);
-    
+
     try testing.expectEqual(@as(f64, 1.0), m.get(0, 0));
     try testing.expectEqual(@as(f64, 2.0), m.get(0, 1));
     try testing.expectEqual(@as(f64, 3.0), m.get(1, 0));
@@ -133,10 +133,10 @@ test "matrix basic operations" {
 
 test "matrix multiplication" {
     const allocator = testing.allocator;
-    
+
     var m1 = try Matrix.init(allocator, 2, 3);
     defer m1.deinit();
-    
+
     var m2 = try Matrix.init(allocator, 3, 2);
     defer m2.deinit();
 

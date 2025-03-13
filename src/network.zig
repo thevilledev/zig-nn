@@ -47,18 +47,18 @@ pub const Network = struct {
 
         var current = input;
         std.debug.print("Input dimensions: {}x{}\n", .{ current.rows, current.cols });
-        
+
         for (self.layers.items, 0..) |layer, i| {
             std.debug.print("Layer {} - Expected input size: {}, Current input cols: {}\n", 
                 .{ i, layer.getInputSize(), current.cols });
-            
+
             if (current.cols != layer.getInputSize()) {
                 return error.InvalidInputDimensions;
             }
-            
+
             const next = try layer.forward(current);
             std.debug.print("Layer {} output dimensions: {}x{}\n", .{ i, next.rows, next.cols });
-            
+
             if (current.data.ptr != input.data.ptr) {
                 current.deinit();
             }
@@ -88,7 +88,7 @@ pub const Network = struct {
 // Tests
 test "network initialization and layer addition" {
     const allocator = testing.allocator;
-    
+
     var network = Network.init(allocator);
     defer network.deinit();
 
@@ -101,7 +101,7 @@ test "network initialization and layer addition" {
 
 test "network forward propagation" {
     const allocator = testing.allocator;
-    
+
     var network = Network.init(allocator);
     defer network.deinit();
 
