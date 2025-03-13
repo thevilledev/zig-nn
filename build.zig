@@ -42,6 +42,34 @@ pub fn build(b: *std.Build) void {
     // running `zig build`).
     b.installArtifact(lib);
 
+    // Create a step for building examples
+    const examples_step = b.step("examples", "Build all examples");
+
+    // Build the gated_network example
+    const gated_network_exe = b.addExecutable(.{
+        .name = "gated_network",
+        .root_source_file = b.path("examples/gated_network/gated_network.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // Add the library module to the example executable
+    gated_network_exe.root_module.addImport("zig-nn", lib_mod);
+
+    // Install the example executable
+    b.installArtifact(gated_network_exe);
+
+    // Create a run step for the gated_network example
+    const run_gated_network_cmd = b.addRunArtifact(gated_network_exe);
+    run_gated_network_cmd.step.dependOn(b.getInstallStep());
+
+    // Add a separate step to run the gated_network example
+    const run_gated_network_step = b.step("run-gated-network", "Run the gated network example");
+    run_gated_network_step.dependOn(&run_gated_network_cmd.step);
+
+    // Add the gated_network example to the examples step
+    examples_step.dependOn(&gated_network_exe.step);
+
     // Main test step that will run all tests
     const test_step = b.step("test", "Run all unit tests");
 
