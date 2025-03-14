@@ -12,22 +12,6 @@ A minimalistic neural network implementation in Zig for learning purposes. This 
 - Basic feed-forward neural network architecture
 - Support for gated architectures used in modern transformer models
 
-## Building
-
-Make sure you have Zig installed on your system. This project is developed with the latest stable version of Zig.
-
-```bash
-# Clone the repository
-git clone https://github.com/thevilledev/zig-nn.git
-cd zig-nn
-
-# Build the project
-zig build
-
-# Run tests
-zig build test
-```
-
 ## Testing
 
 The project includes a comprehensive test suite to verify the functionality of all components. The build system is configured to run tests for each module separately, making it easy to identify which component has issues.
