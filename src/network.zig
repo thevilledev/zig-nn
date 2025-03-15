@@ -171,27 +171,13 @@ pub const Network = struct {
         }
 
         var current = input;
-        // Only print input dimensions in debug builds
-        if (std.debug.runtime_safety) {
-            std.debug.print("Input dimensions: {}x{}\n", .{ current.rows, current.cols });
-        }
 
-        for (self.layers.items, 0..) |layer, i| {
-            // Only print layer info in debug builds
-            if (std.debug.runtime_safety) {
-                std.debug.print("Layer {} - Expected input size: {}, Current input cols: {}\n", .{ i, layer.getInputSize(), current.cols });
-            }
-
+        for (self.layers.items) |layer| {
             if (current.cols != layer.getInputSize()) {
                 return error.InvalidInputDimensions;
             }
 
             const next = try layer.forward(current);
-
-            // Only print output dimensions in debug builds
-            if (std.debug.runtime_safety) {
-                std.debug.print("Layer {} output dimensions: {}x{}\n", .{ i, next.rows, next.cols });
-            }
 
             if (current.data.ptr != input.data.ptr) {
                 current.deinit();
@@ -409,11 +395,6 @@ pub const Network = struct {
             // Calculate average loss for the epoch
             epoch_loss /= @as(f64, @floatFromInt(num_samples));
             loss_history[epoch] = epoch_loss;
-
-            // Only print every 1000 epochs or the final epoch
-            if (epoch % 1000 == 0 or epoch == epochs - 1) {
-                std.debug.print("Epoch {}/{}: loss = {d:.6}\n", .{ epoch + 1, epochs, epoch_loss });
-            }
         }
 
         return loss_history;
@@ -484,10 +465,6 @@ test "network forward propagation" {
     defer input.deinit();
     input.set(0, 0, 1.0);
     input.set(0, 1, 0.5);
-
-    // Print dimensions before forward pass
-    std.debug.print("\nNetwork test - Input matrix dimensions: {}x{}\n", .{ input.rows, input.cols });
-    std.debug.print("Network test - First layer input size: {}\n", .{try network.getInputSize()});
 
     // Forward propagation
     var output = try network.forward(input);

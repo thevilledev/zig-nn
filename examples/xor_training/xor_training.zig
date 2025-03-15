@@ -19,8 +19,10 @@ pub fn main() !void {
 
     // Create a console writer
     const stdout = std.io.getStdOut().writer();
+    var buffered_writer = std.io.bufferedWriter(stdout);
+    const writer = buffered_writer.writer();
 
-    try stdout.print("\n=== XOR Neural Network Training Example ===\n\n", .{});
+    try writer.print("\n=== XOR Neural Network Training Example ===\n\n", .{});
 
     // Create a network with two hidden layers and Mean Squared Error loss
     // Use a higher learning rate for faster convergence
@@ -36,11 +38,15 @@ pub fn main() !void {
     // Output layer: 4 inputs -> 1 output with sigmoid activation
     try network.addLayer(4, 1, Activation.sigmoid, Activation.sigmoid_derivative);
 
-    try stdout.print("Network created with structure:\n", .{});
-    try stdout.print("Input size: {}\n", .{try network.getInputSize()});
-    try stdout.print("Output size: {}\n", .{try network.getOutputSize()});
-    try stdout.print("Learning rate: {d}\n", .{network.learning_rate});
-    try stdout.print("Loss function: {s}\n\n", .{@tagName(network.loss_function)});
+    try writer.print("Network Architecture:\n", .{});
+    try writer.print("- Input layer:     2 neurons\n", .{});
+    try writer.print("- Hidden layer 1:  6 neurons (tanh)\n", .{});
+    try writer.print("- Hidden layer 2:  4 neurons (tanh)\n", .{});
+    try writer.print("- Output layer:    1 neuron  (sigmoid)\n", .{});
+    try writer.print("\nTraining Parameters:\n", .{});
+    try writer.print("- Learning rate:   {d:.3}\n", .{network.learning_rate});
+    try writer.print("- Loss function:   {s}\n", .{@tagName(network.loss_function)});
+    try buffered_writer.flush();
 
     // Create XOR training data
     var inputs = try Matrix.init(allocator, 4, 2);
@@ -66,9 +72,10 @@ pub fn main() !void {
         var initial_pred = try network.predict(inputs);
         defer initial_pred.deinit();
 
-        try stdout.print("\nInitial predictions before training:\n", .{});
-        try stdout.print("Input\t\tOutput\tExpected\n", .{});
-        try stdout.print("-----\t\t------\t--------\n", .{});
+        try writer.print("\nInitial predictions (before training):\n", .{});
+        try writer.print("┌─────────┬──────────┬──────────┐\n", .{});
+        try writer.print("│ Input   │ Output   │ Expected │\n", .{});
+        try writer.print("├─────────┼──────────┼──────────┤\n", .{});
 
         for (0..4) |i| {
             const x1 = inputs.get(i, 0);
@@ -76,76 +83,98 @@ pub fn main() !void {
             const y_pred = initial_pred.get(i, 0);
             const y_true = targets.get(i, 0);
 
-            try stdout.print("[{d:.0}, {d:.0}]\t\t{d:.4}\t{d:.0}\n", .{ x1, x2, y_pred, y_true });
+            try writer.print("│ [{d}, {d}]  │ {d:.4}   │ {d}        │\n", .{ x1, x2, y_pred, y_true });
         }
+        try writer.print("└─────────┴──────────┴──────────┘\n", .{});
+        try buffered_writer.flush();
     }
 
     // Train the network
-    try stdout.print("\nTraining network on XOR problem...\n", .{});
+    try writer.print("\nTraining Progress:\n", .{});
+    try writer.print("Each '=' represents 2% progress. Loss shown every 5%.\n", .{});
+    try buffered_writer.flush();
 
     const epochs: usize = 10000;
     const batch_size: usize = 4;
+    var last_progress: usize = 0;
 
-    // Train the network using the built-in train method
-    const loss_history = try network.train(inputs, targets, epochs, batch_size);
+    // Custom training loop for better progress display
+    var prng = std.Random.DefaultPrng.init(@intCast(std.time.milliTimestamp()));
+    const rand = prng.random();
+    var loss_history = try allocator.alloc(f64, epochs);
     defer allocator.free(loss_history);
 
-    // Print training results
-    try stdout.print("\nTraining completed after {d} epochs.\n", .{epochs});
-    try stdout.print("Initial loss: {d:.6}\n", .{loss_history[0]});
-    try stdout.print("Final loss: {d:.6}\n\n", .{loss_history[epochs - 1]});
+    try writer.print("[", .{});
+    try buffered_writer.flush();
 
-    // Test the network
-    try stdout.print("Testing trained network on XOR inputs:\n", .{});
-    try stdout.print("Input\t\tOutput\tExpected\n", .{});
-    try stdout.print("-----\t\t------\t--------\n", .{});
+    for (0..epochs) |epoch| {
+        // Create a random permutation for shuffling
+        var indices = try allocator.alloc(usize, inputs.rows);
+        defer allocator.free(indices);
+        for (0..inputs.rows) |i| {
+            indices[i] = i;
+        }
+        rand.shuffle(usize, indices);
+
+        // Train on shuffled batch
+        var batch_inputs = try Matrix.init(allocator, batch_size, inputs.cols);
+        defer batch_inputs.deinit();
+        var batch_targets = try Matrix.init(allocator, batch_size, targets.cols);
+        defer batch_targets.deinit();
+
+        for (0..batch_size) |i| {
+            const sample_idx = indices[i];
+            for (0..inputs.cols) |j| {
+                batch_inputs.set(i, j, inputs.get(sample_idx, j));
+            }
+            for (0..targets.cols) |j| {
+                batch_targets.set(i, j, targets.get(sample_idx, j));
+            }
+        }
+
+        const loss = try network.trainBatch(batch_inputs, batch_targets);
+        loss_history[epoch] = loss;
+
+        // Update progress bar
+        const progress = (epoch * 50) / epochs;
+        while (last_progress < progress) {
+            try writer.print("=", .{});
+            try buffered_writer.flush();
+            last_progress += 1;
+        }
+
+        // Print loss every 5% (500 epochs)
+        if (epoch % 500 == 0 or epoch == epochs - 1) {
+            try writer.print(" {d:.4}", .{loss});
+            try buffered_writer.flush();
+        }
+    }
+
+    try writer.print("]\n\n", .{});
+    try buffered_writer.flush();
+
+    // Test the trained network
+    try writer.print("Final predictions (after training):\n", .{});
+    try writer.print("┌─────────┬──────────┬──────────┬──────────┐\n", .{});
+    try writer.print("│ Input   │ Output   │ Expected │ Correct? │\n", .{});
+    try writer.print("├─────────┼──────────┼──────────┼──────────┤\n", .{});
 
     var predictions = try network.predict(inputs);
     defer predictions.deinit();
 
+    var correct: usize = 0;
     for (0..4) |i| {
         const x1 = inputs.get(i, 0);
         const x2 = inputs.get(i, 1);
         const y_pred = predictions.get(i, 0);
         const y_true = targets.get(i, 0);
+        const is_correct = @abs(y_pred - y_true) < 0.5;
+        if (is_correct) correct += 1;
 
-        try stdout.print("[{d:.0}, {d:.0}]\t\t{d:.4}\t{d:.0}\n", .{ x1, x2, y_pred, y_true });
+        try writer.print("│ [{d}, {d}]  │ {d:.4}   │ {d}        │ {s}        │\n", 
+            .{ x1, x2, y_pred, y_true, if (is_correct) "✓" else "✗" });
     }
-
-    // Visualize decision boundary
-    try stdout.print("\nDecision Boundary Visualization:\n", .{});
-    const grid_size: usize = 20;
-    const step: f64 = 1.0 / @as(f64, @floatFromInt(grid_size - 1));
-
-    for (0..grid_size) |i| {
-        const y = 1.0 - @as(f64, @floatFromInt(i)) * step;
-
-        for (0..grid_size) |j| {
-            const x = @as(f64, @floatFromInt(j)) * step;
-
-            // Create input for a single point
-            var point = try Matrix.init(allocator, 1, 2);
-            defer point.deinit();
-            point.set(0, 0, x);
-            point.set(0, 1, y);
-
-            // Predict
-            var result = try network.predict(point);
-            defer result.deinit();
-
-            const output = result.get(0, 0);
-
-            // Print character based on output value
-            if (output < 0.3) {
-                try stdout.print("·", .{});
-            } else if (output > 0.7) {
-                try stdout.print("O", .{});
-            } else {
-                try stdout.print("▒", .{});
-            }
-        }
-        try stdout.print("\n", .{});
-    }
-
-    try stdout.print("\nLegend: · (0.0-0.3), ▒ (0.3-0.7), O (0.7-1.0)\n", .{});
+    try writer.print("└─────────┴──────────┴──────────┴──────────┘\n", .{});
+    try writer.print("\nAccuracy: {d}/{d} correct predictions\n", .{ correct, 4 });
+    try buffered_writer.flush();
 }

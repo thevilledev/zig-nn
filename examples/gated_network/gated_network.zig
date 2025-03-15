@@ -52,7 +52,7 @@ pub fn main() !void {
     try stdout.print("Running forward propagation on sample inputs:\n", .{});
 
     // Process each sample
-    for (samples, 0..) |sample, i| {
+    for (samples) |sample| {
         var input = try Matrix.init(allocator, 1, 2);
         defer input.deinit();
 
@@ -62,7 +62,7 @@ pub fn main() !void {
         var output = try network.forward(input);
         defer output.deinit();
 
-        try stdout.print("Sample {}: Input [{d:.1}, {d:.1}] -> Output: {d:.6}\n", .{ i + 1, sample[0], sample[1], output.get(0, 0) });
+        try stdout.print("Input [{d:.1}, {d:.1}] -> Output: {d:.6}\n", .{ sample[0], sample[1], output.get(0, 0) });
     }
 
     try stdout.print("\nNote: Since weights are initialized randomly, outputs will vary between runs.\n", .{});
