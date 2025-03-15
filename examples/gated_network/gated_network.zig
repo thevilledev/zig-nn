@@ -15,19 +15,19 @@ pub fn main() !void {
 
     try stdout.print("\n=== Gated Neural Network Example ===\n\n", .{});
 
-    // Create a network with mixed layer types
-    var network = Network.init(allocator);
+    // Create a network with gated layers
+    var network = Network.init(allocator, 0.1, .MeanSquaredError);
     defer network.deinit();
 
     try stdout.print("Creating network structure...\n", .{});
 
-    // Input layer: 2 inputs -> 4 hidden neurons with ReLU activation
-    try network.addLayer(2, 4, Activation.relu, Activation.relu_derivative);
-    try stdout.print("Added input layer: 2 inputs -> 4 neurons (ReLU)\n", .{});
+    // Input layer: 2 inputs -> 3 hidden neurons with ReLU activation
+    try network.addLayer(2, 3, Activation.relu, Activation.relu_derivative);
+    try stdout.print("Added input layer: 2 inputs -> 3 neurons (ReLU)\n", .{});
 
-    // Hidden layer 1: 4 inputs -> 3 outputs with GLU activation
-    try network.addGatedLayer(4, 3, false);
-    try stdout.print("Added GLU layer: 4 inputs -> 3 outputs\n", .{});
+    // Hidden layer 1: 3 inputs -> 3 outputs with GLU activation
+    try network.addGatedLayer(3, 3, false);
+    try stdout.print("Added GLU layer: 3 inputs -> 3 outputs\n", .{});
 
     // Hidden layer 2: 3 inputs -> 2 outputs with SwiGLU activation
     try network.addGatedLayer(3, 2, true);
@@ -62,10 +62,9 @@ pub fn main() !void {
         var output = try network.forward(input);
         defer output.deinit();
 
-        try stdout.print("Sample {}: Input [{d:.1}, {d:.1}] -> Output: {d:.6}\n", 
-            .{ i + 1, sample[0], sample[1], output.get(0, 0) });
+        try stdout.print("Sample {}: Input [{d:.1}, {d:.1}] -> Output: {d:.6}\n", .{ i + 1, sample[0], sample[1], output.get(0, 0) });
     }
 
     try stdout.print("\nNote: Since weights are initialized randomly, outputs will vary between runs.\n", .{});
     try stdout.print("This example demonstrates the structure and forward propagation of a neural network using GLU and SwiGLU layers.\n", .{});
-} 
+}

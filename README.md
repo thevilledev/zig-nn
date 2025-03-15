@@ -12,6 +12,12 @@ A minimalistic neural network implementation in Zig for learning purposes. This 
 - Basic feed-forward neural network architecture
 - Support for gated architectures used in modern transformer models
 
+## Documentation
+
+Detailed documentation is available in the `docs` directory:
+- [Neural Network Architecture](docs/architecture.md) - Design principles and implementation details
+- [Advanced Activation Functions](docs/activation_functions.md) - Detailed information about activation functions
+
 ## Building
 
 Make sure you have Zig installed on your system. This project is developed with the latest stable version of Zig.
@@ -28,6 +34,25 @@ zig build
 zig build test
 ```
 
+### Using Make
+
+For convenience, a Makefile is provided with common operations:
+
+```bash
+# Build and run everything (build, test, examples)
+make
+
+# Run specific examples, for example:
+make example-simple-xor
+
+# Build with different optimization modes
+make BUILD_MODE=ReleaseFast
+make release  # Build with ReleaseSafe mode
+
+# See all available commands
+make help
+```
+
 ## Testing
 
 The project includes a comprehensive test suite to verify the functionality of all components. The build system is configured to run tests for each module separately, making it easy to identify which component has issues.
@@ -38,46 +63,12 @@ The project includes a comprehensive test suite to verify the functionality of a
 # Run all tests
 zig build test
 
-# Run tests for specific components
+# Run tests for specific components, for example:
 zig build test-matrix     # Run matrix operation tests
 zig build test-activation # Run activation function tests
 zig build test-layer      # Run neural network layer tests
 zig build test-network    # Run full network tests
 ```
-
-## Advanced Activation Functions
-
-This library implements several advanced activation functions used in modern neural networks:
-
-### Swish
-
-Swish is an activation function introduced by Google Brain that often outperforms ReLU:
-
-```
-swish(x) = x * sigmoid(β * x)
-```
-
-Where β is typically set to 1.0.
-
-### GLU (Gated Linear Unit)
-
-GLU was introduced in "Language Modeling with Gated Convolutional Networks" and is used in many transformer architectures:
-
-```
-GLU(x, W, V, b, c) = (x·W + b) ⊗ σ(x·V + c)
-```
-
-Where ⊗ is element-wise multiplication and σ is the sigmoid function.
-
-### SwiGLU (Swish Gated Linear Unit)
-
-SwiGLU is a variant of GLU that uses the Swish activation function instead of sigmoid:
-
-```
-SwiGLU(x, W, V, b, c) = (x·W + b) ⊗ swish(x·V + c)
-```
-
-These gated activation functions are particularly useful in transformer architectures and have been shown to improve performance in many natural language processing tasks.
 
 ## Learning Goals
 

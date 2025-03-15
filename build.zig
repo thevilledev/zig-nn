@@ -51,16 +51,9 @@ pub fn build(b: *std.Build) void {
         src: []const u8,
         description: []const u8,
     }{
-        .{
-            .name = "gated_network",
-            .src = "examples/gated_network/gated_network.zig",
-            .description = "Run the gated network example"
-        },
-        .{
-            .name = "simple_xor",
-            .src = "examples/simple_xor/simple_xor.zig",
-            .description = "Run the simple XOR example"
-        },
+        .{ .name = "gated_network", .src = "examples/gated_network/gated_network.zig", .description = "Run the gated network example" },
+        .{ .name = "simple_xor", .src = "examples/simple_xor/simple_xor.zig", .description = "Run the simple XOR example" },
+        .{ .name = "xor_training", .src = "examples/xor_training/xor_training.zig", .description = "Run the XOR training example with backpropagation" },
         // Add new examples here in the future
     }) |example| {
         // Build the example executable
