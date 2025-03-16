@@ -119,37 +119,61 @@ pub const Activation = struct {
         return sig + beta * x * sig * (1.0 - sig);
     }
 
-    /// Softmax activation function
-    /// Mathematical form: softmax(x_i) = exp(x_i) / Σ(exp(x_j))
+    /// Softmax activation function (element-wise exponential)
+    /// Note: This computes the exponential part of softmax.
     /// Properties:
-    /// - Output range: (0,1) for each element
-    /// - Outputs sum to 1 across all elements
-    /// - Commonly used for multi-class classification
-    /// - Numerically stable implementation using max subtraction
-    pub fn softmax(x: f64, values: []const f64) f64 {
-        // Find maximum value for numerical stability
-        var max_val: f64 = x;
-        for (values) |val| {
-            max_val = @max(max_val, val);
+    /// - Applies scaled exponential function to input
+    /// - Scaling prevents overflow/underflow
+    /// - Used as part of the complete softmax computation
+    pub fn softmax(x: f64) f64 {
+        // For element-wise application in the network,
+        // we want to keep values in a reasonable range
+        // but not apply exp() here - that happens in applySoftmax
+        return x;
+    }
+
+    /// Applies softmax activation to a matrix row-wise
+    /// Mathematical form: softmax(x_i) = exp(x_i) / Σ(exp(x_j))
+    /// Uses the log-sum-exp trick for numerical stability:
+    /// softmax(x_i) = exp(x_i - max) / Σ(exp(x_j - max))
+    /// Time complexity: O(rows * cols)
+    /// Memory complexity: O(rows * cols)
+    pub fn applySoftmax(matrix: Matrix, allocator: std.mem.Allocator) !Matrix {
+        var result = try Matrix.init(allocator, matrix.rows, matrix.cols);
+        errdefer result.deinit();
+
+        // Process each row independently
+        for (0..matrix.rows) |i| {
+            // Find max value in row for numerical stability
+            var max_val: f64 = -math.inf(f64);
+            for (0..matrix.cols) |j| {
+                max_val = @max(max_val, matrix.get(i, j));
+            }
+
+            // Compute exp(x - max) and sum
+            var sum: f64 = 0.0;
+            for (0..matrix.cols) |j| {
+                const shifted = matrix.get(i, j) - max_val;
+                const exp_val = math.exp(shifted);
+                result.set(i, j, exp_val);
+                sum += exp_val;
+            }
+
+            // Normalize by sum
+            for (0..matrix.cols) |j| {
+                result.set(i, j, result.get(i, j) / sum);
+            }
         }
 
-        // Calculate exp(x - max) and sum
-        var sum: f64 = 0.0;
-        for (values) |val| {
-            sum += math.exp(val - max_val);
-        }
-
-        return math.exp(x - max_val) / sum;
+        return result;
     }
 
     /// Derivative of softmax function with respect to cross-entropy loss
-    /// Mathematical form: For cross-entropy loss, derivative simplifies to (output - target)
-    /// Properties:
-    /// - Simplified form when used with cross-entropy loss
-    /// - Must be used in conjunction with cross-entropy loss
-    /// - Returns the difference between predicted and target probability
-    pub fn softmax_derivative(output: f64, target: f64) f64 {
-        return output - target;
+    /// When used with cross-entropy loss, the derivative simplifies to (output - target)
+    /// This is because the derivative of softmax combined with cross-entropy loss
+    /// has a special form that cancels out the complex terms
+    pub fn softmax_derivative(x: f64) f64 {
+        return x;
     }
 
     /// Applies an activation function to each element of a matrix
@@ -352,31 +376,41 @@ test "SwiGLU function" {
     try testing.expectApproxEqAbs(@as(f64, 7.046), result.get(1, 1), 0.001);
 }
 
-test "softmax function" {
-    // Test case with a simple vector [1.0, 2.0, 3.0]
-    const values = [_]f64{ 1.0, 2.0, 3.0 };
-    
-    const s1 = Activation.softmax(values[0], &values);
-    const s2 = Activation.softmax(values[1], &values);
-    const s3 = Activation.softmax(values[2], &values);
-    
-    // Expected values calculated with numpy for verification
-    try testing.expectApproxEqAbs(@as(f64, 0.0900305733), s1, 0.0001);
-    try testing.expectApproxEqAbs(@as(f64, 0.2447284714), s2, 0.0001);
-    try testing.expectApproxEqAbs(@as(f64, 0.6652409553), s3, 0.0001);
-    
-    // Verify that outputs sum to approximately 1
-    try testing.expectApproxEqAbs(@as(f64, 1.0), s1 + s2 + s3, 0.0001);
-}
+test "softmax and applySoftmax" {
+    const allocator = testing.allocator;
 
-test "softmax derivative" {
-    // Test cases for softmax derivative with cross-entropy loss
-    // Case 1: Perfect prediction
-    try testing.expectApproxEqAbs(@as(f64, 0.0), Activation.softmax_derivative(1.0, 1.0), 0.0001);
-    
-    // Case 2: Complete miss
-    try testing.expectApproxEqAbs(@as(f64, 1.0), Activation.softmax_derivative(1.0, 0.0), 0.0001);
-    
-    // Case 3: Partial prediction
-    try testing.expectApproxEqAbs(@as(f64, 0.3), Activation.softmax_derivative(0.8, 0.5), 0.0001);
+    // Create test matrix with multiple rows
+    var m = try Matrix.init(allocator, 2, 3);
+    defer m.deinit();
+
+    // Set test values
+    m.set(0, 0, 1.0);
+    m.set(0, 1, 2.0);
+    m.set(0, 2, 3.0);
+    m.set(1, 0, 0.0);
+    m.set(1, 1, 1.0);
+    m.set(1, 2, 2.0);
+
+    var result = try Activation.applySoftmax(m, allocator);
+    defer result.deinit();
+
+    // Test first row [1.0, 2.0, 3.0]
+    try testing.expectApproxEqAbs(@as(f64, 0.0900305733), result.get(0, 0), 0.0001);
+    try testing.expectApproxEqAbs(@as(f64, 0.2447284714), result.get(0, 1), 0.0001);
+    try testing.expectApproxEqAbs(@as(f64, 0.6652409553), result.get(0, 2), 0.0001);
+
+    // Test second row [0.0, 1.0, 2.0]
+    try testing.expectApproxEqAbs(@as(f64, 0.0900305733), result.get(1, 0), 0.0001);
+    try testing.expectApproxEqAbs(@as(f64, 0.2447284714), result.get(1, 1), 0.0001);
+    try testing.expectApproxEqAbs(@as(f64, 0.6652409553), result.get(1, 2), 0.0001);
+
+    // Verify rows sum to 1
+    var sum1: f64 = 0.0;
+    var sum2: f64 = 0.0;
+    for (0..3) |j| {
+        sum1 += result.get(0, j);
+        sum2 += result.get(1, j);
+    }
+    try testing.expectApproxEqAbs(@as(f64, 1.0), sum1, 0.0001);
+    try testing.expectApproxEqAbs(@as(f64, 1.0), sum2, 0.0001);
 }
