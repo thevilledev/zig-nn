@@ -119,6 +119,39 @@ pub const Activation = struct {
         return sig + beta * x * sig * (1.0 - sig);
     }
 
+    /// Softmax activation function
+    /// Mathematical form: softmax(x_i) = exp(x_i) / Σ(exp(x_j))
+    /// Properties:
+    /// - Output range: (0,1) for each element
+    /// - Outputs sum to 1 across all elements
+    /// - Commonly used for multi-class classification
+    /// - Numerically stable implementation using max subtraction
+    pub fn softmax(x: f64, values: []const f64) f64 {
+        // Find maximum value for numerical stability
+        var max_val: f64 = x;
+        for (values) |val| {
+            max_val = @max(max_val, val);
+        }
+
+        // Calculate exp(x - max) and sum
+        var sum: f64 = 0.0;
+        for (values) |val| {
+            sum += math.exp(val - max_val);
+        }
+
+        return math.exp(x - max_val) / sum;
+    }
+
+    /// Derivative of softmax function with respect to cross-entropy loss
+    /// Mathematical form: For cross-entropy loss, derivative simplifies to (output - target)
+    /// Properties:
+    /// - Simplified form when used with cross-entropy loss
+    /// - Must be used in conjunction with cross-entropy loss
+    /// - Returns the difference between predicted and target probability
+    pub fn softmax_derivative(output: f64, target: f64) f64 {
+        return output - target;
+    }
+
     /// Applies an activation function to each element of a matrix
     /// Essential for forward propagation in neural networks
     /// Time complexity: O(rows * cols)
@@ -317,4 +350,33 @@ test "SwiGLU function" {
     try testing.expectApproxEqAbs(@as(f64, 1.462), result.get(0, 1), 0.001);
     try testing.expectApproxEqAbs(@as(f64, -0.807), result.get(1, 0), 0.001);
     try testing.expectApproxEqAbs(@as(f64, 7.046), result.get(1, 1), 0.001);
+}
+
+test "softmax function" {
+    // Test case with a simple vector [1.0, 2.0, 3.0]
+    const values = [_]f64{ 1.0, 2.0, 3.0 };
+    
+    const s1 = Activation.softmax(values[0], &values);
+    const s2 = Activation.softmax(values[1], &values);
+    const s3 = Activation.softmax(values[2], &values);
+    
+    // Expected values calculated with numpy for verification
+    try testing.expectApproxEqAbs(@as(f64, 0.0900305733), s1, 0.0001);
+    try testing.expectApproxEqAbs(@as(f64, 0.2447284714), s2, 0.0001);
+    try testing.expectApproxEqAbs(@as(f64, 0.6652409553), s3, 0.0001);
+    
+    // Verify that outputs sum to approximately 1
+    try testing.expectApproxEqAbs(@as(f64, 1.0), s1 + s2 + s3, 0.0001);
+}
+
+test "softmax derivative" {
+    // Test cases for softmax derivative with cross-entropy loss
+    // Case 1: Perfect prediction
+    try testing.expectApproxEqAbs(@as(f64, 0.0), Activation.softmax_derivative(1.0, 1.0), 0.0001);
+    
+    // Case 2: Complete miss
+    try testing.expectApproxEqAbs(@as(f64, 1.0), Activation.softmax_derivative(1.0, 0.0), 0.0001);
+    
+    // Case 3: Partial prediction
+    try testing.expectApproxEqAbs(@as(f64, 0.3), Activation.softmax_derivative(0.8, 0.5), 0.0001);
 }
