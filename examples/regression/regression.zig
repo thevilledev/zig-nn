@@ -4,17 +4,16 @@
 ///
 /// The network architecture:
 /// - Input layer: 1 neuron (x value)
-/// - Hidden layer 1: 64 neurons with ReLU activation
-/// - Hidden layer 2: 64 neurons with ReLU activation
-/// - Hidden layer 3: 32 neurons with ReLU activation
+/// - Hidden layer 1: 32 neurons with ReLU activation
+/// - Hidden layer 2: 16 neurons with ReLU activation
 /// - Output layer: 1 neuron with linear activation (for regression)
 ///
 /// Training details:
-/// - 3000 random samples in range [-4, 4]
-/// - Mini-batch gradient descent with batch size 32
+/// - 1000 random samples in range [-4, 4]
+/// - Mini-batch gradient descent with batch size 100
 /// - Mean Squared Error loss function
-/// - Learning rate 0.0003
-/// - 2500 epochs of training
+/// - Learning rate 0.001
+/// - 500 epochs of training
 const std = @import("std");
 const nn = @import("nn");
 const Network = nn.Network;
@@ -33,7 +32,7 @@ pub fn main() !void {
     // Create matrices for training data
     // x_data: Input values
     // y_data: Target values (x² * sin(x))
-    const num_samples = 3000;
+    const num_samples = 1000;
     var x_data = try Matrix.init(allocator, num_samples, 1);
     var y_data = try Matrix.init(allocator, num_samples, 1);
     defer x_data.deinit();
@@ -62,35 +61,33 @@ pub fn main() !void {
     }
 
     // Initialize neural network
-    // - learning_rate: Smaller for more stable convergence
+    // - learning_rate: Increased for faster convergence
     // - MeanSquaredError: Standard loss function for regression tasks
-    const learning_rate = 0.0003;
+    const learning_rate = 0.001;
     var network = Network.init(allocator, learning_rate, .MeanSquaredError);
     defer network.deinit();
 
     // Build network architecture
-    // Layer 1: 1 → 64 (Input → Hidden)
-    // Layer 2: 64 → 64 (Hidden → Hidden)
-    // Layer 3: 64 → 32 (Hidden → Hidden)
-    // Layer 4: 32 → 1 (Hidden → Output)
+    // Layer 1: 1 → 32 (Input → Hidden)
+    // Layer 2: 32 → 16 (Hidden → Hidden)
+    // Layer 3: 16 → 1 (Hidden → Output)
     // ReLU activation for hidden layers helps learn nonlinear patterns
     // Linear activation for output layer allows any real number output
-    try network.addLayer(1, 64, Activation.relu, Activation.relu_derivative);
-    try network.addLayer(64, 64, Activation.relu, Activation.relu_derivative);
-    try network.addLayer(64, 32, Activation.relu, Activation.relu_derivative);
-    try network.addLayer(32, 1, Activation.linear, Activation.linear_derivative);
+    try network.addLayer(1, 32, Activation.relu, Activation.relu_derivative);
+    try network.addLayer(32, 16, Activation.relu, Activation.relu_derivative);
+    try network.addLayer(16, 1, Activation.linear, Activation.linear_derivative);
 
     // Training parameters
-    // - num_epochs: Increased for better convergence
-    // - batch_size: Decreased for more frequent updates
-    const num_epochs = 2500;
-    const batch_size = 32;
+    // - num_epochs: Reduced for faster training
+    // - batch_size: Increased for better hardware utilization
+    const num_epochs = 500;
+    const batch_size = 100;
 
     // Training loop
     // For each epoch:
     // 1. Split data into mini-batches
     // 2. Train network on each batch
-    // 3. Calculate and display average loss every 100 epochs
+    // 3. Calculate and display average loss every 50 epochs
     const stdout = std.io.getStdOut().writer();
     var epoch: usize = 0;
     while (epoch < num_epochs) : (epoch += 1) {
@@ -111,8 +108,8 @@ pub fn main() !void {
             total_loss += loss;
         }
 
-        // Display training progress every 100 epochs
-        if (epoch % 100 == 0) {
+        // Display training progress every 50 epochs
+        if (epoch % 50 == 0) {
             try stdout.print("Epoch {d}: Average Loss = {d:.6}\n", .{ epoch, total_loss / @as(f64, @floatFromInt(num_samples / batch_size)) });
         }
     }
