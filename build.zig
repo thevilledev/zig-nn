@@ -66,7 +66,7 @@ pub fn build(b: *std.Build) void {
         });
 
         // Add the library module to the example executable
-        exe.root_module.addImport("zig-nn", lib_mod);
+        exe.root_module.addImport("nn", lib_mod);
 
         // Install the example executable
         b.installArtifact(exe);

@@ -1,5 +1,5 @@
 const std = @import("std");
-const nn = @import("zig-nn");
+const nn = @import("nn");
 const Network = nn.Network;
 const Matrix = nn.Matrix;
 const Activation = nn.Activation;

@@ -1,5 +1,5 @@
 const std = @import("std");
-const nn = @import("zig-nn");
+const nn = @import("nn");
 
 const Matrix = nn.Matrix;
 const Network = nn.Network;
@@ -59,8 +59,8 @@ pub fn main() !void {
 
         while (batch_start < num_points) : (batch_start += batch_size) {
             const batch_end = @min(batch_start + batch_size, num_points);
-            const batch_inputs = try extractBatch(training_data, batch_start, batch_end, allocator);
-            const batch_labels = try extractBatch(labels, batch_start, batch_end, allocator);
+            const batch_inputs = try Matrix.extractBatch(training_data, batch_start, batch_end, allocator);
+            const batch_labels = try Matrix.extractBatch(labels, batch_start, batch_end, allocator);
             defer batch_inputs.deinit();
             defer batch_labels.deinit();
 
