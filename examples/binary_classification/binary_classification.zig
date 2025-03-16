@@ -12,7 +12,7 @@ pub fn main() !void {
     const allocator = gpa.allocator();
 
     // Create a simple network for binary classification with a smaller learning rate
-    var net = Network.init(allocator, 0.001, .CrossEntropy);
+    var net = Network.init(allocator, 0.001, .BinaryCrossEntropy);
     defer net.deinit();
 
     // Add layers: 2 inputs -> 16 hidden -> 16 hidden -> 1 output
