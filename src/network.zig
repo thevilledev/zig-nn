@@ -91,9 +91,11 @@ pub const LayerVariant = union(LayerType) {
 /// Each loss function has specific properties making it suitable for different tasks:
 /// - MeanSquaredError: General purpose, good for regression
 /// - CrossEntropy: Better for classification, especially with sigmoid/softmax outputs
+/// - BinaryCrossEntropy: Added for explicit binary case
 pub const LossFunction = enum {
     MeanSquaredError,
     CrossEntropy,
+    BinaryCrossEntropy,
 };
 
 /// Neural Network implementation
@@ -189,10 +191,12 @@ pub const Network = struct {
     }
 
     /// Calculates loss between predicted and target values
-    /// Supports two loss functions:
+    /// Supports three loss functions:
     /// 1. Mean Squared Error (MSE):
     ///    L = (1/n) * Σ(y_pred - y_true)²
-    /// 2. Cross Entropy:
+    /// 2. Cross Entropy (for multi-class):
+    ///    L = -(1/n) * Σ(y_true * log(y_pred))
+    /// 3. Binary Cross Entropy:
     ///    L = -(1/n) * Σ(y_true * log(y_pred) + (1-y_true) * log(1-y_pred))
     ///
     /// Parameters:
@@ -219,7 +223,24 @@ pub const Network = struct {
                 total_loss /= n;
             },
             .CrossEntropy => {
-                // Cross Entropy = -(1/n) * Σ(y_true * log(y_pred) + (1-y_true) * log(1-y_pred))
+                // Multi-class cross entropy = -(1/n) * Σ(y_true * log(y_pred))
+                for (0..predicted.rows) |i| {
+                    for (0..predicted.cols) |j| {
+                        const y_true = target.get(i, j);
+                        var y_pred = predicted.get(i, j);
+
+                        // Skip if true label is 0 (contributes nothing to sum)
+                        if (y_true > 0.0) {
+                            // Clip predictions for numerical stability
+                            if (y_pred < 1e-15) y_pred = 1e-15;
+                            total_loss -= y_true * @log(y_pred);
+                        }
+                    }
+                }
+                total_loss /= n;
+            },
+            .BinaryCrossEntropy => {
+                // Binary cross entropy = -(1/n) * Σ(y_true * log(y_pred) + (1-y_true) * log(1-y_pred))
                 for (0..predicted.rows) |i| {
                     for (0..predicted.cols) |j| {
                         const y_true = target.get(i, j);
@@ -268,7 +289,15 @@ pub const Network = struct {
                 }
             },
             .CrossEntropy => {
-                // dCE/dy_pred = -y_true/y_pred + (1-y_true)/(1-y_pred)
+                // For softmax + cross entropy, gradient simplifies to (y_pred - y_true)
+                for (0..predicted.rows) |i| {
+                    for (0..predicted.cols) |j| {
+                        gradient.set(i, j, predicted.get(i, j) - target.get(i, j));
+                    }
+                }
+            },
+            .BinaryCrossEntropy => {
+                // dBCE/dy_pred = -y_true/y_pred + (1-y_true)/(1-y_pred)
                 for (0..predicted.rows) |i| {
                     for (0..predicted.cols) |j| {
                         const y_true = target.get(i, j);
