@@ -22,6 +22,26 @@ pub const Activation = struct {
         return 1.0 / (1.0 + math.exp(-x));
     }
 
+    /// Linear activation function
+    /// Mathematical form: f(x) = x
+    /// Properties:
+    /// - Output range: (-∞,∞)
+    /// - No transformation of input
+    /// - Useful for regression tasks
+    /// - Preserves both positive and negative values
+    pub fn linear(x: f64) f64 {
+        return x;
+    }
+
+    /// Derivative of linear function
+    /// Mathematical form: f'(x) = 1
+    /// Properties:
+    /// - Constant derivative of 1
+    /// - Helps maintain gradient flow in regression tasks
+    pub fn linear_derivative(_: f64) f64 {
+        return 1.0;
+    }
+
     /// Derivative of sigmoid function
     /// Mathematical form: σ'(x) = σ(x)(1 - σ(x))
     /// Used in backpropagation to compute gradients
@@ -188,6 +208,15 @@ test "sigmoid function" {
     try testing.expectApproxEqAbs(@as(f64, 0.5), Activation.sigmoid(0.0), 0.0001);
     try testing.expectApproxEqAbs(@as(f64, 0.7310585786300049), Activation.sigmoid(1.0), 0.0001);
     try testing.expectApproxEqAbs(@as(f64, 0.2689414213699951), Activation.sigmoid(-1.0), 0.0001);
+}
+
+test "linear function" {
+    try testing.expectEqual(@as(f64, 0.0), Activation.linear(0.0));
+    try testing.expectEqual(@as(f64, 1.0), Activation.linear(1.0));
+    try testing.expectEqual(@as(f64, -1.0), Activation.linear(-1.0));
+    try testing.expectEqual(@as(f64, 1.0), Activation.linear_derivative(0.0));
+    try testing.expectEqual(@as(f64, 1.0), Activation.linear_derivative(1.0));
+    try testing.expectEqual(@as(f64, 1.0), Activation.linear_derivative(-1.0));
 }
 
 test "relu function" {

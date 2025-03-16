@@ -24,7 +24,7 @@ test:
 
 # Build and run all examples
 .PHONY: examples
-examples: example-simple-xor example-gated-network example-xor-training example-binary-classification
+examples: example-simple-xor example-gated-network example-xor-training example-binary-classification example-regression
 
 # Individual examples
 .PHONY: example-simple-xor
@@ -46,6 +46,11 @@ example-xor-training:
 example-binary-classification:
 	@echo "Running Binary Classification example..."
 	$(ZIG) build run_binary_classification -Doptimize=$(BUILD_MODE)
+
+.PHONY: example-regression
+example-regression:
+	@echo "Running Regression example..."
+	$(ZIG) build run_regression -Doptimize=$(BUILD_MODE)
 
 # Build release version
 .PHONY: release

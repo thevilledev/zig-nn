@@ -7,7 +7,7 @@ A minimalistic neural network implementation in Zig for learning purposes. This 
 ## Features
 
 - Matrix operations from scratch
-- Common activation functions (Sigmoid, ReLU, Tanh)
+- Common activation functions (Sigmoid, Linear, ReLU, Tanh)
 - Advanced activation functions (Swish, GLU, SwiGLU)
 - Basic feed-forward neural network architecture
 - Support for gated architectures used in modern transformer models
