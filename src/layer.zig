@@ -54,9 +54,38 @@ pub const Layer = struct {
         var weights = try Matrix.init(allocator, input_size, output_size);
         var bias = try Matrix.init(allocator, 1, output_size);
 
-        // Initialize weights with small random values
-        weights.randomize(-0.5, 0.5);
-        bias.randomize(-0.5, 0.5);
+        // Xavier/Glorot initialization with adjustments for activation function
+        var scale: f64 = undefined;
+        if (activation_fn == Activation.relu) {
+            scale = @sqrt(2.0 / @as(f64, @floatFromInt(input_size)));
+        } else if (activation_fn == Activation.softmax) {
+            // For softmax, use a smaller scale to prevent initial outputs from being too extreme
+            scale = @sqrt(0.1 / @as(f64, @floatFromInt(input_size)));
+        } else {
+            scale = @sqrt(1.0 / @as(f64, @floatFromInt(input_size)));
+        }
+
+        // Initialize weights with scaled normal distribution
+        var prng = std.Random.DefaultPrng.init(@intCast(std.time.milliTimestamp()));
+        const rand = prng.random();
+        for (0..input_size) |i| {
+            for (0..output_size) |j| {
+                // Box-Muller transform for normal distribution
+                const rand1 = rand.float(f64);
+                const rand2 = rand.float(f64);
+                const z = @sqrt(-2.0 * @log(rand1)) * @cos(2.0 * std.math.pi * rand2);
+                weights.set(i, j, z * scale);
+            }
+        }
+
+        // Initialize biases
+        if (activation_fn == Activation.softmax) {
+            // For softmax, initialize biases to zero to maintain initial class probabilities close to uniform
+            bias.fill(0.0);
+        } else {
+            // For other activations, small random values
+            bias.randomize(-0.1, 0.1);
+        }
 
         return Layer{
             .weights = weights,
@@ -134,7 +163,13 @@ pub const Layer = struct {
         }
 
         // Apply activation function y = σ(z)
-        const output = try Activation.apply(biased, self.activation_fn, self.allocator);
+        var output: Matrix = undefined;
+        if (self.activation_fn == Activation.softmax) {
+            // For softmax, we need to apply it row-wise
+            output = try Activation.applySoftmax(biased, self.allocator);
+        } else {
+            output = try Activation.apply(biased, self.activation_fn, self.allocator);
+        }
         biased.deinit();
 
         // Store output for backpropagation
@@ -288,11 +323,36 @@ pub const GatedLayer = struct {
         var gate_weights = try Matrix.init(allocator, input_size, output_size);
         var gate_bias = try Matrix.init(allocator, 1, output_size);
 
-        // Initialize with small random values
-        linear_weights.randomize(-0.5, 0.5);
-        linear_bias.randomize(-0.5, 0.5);
-        gate_weights.randomize(-0.5, 0.5);
-        gate_bias.randomize(-0.5, 0.5);
+        // Xavier/Glorot initialization for both linear and gate weights
+        const scale = @sqrt(2.0 / @as(f64, @floatFromInt(input_size + output_size)));
+
+        // Initialize weights with scaled normal distribution
+        var prng = std.Random.DefaultPrng.init(@intCast(std.time.milliTimestamp()));
+        const rand = prng.random();
+
+        // Initialize linear weights
+        for (0..input_size) |i| {
+            for (0..output_size) |j| {
+                const rand1 = rand.float(f64);
+                const rand2 = rand.float(f64);
+                const z = @sqrt(-2.0 * @log(rand1)) * @cos(2.0 * std.math.pi * rand2);
+                linear_weights.set(i, j, z * scale);
+            }
+        }
+
+        // Initialize gate weights
+        for (0..input_size) |i| {
+            for (0..output_size) |j| {
+                const rand1 = rand.float(f64);
+                const rand2 = rand.float(f64);
+                const z = @sqrt(-2.0 * @log(rand1)) * @cos(2.0 * std.math.pi * rand2);
+                gate_weights.set(i, j, z * scale);
+            }
+        }
+
+        // Initialize biases to small values close to zero
+        linear_bias.randomize(-0.1, 0.1);
+        gate_bias.randomize(-0.1, 0.1);
 
         return GatedLayer{
             .linear_weights = linear_weights,
