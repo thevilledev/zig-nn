@@ -32,6 +32,17 @@ pub const Matrix = struct {
         };
     }
 
+    /// Fills all elements of the matrix with a given value
+    /// Time complexity: O(rows * cols)
+    ///
+    /// Parameters:
+    ///   - value: Value to fill the matrix with
+    pub fn fill(self: *Matrix, value: f64) void {
+        for (self.data) |*element| {
+            element.* = value;
+        }
+    }
+
     /// Creates a deep copy of an existing matrix
     /// Essential for operations where we need to preserve the original matrix
     /// Memory complexity: O(rows * cols)
@@ -553,4 +564,31 @@ test "matrix extract batch" {
     try testing.expectEqual(@as(f64, 4.0), batch.get(0, 1));
     try testing.expectEqual(@as(f64, 5.0), batch.get(1, 0));
     try testing.expectEqual(@as(f64, 6.0), batch.get(1, 1));
+}
+
+test "matrix fill" {
+    const allocator = testing.allocator;
+
+    var m = try Matrix.init(allocator, 2, 3);
+    defer m.deinit();
+
+    // Fill matrix with 42.0
+    m.fill(42.0);
+
+    // Check all elements are 42.0
+    for (0..m.rows) |i| {
+        for (0..m.cols) |j| {
+            try testing.expectEqual(@as(f64, 42.0), m.get(i, j));
+        }
+    }
+
+    // Fill matrix with -1.0
+    m.fill(-1.0);
+
+    // Check all elements are -1.0
+    for (0..m.rows) |i| {
+        for (0..m.cols) |j| {
+            try testing.expectEqual(@as(f64, -1.0), m.get(i, j));
+        }
+    }
 }
