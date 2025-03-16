@@ -171,8 +171,7 @@ pub fn main() !void {
         const is_correct = @abs(y_pred - y_true) < 0.5;
         if (is_correct) correct += 1;
 
-        try writer.print("│ [{d}, {d}]  │ {d:.4}   │ {d}        │ {s}        │\n", 
-            .{ x1, x2, y_pred, y_true, if (is_correct) "✓" else "✗" });
+        try writer.print("│ [{d}, {d}]  │ {d:.4}   │ {d}        │ {s}        │\n", .{ x1, x2, y_pred, y_true, if (is_correct) "✓" else "✗" });
     }
     try writer.print("└─────────┴──────────┴──────────┴──────────┘\n", .{});
     try writer.print("\nAccuracy: {d}/{d} correct predictions\n", .{ correct, 4 });

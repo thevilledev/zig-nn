@@ -291,6 +291,36 @@ pub const Matrix = struct {
 
         return result;
     }
+
+    /// Extracts a batch of rows from the matrix
+    /// Used for mini-batch processing in machine learning
+    /// Time complexity: O(batch_size * cols)
+    /// Memory complexity: O(batch_size * cols)
+    ///
+    /// Parameters:
+    ///   - start: Starting row index (inclusive)
+    ///   - end: Ending row index (exclusive)
+    ///   - allocator: Memory allocator for result matrix
+    /// Returns: New matrix containing the specified rows
+    /// Panics if indices are out of bounds
+    pub fn extractBatch(self: Matrix, start: usize, end: usize, allocator: Allocator) !Matrix {
+        if (start >= self.rows or end > self.rows or start >= end) {
+            @panic("Invalid batch indices");
+        }
+
+        const batch_size = end - start;
+        var batch = try Matrix.init(allocator, batch_size, self.cols);
+
+        var i: usize = 0;
+        while (i < batch_size) : (i += 1) {
+            var j: usize = 0;
+            while (j < self.cols) : (j += 1) {
+                batch.set(i, j, self.get(start + i, j));
+            }
+        }
+
+        return batch;
+    }
 };
 
 // Tests
@@ -492,4 +522,35 @@ test "matrix transpose" {
     try testing.expectEqual(@as(f64, 5.0), transposed.get(1, 1));
     try testing.expectEqual(@as(f64, 3.0), transposed.get(2, 0));
     try testing.expectEqual(@as(f64, 6.0), transposed.get(2, 1));
+}
+
+test "matrix extract batch" {
+    const allocator = testing.allocator;
+
+    var m = try Matrix.init(allocator, 4, 2);
+    defer m.deinit();
+
+    // Set test values
+    m.set(0, 0, 1.0);
+    m.set(0, 1, 2.0);
+    m.set(1, 0, 3.0);
+    m.set(1, 1, 4.0);
+    m.set(2, 0, 5.0);
+    m.set(2, 1, 6.0);
+    m.set(3, 0, 7.0);
+    m.set(3, 1, 8.0);
+
+    // Extract middle two rows
+    var batch = try m.extractBatch(1, 3, allocator);
+    defer batch.deinit();
+
+    // Check dimensions
+    try testing.expectEqual(@as(usize, 2), batch.rows);
+    try testing.expectEqual(@as(usize, 2), batch.cols);
+
+    // Check values
+    try testing.expectEqual(@as(f64, 3.0), batch.get(0, 0));
+    try testing.expectEqual(@as(f64, 4.0), batch.get(0, 1));
+    try testing.expectEqual(@as(f64, 5.0), batch.get(1, 0));
+    try testing.expectEqual(@as(f64, 6.0), batch.get(1, 1));
 }

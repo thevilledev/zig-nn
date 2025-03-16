@@ -54,6 +54,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "gated_network", .src = "examples/gated_network/gated_network.zig", .description = "Run the gated network example" },
         .{ .name = "simple_xor", .src = "examples/simple_xor/simple_xor.zig", .description = "Run the simple XOR example" },
         .{ .name = "xor_training", .src = "examples/xor_training/xor_training.zig", .description = "Run the XOR training example with backpropagation" },
+        .{ .name = "binary_classification", .src = "examples/binary_classification/main.zig", .description = "Run the binary classification example with circular decision boundary" },
         // Add new examples here in the future
     }) |example| {
         // Build the example executable
