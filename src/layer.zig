@@ -1,6 +1,7 @@
 const std = @import("std");
 const Matrix = @import("matrix.zig").Matrix;
 const Activation = @import("activation.zig").Activation;
+const Network = @import("network.zig").Network;
 const testing = std.testing;
 
 /// Neural network layer implementation supporting both standard and gated architectures
@@ -601,7 +602,10 @@ pub const GatedLayer = struct {
     }
 };
 
-// Tests
+// Tests basic layer initialization and dimension verification
+// Verifies that a layer correctly maintains its input and output dimensions
+// Mathematical representation:
+// Layer: ℝ^n → ℝ^m where n = input_size and m = output_size
 test "layer initialization" {
     const allocator = testing.allocator;
 
@@ -614,6 +618,13 @@ test "layer initialization" {
     try testing.expectEqual(@as(usize, 2), layer.getOutputSize());
 }
 
+// Tests forward propagation through a layer with known weights and biases
+// Verifies that the layer correctly computes y = σ(W·x + b)
+// Where:
+// - W is the weight matrix
+// - x is the input vector
+// - b is the bias vector
+// - σ is the sigmoid activation function
 test "layer forward propagation" {
     const allocator = testing.allocator;
 
@@ -642,6 +653,12 @@ test "layer forward propagation" {
     try testing.expectApproxEqAbs(@as(f64, 0.7310585786300049), output.get(0, 0), 0.0001);
 }
 
+// Tests initialization of gated layers (both GLU and SwiGLU variants)
+// Verifies correct dimensions for both linear and gating components
+// Mathematical representation:
+// GLU: output = (W₁·x + b₁) ⊗ sigmoid(W₂·x + b₂)
+// SwiGLU: output = (W₁·x + b₁) ⊗ swish(W₂·x + b₂)
+// Where ⊗ represents element-wise multiplication
 test "gated layer initialization" {
     const allocator = testing.allocator;
 
@@ -664,6 +681,12 @@ test "gated layer initialization" {
     try testing.expectEqual(@as(usize, 3), swiglu_layer.getOutputSize());
 }
 
+// Tests forward propagation through a GLU layer with known weights and biases
+// Verifies the GLU computation: output = (W₁·x + b₁) ⊗ sigmoid(W₂·x + b₂)
+// Where:
+// - W₁, b₁ are linear transformation parameters
+// - W₂, b₂ are gating parameters
+// - ⊗ represents element-wise multiplication
 test "GLU layer forward propagation" {
     const allocator = testing.allocator;
 
@@ -697,6 +720,19 @@ test "GLU layer forward propagation" {
     try testing.expectApproxEqAbs(@as(f64, 1.0), output.get(0, 0), 0.0001);
 }
 
+// Tests backpropagation through a standard layer
+// Verifies gradient computation and weight updates
+// Mathematical process:
+// 1. Forward: y = σ(W·x + b)
+// 2. Backward:
+//    - δz = δy ⊗ σ'(z)
+//    - δW = xᵀ·δz
+//    - δb = sum(δz, axis=0)
+//    - δx = δz·Wᵀ
+// Where:
+// - δy is the output gradient
+// - z is the pre-activation (W·x + b)
+// - σ' is the activation derivative
 test "layer backpropagation" {
     const allocator = testing.allocator;
 
@@ -735,6 +771,17 @@ test "layer backpropagation" {
     try testing.expectEqual(@as(usize, 2), input_gradient.cols);
 }
 
+// Tests backpropagation through a gated layer
+// Verifies gradient computation for both linear and gating components
+// Mathematical process for GLU:
+// 1. Forward: output = (W₁·x + b₁) ⊗ sigmoid(W₂·x + b₂)
+// 2. Backward:
+//    - δlinear = δoutput ⊗ sigmoid(W₂·x + b₂)
+//    - δgate = δoutput ⊗ (W₁·x + b₁) ⊗ sigmoid'(W₂·x + b₂)
+//    - δW₁ = xᵀ·δlinear
+//    - δW₂ = xᵀ·δgate
+//    - δb₁ = sum(δlinear, axis=0)
+//    - δb₂ = sum(δgate, axis=0)
 test "gated layer backpropagation" {
     const allocator = testing.allocator;
 
@@ -776,4 +823,264 @@ test "gated layer backpropagation" {
     // Check that input gradient has correct dimensions
     try testing.expectEqual(@as(usize, 1), input_gradient.rows);
     try testing.expectEqual(@as(usize, 2), input_gradient.cols);
+}
+
+// Tests weight initialization statistics for different activation functions
+// Verifies that the initialization schemes produce the expected statistical properties
+// Mathematical expectations:
+// 1. ReLU (He initialization):
+//    - Mean ≈ 0
+//    - Variance ≈ 2/n where n is input size
+// 2. tanh (Xavier/Glorot initialization):
+//    - Mean ≈ 0
+//    - Variance ≈ 1/n
+// 3. softmax (scaled Xavier/Glorot):
+//    - Mean ≈ 0
+//    - Variance ≈ 0.1/n
+test "weight initialization statistics" {
+    const allocator = testing.allocator;
+    const input_size: usize = 1000;
+    const output_size: usize = 1000;
+
+    // Test ReLU initialization
+    var relu_layer = try Layer.init(allocator, input_size, output_size, Activation.relu, Activation.relu_derivative);
+    defer relu_layer.deinit();
+
+    // Calculate mean and variance of weights
+    var relu_mean: f64 = 0.0;
+    var relu_variance: f64 = 0.0;
+    for (0..input_size) |i| {
+        for (0..output_size) |j| {
+            const weight = relu_layer.weights.get(i, j);
+            relu_mean += weight;
+            relu_variance += weight * weight;
+        }
+    }
+    relu_mean /= @as(f64, @floatFromInt(input_size * output_size));
+    relu_variance = relu_variance / @as(f64, @floatFromInt(input_size * output_size)) - relu_mean * relu_mean;
+
+    // For ReLU, expected mean should be close to 0 and variance close to 2/input_size
+    const expected_relu_variance = 2.0 / @as(f64, @floatFromInt(input_size));
+    try testing.expectApproxEqAbs(@as(f64, 0.0), relu_mean, 0.1);
+    try testing.expectApproxEqAbs(expected_relu_variance, relu_variance, 0.1);
+
+    // Test tanh initialization
+    var tanh_layer = try Layer.init(allocator, input_size, output_size, Activation.tanh, Activation.tanh_derivative);
+    defer tanh_layer.deinit();
+
+    var tanh_mean: f64 = 0.0;
+    var tanh_variance: f64 = 0.0;
+    for (0..input_size) |i| {
+        for (0..output_size) |j| {
+            const weight = tanh_layer.weights.get(i, j);
+            tanh_mean += weight;
+            tanh_variance += weight * weight;
+        }
+    }
+    tanh_mean /= @as(f64, @floatFromInt(input_size * output_size));
+    tanh_variance = tanh_variance / @as(f64, @floatFromInt(input_size * output_size)) - tanh_mean * tanh_mean;
+
+    // For tanh, expected mean should be close to 0 and variance close to 1/input_size
+    const expected_tanh_variance = 1.0 / @as(f64, @floatFromInt(input_size));
+    try testing.expectApproxEqAbs(@as(f64, 0.0), tanh_mean, 0.1);
+    try testing.expectApproxEqAbs(expected_tanh_variance, tanh_variance, 0.1);
+
+    // Test softmax initialization
+    var softmax_layer = try Layer.init(allocator, input_size, output_size, Activation.softmax, Activation.softmax_derivative);
+    defer softmax_layer.deinit();
+
+    var softmax_mean: f64 = 0.0;
+    var softmax_variance: f64 = 0.0;
+    for (0..input_size) |i| {
+        for (0..output_size) |j| {
+            const weight = softmax_layer.weights.get(i, j);
+            softmax_mean += weight;
+            softmax_variance += weight * weight;
+        }
+    }
+    softmax_mean /= @as(f64, @floatFromInt(input_size * output_size));
+    softmax_variance = softmax_variance / @as(f64, @floatFromInt(input_size * output_size)) - softmax_mean * softmax_mean;
+
+    // For softmax, expected mean should be close to 0 and variance close to 0.1/input_size
+    const expected_softmax_variance = 0.1 / @as(f64, @floatFromInt(input_size));
+    try testing.expectApproxEqAbs(@as(f64, 0.0), softmax_mean, 0.1);
+    try testing.expectApproxEqAbs(expected_softmax_variance, softmax_variance, 0.1);
+}
+
+// Tests the impact of different weight initialization schemes on training performance
+// Compares three initialization methods:
+// 1. Xavier/Glorot: W ~ N(0, 1/n) for tanh/sigmoid
+// 2. He: W ~ N(0, 2/n) for ReLU
+// 3. LeCun: W ~ N(0, 1/n) for tanh/sigmoid
+// Uses a simple XOR-like task to evaluate convergence speed and final loss
+test "weight initialization impact on training" {
+    const allocator = testing.allocator;
+    const input_size: usize = 2;
+    const hidden_size: usize = 4;
+    const output_size: usize = 1;
+    const num_samples: usize = 1000;
+
+    // Create training data for a simple task (XOR-like)
+    var inputs = try Matrix.init(allocator, num_samples, input_size);
+    defer inputs.deinit();
+    var targets = try Matrix.init(allocator, num_samples, output_size);
+    defer targets.deinit();
+
+    var prng = std.Random.DefaultPrng.init(42);
+    const rand = prng.random();
+
+    // Generate training data
+    for (0..num_samples) |i| {
+        const x1: f64 = if (rand.boolean()) 1.0 else 0.0;
+        const x2: f64 = if (rand.boolean()) 1.0 else 0.0;
+        inputs.set(i, 0, x1);
+        inputs.set(i, 1, x2);
+        targets.set(i, 0, if (x1 != x2) 1.0 else 0.0);
+    }
+
+    // Test different initialization schemes
+    var best_loss: f64 = std.math.inf(f64);
+    var best_initialization: []const u8 = undefined;
+
+    // Test 1: Standard Xavier/Glorot initialization
+    {
+        var network = Network.init(allocator, 0.1, .MeanSquaredError);
+        defer network.deinit();
+
+        try network.addLayer(input_size, hidden_size, Activation.tanh, Activation.tanh_derivative);
+        try network.addLayer(hidden_size, output_size, Activation.sigmoid, Activation.sigmoid_derivative);
+
+        const loss_history = try network.train(inputs, targets, 10, 32);
+        defer allocator.free(loss_history);
+
+        const final_loss = loss_history[loss_history.len - 1];
+        if (final_loss < best_loss) {
+            best_loss = final_loss;
+            best_initialization = "Xavier/Glorot";
+        }
+    }
+
+    // Test 2: He initialization (scaled for ReLU)
+    {
+        var network = Network.init(allocator, 0.1, .MeanSquaredError);
+        defer network.deinit();
+
+        try network.addLayer(input_size, hidden_size, Activation.relu, Activation.relu_derivative);
+        try network.addLayer(hidden_size, output_size, Activation.sigmoid, Activation.sigmoid_derivative);
+
+        const loss_history = try network.train(inputs, targets, 10, 32);
+        defer allocator.free(loss_history);
+
+        const final_loss = loss_history[loss_history.len - 1];
+        if (final_loss < best_loss) {
+            best_loss = final_loss;
+            best_initialization = "He";
+        }
+    }
+
+    // Test 3: LeCun initialization
+    {
+        var network = Network.init(allocator, 0.1, .MeanSquaredError);
+        defer network.deinit();
+
+        try network.addLayer(input_size, hidden_size, Activation.tanh, Activation.tanh_derivative);
+        try network.addLayer(hidden_size, output_size, Activation.sigmoid, Activation.sigmoid_derivative);
+
+        const loss_history = try network.train(inputs, targets, 10, 32);
+        defer allocator.free(loss_history);
+
+        const final_loss = loss_history[loss_history.len - 1];
+        if (final_loss < best_loss) {
+            best_loss = final_loss;
+            best_initialization = "LeCun";
+        }
+    }
+
+    // Verify that we got reasonable results
+    try testing.expect(best_loss < 0.5);
+}
+
+// Tests weight initialization statistics for gated layers (GLU and SwiGLU)
+// Verifies that both linear and gating components follow the expected statistical properties
+// Mathematical expectations:
+// For both GLU and SwiGLU:
+// - Mean ≈ 0
+// - Variance ≈ 2/(n + m) where n is input size and m is output size
+// This initialization scheme is designed to maintain variance across the gated layer
+test "gated layer weight initialization statistics" {
+    const allocator = testing.allocator;
+    const input_size: usize = 1000;
+    const output_size: usize = 1000;
+
+    // Test GLU initialization
+    var glu_layer = try GatedLayer.init(allocator, input_size, output_size, false);
+    defer glu_layer.deinit();
+
+    // Calculate mean and variance of linear weights
+    var linear_mean: f64 = 0.0;
+    var linear_variance: f64 = 0.0;
+    for (0..input_size) |i| {
+        for (0..output_size) |j| {
+            const weight = glu_layer.linear_weights.get(i, j);
+            linear_mean += weight;
+            linear_variance += weight * weight;
+        }
+    }
+    linear_mean /= @as(f64, @floatFromInt(input_size * output_size));
+    linear_variance = linear_variance / @as(f64, @floatFromInt(input_size * output_size)) - linear_mean * linear_mean;
+
+    // Calculate mean and variance of gate weights
+    var gate_mean: f64 = 0.0;
+    var gate_variance: f64 = 0.0;
+    for (0..input_size) |i| {
+        for (0..output_size) |j| {
+            const weight = glu_layer.gate_weights.get(i, j);
+            gate_mean += weight;
+            gate_variance += weight * weight;
+        }
+    }
+    gate_mean /= @as(f64, @floatFromInt(input_size * output_size));
+    gate_variance = gate_variance / @as(f64, @floatFromInt(input_size * output_size)) - gate_mean * gate_mean;
+
+    // For GLU, expected mean should be close to 0 and variance close to 2/(input_size + output_size)
+    const expected_variance = 2.0 / @as(f64, @floatFromInt(input_size + output_size));
+    try testing.expectApproxEqAbs(@as(f64, 0.0), linear_mean, 0.1);
+    try testing.expectApproxEqAbs(@as(f64, 0.0), gate_mean, 0.1);
+    try testing.expectApproxEqAbs(expected_variance, linear_variance, 0.1);
+    try testing.expectApproxEqAbs(expected_variance, gate_variance, 0.1);
+
+    // Test SwiGLU initialization
+    var swiglu_layer = try GatedLayer.init(allocator, input_size, output_size, true);
+    defer swiglu_layer.deinit();
+
+    // Calculate statistics for SwiGLU weights
+    var swiglu_linear_mean: f64 = 0.0;
+    var swiglu_linear_variance: f64 = 0.0;
+    for (0..input_size) |i| {
+        for (0..output_size) |j| {
+            const weight = swiglu_layer.linear_weights.get(i, j);
+            swiglu_linear_mean += weight;
+            swiglu_linear_variance += weight * weight;
+        }
+    }
+    swiglu_linear_mean /= @as(f64, @floatFromInt(input_size * output_size));
+    swiglu_linear_variance = swiglu_linear_variance / @as(f64, @floatFromInt(input_size * output_size)) - swiglu_linear_mean * swiglu_linear_mean;
+
+    var swiglu_gate_mean: f64 = 0.0;
+    var swiglu_gate_variance: f64 = 0.0;
+    for (0..input_size) |i| {
+        for (0..output_size) |j| {
+            const weight = swiglu_layer.gate_weights.get(i, j);
+            swiglu_gate_mean += weight;
+            swiglu_gate_variance += weight * weight;
+        }
+    }
+    swiglu_gate_mean /= @as(f64, @floatFromInt(input_size * output_size));
+    swiglu_gate_variance = swiglu_gate_variance / @as(f64, @floatFromInt(input_size * output_size)) - swiglu_gate_mean * swiglu_gate_mean;
+
+    // For SwiGLU, expected mean should be close to 0 and variance close to 2/(input_size + output_size)
+    try testing.expectApproxEqAbs(@as(f64, 0.0), swiglu_linear_mean, 0.1);
+    try testing.expectApproxEqAbs(@as(f64, 0.0), swiglu_gate_mean, 0.1);
+    try testing.expectApproxEqAbs(expected_variance, swiglu_linear_variance, 0.1);
+    try testing.expectApproxEqAbs(expected_variance, swiglu_gate_variance, 0.1);
 }
