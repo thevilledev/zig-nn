@@ -38,7 +38,7 @@ fn readMnistData(allocator: std.mem.Allocator, images_path: []const u8, labels_p
     // Read image file header
     var header: [16]u8 = undefined;
     _ = try images_file.read(header[0..]);
-    
+
     // Read header values in big-endian format
     const magic_number = std.mem.bytesToValue(u32, header[0..4]);
     const num_images = std.mem.bytesToValue(u32, header[4..8]);
@@ -58,7 +58,7 @@ fn readMnistData(allocator: std.mem.Allocator, images_path: []const u8, labels_p
     // Read label file header
     var label_header: [8]u8 = undefined;
     _ = try labels_file.read(label_header[0..]);
-    
+
     // Read label header values in big-endian format
     const label_magic = std.mem.bytesToValue(u32, label_header[0..4]);
     const num_labels = std.mem.bytesToValue(u32, label_header[4..8]);
@@ -142,7 +142,7 @@ pub fn main() !void {
     // 3. Hidden layer 2: 128 neurons with tanh activation
     // 4. Hidden layer 3: 64 neurons with tanh activation
     // 5. Output layer: 10 neurons (one per digit) with softmax activation
-    // 
+    //
     // Architecture design choices:
     // - Gradually decreasing layer sizes help manage gradient flow
     // - tanh activation provides good gradient properties
@@ -158,8 +158,8 @@ pub fn main() !void {
     //   * Training stability (larger batches = better gradient estimates)
     //   * Training speed (smaller batches = more weight updates)
     //   * Memory usage
-    const training_sample_size: usize = 50000;  // Out of 60000 total training images
-    const test_sample_size: usize = 10000;      // Full test set
+    const training_sample_size: usize = 50000; // Out of 60000 total training images
+    const test_sample_size: usize = 10000; // Full test set
     const batch_size = 32;
     const num_epochs = 10;
 
@@ -183,8 +183,7 @@ pub fn main() !void {
     const effective_test_size = @min(test_sample_size, test_data.num_images);
     const batches_per_epoch = effective_train_size / batch_size;
 
-    std.debug.print("Training on {d} samples, testing on {d} samples\n", 
-        .{ effective_train_size, effective_test_size });
+    std.debug.print("Training on {d} samples, testing on {d} samples\n", .{ effective_train_size, effective_test_size });
     std.debug.print("Will run {d} batches per epoch\n\n", .{batches_per_epoch});
 
     // Training loop
@@ -199,10 +198,10 @@ pub fn main() !void {
         var batch: usize = 0;
 
         std.debug.print("Epoch {d}/{d}:\n", .{ epoch + 1, num_epochs });
-        
+
         // Progress tracking - show updates every 10% of epoch
         const progress_interval = @max(batches_per_epoch / 10, 1);
-        
+
         // Training loop for single epoch
         while (batch < batches_per_epoch) : (batch += 1) {
             const start_idx = batch * batch_size;
@@ -224,8 +223,7 @@ pub fn main() !void {
                     const val = output.get(i, j);
                     if (std.math.isNan(val) or std.math.isInf(val)) {
                         has_invalid = true;
-                        std.debug.print("Invalid output at batch {d}, row {d}, col {d}: {d}\n", 
-                            .{ batch, i, j, val });
+                        std.debug.print("Invalid output at batch {d}, row {d}, col {d}: {d}\n", .{ batch, i, j, val });
                         break;
                     }
                 }
@@ -234,7 +232,7 @@ pub fn main() !void {
 
             // Calculate loss for this batch
             const loss = try network.calculateLoss(output, target);
-            
+
             // Additional numerical stability checks for loss
             if (std.math.isNan(loss) or std.math.isInf(loss)) {
                 std.debug.print("Invalid loss at batch {d}: {d}\n", .{ batch, loss });
@@ -261,8 +259,7 @@ pub fn main() !void {
             if ((batch + 1) % progress_interval == 0) {
                 const progress = @as(f64, @floatFromInt(batch + 1)) / @as(f64, @floatFromInt(batches_per_epoch)) * 100.0;
                 const running_avg_loss = total_loss / @as(f64, @floatFromInt(batch + 1));
-                std.debug.print("  Progress: {d:>3.0}% - Batch {d}/{d} - Running avg loss: {d:.4}\n", 
-                    .{ progress, batch + 1, batches_per_epoch, running_avg_loss });
+                std.debug.print("  Progress: {d:>3.0}% - Batch {d}/{d} - Running avg loss: {d:.4}\n", .{ progress, batch + 1, batches_per_epoch, running_avg_loss });
             }
 
             // Backward pass - update network weights
@@ -271,8 +268,7 @@ pub fn main() !void {
 
         // Report epoch results
         const avg_loss = total_loss / @as(f64, @floatFromInt(batches_per_epoch));
-        std.debug.print("\nEpoch {d}/{d} completed - Final avg loss: {d:.4}\n", 
-            .{ epoch + 1, num_epochs, avg_loss });
+        std.debug.print("\nEpoch {d}/{d} completed - Final avg loss: {d:.4}\n", .{ epoch + 1, num_epochs, avg_loss });
 
         // Evaluation phase
         // Test network performance on held-out test set
@@ -321,4 +317,4 @@ pub fn main() !void {
         const accuracy = @as(f64, @floatFromInt(correct)) / @as(f64, @floatFromInt(total));
         std.debug.print("Test accuracy: {d:.2}%\n\n", .{accuracy * 100.0});
     }
-} 
+}
