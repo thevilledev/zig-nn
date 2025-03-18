@@ -21,6 +21,7 @@ build:
 .PHONY: test
 test:
 	$(ZIG) build test
+	$(ZIG) build test-acceptance
 
 # Build and run all examples
 .PHONY: examples
@@ -51,11 +52,6 @@ example-binary-classification:
 example-regression:
 	@echo "Running Regression example..."
 	$(ZIG) build run_regression -Doptimize=$(BUILD_MODE)
-
-.PHONY: example-acceptance
-example-acceptance:
-	@echo "Running Acceptance tests..."
-	$(ZIG) build test-acceptance
 
 # Build release version
 .PHONY: release
