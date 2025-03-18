@@ -9,6 +9,7 @@ const matrix_mod = @import("matrix.zig");
 const activation_mod = @import("activation.zig");
 const layer_mod = @import("layer.zig");
 const network_mod = @import("network.zig");
+const inference_service_mod = @import("inference_service.zig");
 
 /// Library usage example:
 ///
@@ -43,3 +44,4 @@ pub const GatedLayer = layer_mod.GatedLayer;
 pub const Network = network_mod.Network;
 pub const LayerType = network_mod.LayerType;
 pub const LayerVariant = network_mod.LayerVariant;
+pub const InferenceService = inference_service_mod.InferenceService;

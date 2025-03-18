@@ -12,6 +12,19 @@ const LossFunction = nn.LossFunction;
 /// 1 XOR 0 = 1
 /// 1 XOR 1 = 0
 pub fn main() !void {
+    // Parse command line arguments
+    var args = try std.process.argsWithAllocator(std.heap.page_allocator);
+    defer args.deinit();
+
+    var output_file: ?[]const u8 = null;
+    while (args.next()) |arg| {
+        if (std.mem.eql(u8, arg, "--output")) {
+            if (args.next()) |file| {
+                output_file = file;
+            }
+        }
+    }
+
     // Initialize allocator
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -176,4 +189,11 @@ pub fn main() !void {
     try writer.print("└─────────┴──────────┴──────────┴──────────┘\n", .{});
     try writer.print("\nAccuracy: {d}/{d} correct predictions\n", .{ correct, 4 });
     try buffered_writer.flush();
+
+    // Save the trained model if output file is specified
+    if (output_file) |file| {
+        try network.saveToFile(file);
+        try writer.print("\nModel saved to: {s}\n", .{file});
+        try buffered_writer.flush();
+    }
 }

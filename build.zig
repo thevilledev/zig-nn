@@ -57,6 +57,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "binary_classification", .src = "examples/binary_classification/binary_classification.zig", .description = "Run the binary classification example with circular decision boundary" },
         .{ .name = "regression", .src = "examples/regression/regression.zig", .description = "Run the regression example with nonlinear function approximation" },
         .{ .name = "mnist", .src = "examples/mnist/mnist.zig", .description = "Run the MNIST digit recognition example" },
+        .{ .name = "serving", .src = "examples/serving/server.zig", .description = "Run the serving example" },
         // Add new examples here in the future
     }) |example| {
         // Build the example executable
