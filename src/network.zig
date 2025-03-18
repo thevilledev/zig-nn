@@ -105,6 +105,7 @@ pub const LossFunction = enum {
 /// - Automatic dimension validation
 /// - Forward/backward propagation
 /// - Loss calculation and optimization
+/// - Model persistence (save/load)
 pub const Network = struct {
     layers: ArrayList(LayerVariant),
     allocator: Allocator,
@@ -449,6 +450,226 @@ pub const Network = struct {
         }
         return self.layers.items[self.layers.items.len - 1].getOutputSize();
     }
+
+    /// Saves the network to a binary file
+    /// Format:
+    /// - Magic number (4 bytes): "ZNN\0"
+    /// - Version (4 bytes): 1
+    /// - Created at (8 bytes): Unix timestamp
+    /// - Input size (4 bytes)
+    /// - Output size (4 bytes)
+    /// - Layer count (4 bytes)
+    /// - For each layer:
+    ///   * Layer type (1 byte): 0=Standard, 1=Gated
+    ///   * Input size (4 bytes)
+    ///   * Output size (4 bytes)
+    ///   * Activation type (1 byte)
+    ///   * Weight matrix (input_size * output_size * 8 bytes)
+    ///   * Bias vector (output_size * 8 bytes)
+    ///   * For gated layers: additional weight matrix and bias vector
+    pub fn saveToFile(self: Network, filepath: []const u8) !void {
+        const file = try std.fs.cwd().createFile(filepath, .{});
+        defer file.close();
+
+        var writer = file.writer();
+
+        // Write magic number
+        try writer.writeAll("ZNN\x00");
+
+        // Write version
+        try writer.writeInt(u32, 1, .little);
+
+        // Write creation timestamp
+        try writer.writeInt(i64, std.time.milliTimestamp(), .little);
+
+        // Write network metadata
+        const input_size = try self.getInputSize();
+        const output_size = try self.getOutputSize();
+        try writer.writeInt(u32, @intCast(input_size), .little);
+        try writer.writeInt(u32, @intCast(output_size), .little);
+        try writer.writeInt(u32, @intCast(self.layers.items.len), .little);
+
+        // Write each layer
+        for (self.layers.items) |layer| {
+            switch (layer) {
+                .Standard => |standard_layer| {
+                    // Write layer type (Standard = 0)
+                    try writer.writeByte(0);
+
+                    // Write layer metadata
+                    try writer.writeInt(u32, @intCast(standard_layer.getInputSize()), .little);
+                    try writer.writeInt(u32, @intCast(standard_layer.getOutputSize()), .little);
+
+                    // Write activation type
+                    const activation_type: u8 = if (standard_layer.activation_fn == Activation.sigmoid) 0 else if (standard_layer.activation_fn == Activation.tanh) 1 else if (standard_layer.activation_fn == Activation.relu) 2 else if (standard_layer.activation_fn == Activation.softmax) 3 else 0; // Default to sigmoid
+                    try writer.writeByte(activation_type);
+
+                    // Write weights
+                    for (0..standard_layer.weights.rows) |i| {
+                        for (0..standard_layer.weights.cols) |j| {
+                            try writer.writeInt(i64, @as(i64, @bitCast(standard_layer.weights.get(i, j))), .little);
+                        }
+                    }
+
+                    // Write biases
+                    for (0..standard_layer.bias.cols) |j| {
+                        try writer.writeInt(i64, @as(i64, @bitCast(standard_layer.bias.get(0, j))), .little);
+                    }
+                },
+                .Gated => |gated_layer| {
+                    // Write layer type (Gated = 1)
+                    try writer.writeByte(1);
+
+                    // Write layer metadata
+                    try writer.writeInt(u32, @intCast(gated_layer.getInputSize()), .little);
+                    try writer.writeInt(u32, @intCast(gated_layer.getOutputSize()), .little);
+
+                    // Write activation type (GLU = 4, SwiGLU = 5)
+                    const activation_type: u8 = if (gated_layer.use_swiglu) 5 else 4;
+                    try writer.writeByte(activation_type);
+
+                    // Write linear weights
+                    for (0..gated_layer.linear_weights.rows) |i| {
+                        for (0..gated_layer.linear_weights.cols) |j| {
+                            try writer.writeInt(i64, @as(i64, @bitCast(gated_layer.linear_weights.get(i, j))), .little);
+                        }
+                    }
+
+                    // Write linear biases
+                    for (0..gated_layer.linear_bias.cols) |j| {
+                        try writer.writeInt(i64, @as(i64, @bitCast(gated_layer.linear_bias.get(0, j))), .little);
+                    }
+
+                    // Write gate weights
+                    for (0..gated_layer.gate_weights.rows) |i| {
+                        for (0..gated_layer.gate_weights.cols) |j| {
+                            try writer.writeInt(i64, @as(i64, @bitCast(gated_layer.gate_weights.get(i, j))), .little);
+                        }
+                    }
+
+                    // Write gate biases
+                    for (0..gated_layer.gate_bias.cols) |j| {
+                        try writer.writeInt(i64, @as(i64, @bitCast(gated_layer.gate_bias.get(0, j))), .little);
+                    }
+                },
+            }
+        }
+    }
+
+    /// Loads a network from a binary file
+    /// Returns a new Network instance with the loaded architecture and weights
+    pub fn loadFromFile(allocator: Allocator, filepath: []const u8) !Network {
+        const file = try std.fs.cwd().openFile(filepath, .{});
+        defer file.close();
+
+        var reader = file.reader();
+
+        // Read and validate magic number
+        var magic: [4]u8 = undefined;
+        try reader.readNoEof(&magic);
+        if (!std.mem.eql(u8, &magic, "ZNN\x00")) {
+            return error.InvalidFileFormat;
+        }
+
+        // Read version
+        const version = try reader.readInt(u32, .little);
+        if (version != 1) {
+            return error.UnsupportedVersion;
+        }
+
+        // Skip creation timestamp
+        _ = try reader.readInt(i64, .little);
+
+        // Read network metadata
+        _ = try reader.readInt(u32, .little); // input_size
+        _ = try reader.readInt(u32, .little); // output_size
+        const layer_count = try reader.readInt(u32, .little);
+
+        // Create network with default learning rate and loss function
+        var network = Network.init(allocator, 0.1, .MeanSquaredError);
+
+        // Read each layer
+        for (0..layer_count) |_| {
+            const layer_type = try reader.readByte();
+            const layer_input_size = try reader.readInt(u32, .little);
+            const layer_output_size = try reader.readInt(u32, .little);
+            const activation_type = try reader.readByte();
+
+            switch (layer_type) {
+                0 => { // Standard layer
+                    // Determine activation function
+                    const activation_fn: *const fn (f64) f64 = switch (activation_type) {
+                        0 => Activation.sigmoid,
+                        1 => Activation.tanh,
+                        2 => Activation.relu,
+                        3 => Activation.softmax,
+                        else => Activation.sigmoid,
+                    };
+                    const activation_derivative_fn: *const fn (f64) f64 = switch (activation_type) {
+                        0 => Activation.sigmoid_derivative,
+                        1 => Activation.tanh_derivative,
+                        2 => Activation.relu_derivative,
+                        3 => Activation.softmax_derivative,
+                        else => Activation.sigmoid_derivative,
+                    };
+
+                    // Create layer
+                    try network.addLayer(layer_input_size, layer_output_size, activation_fn, activation_derivative_fn);
+
+                    // Read weights
+                    const layer = network.layers.items[network.layers.items.len - 1].Standard;
+                    for (0..layer.weights.rows) |i| {
+                        for (0..layer.weights.cols) |j| {
+                            const weight = @as(f64, @bitCast(try reader.readInt(i64, .little)));
+                            layer.weights.set(i, j, weight);
+                        }
+                    }
+
+                    // Read biases
+                    for (0..layer.bias.cols) |j| {
+                        const bias = @as(f64, @bitCast(try reader.readInt(i64, .little)));
+                        layer.bias.set(0, j, bias);
+                    }
+                },
+                1 => { // Gated layer
+                    const use_swiglu = activation_type == 5;
+                    try network.addGatedLayer(layer_input_size, layer_output_size, use_swiglu);
+
+                    // Read linear weights
+                    const layer = network.layers.items[network.layers.items.len - 1].Gated;
+                    for (0..layer.linear_weights.rows) |i| {
+                        for (0..layer.linear_weights.cols) |j| {
+                            const weight = @as(f64, @bitCast(try reader.readInt(i64, .little)));
+                            layer.linear_weights.set(i, j, weight);
+                        }
+                    }
+
+                    // Read linear biases
+                    for (0..layer.linear_bias.cols) |j| {
+                        const bias = @as(f64, @bitCast(try reader.readInt(i64, .little)));
+                        layer.linear_bias.set(0, j, bias);
+                    }
+
+                    // Read gate weights
+                    for (0..layer.gate_weights.rows) |i| {
+                        for (0..layer.gate_weights.cols) |j| {
+                            const weight = @as(f64, @bitCast(try reader.readInt(i64, .little)));
+                            layer.gate_weights.set(i, j, weight);
+                        }
+                    }
+
+                    // Read gate biases
+                    for (0..layer.gate_bias.cols) |j| {
+                        const bias = @as(f64, @bitCast(try reader.readInt(i64, .little)));
+                        layer.gate_bias.set(0, j, bias);
+                    }
+                },
+                else => return error.InvalidLayerType,
+            }
+        }
+
+        return network;
+    }
 };
 
 // Tests
@@ -620,4 +841,46 @@ test "backpropagation and training" {
         const value = predictions.get(i, 0);
         try testing.expect(value >= 0.0 and value <= 1.0);
     }
+}
+
+test "model persistence" {
+    const allocator = testing.allocator;
+
+    // Create a network with mixed layer types
+    var network = Network.init(allocator, 0.1, .MeanSquaredError);
+    defer network.deinit();
+
+    try network.addLayer(2, 4, Activation.relu, Activation.relu_derivative);
+    try network.addGatedLayer(4, 3, false); // GLU layer
+    try network.addGatedLayer(3, 2, true); // SwiGLU layer
+    try network.addLayer(2, 1, Activation.sigmoid, Activation.sigmoid_derivative);
+
+    // Set up input (1x2 matrix)
+    var input = try Matrix.init(allocator, 1, 2);
+    defer input.deinit();
+    input.set(0, 0, 1.0);
+    input.set(0, 1, 0.5);
+
+    // Get initial prediction
+    var initial_output = try network.forward(input);
+    defer initial_output.deinit();
+
+    // Save network to file
+    try network.saveToFile("test_model.bin");
+
+    // Load network from file
+    var loaded_network = try Network.loadFromFile(allocator, "test_model.bin");
+    defer loaded_network.deinit();
+
+    // Get prediction from loaded network
+    var loaded_output = try loaded_network.forward(input);
+    defer loaded_output.deinit();
+
+    // Compare predictions
+    try testing.expectEqual(initial_output.rows, loaded_output.rows);
+    try testing.expectEqual(initial_output.cols, loaded_output.cols);
+    try testing.expectApproxEqAbs(initial_output.get(0, 0), loaded_output.get(0, 0), 1e-10);
+
+    // Clean up test file
+    try std.fs.cwd().deleteFile("test_model.bin");
 }

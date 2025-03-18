@@ -99,7 +99,8 @@ pub fn build(b: *std.Build) void {
     var prev_step = addTestStep(b, test_step, "matrix", "src/matrix.zig", null);
     prev_step = addTestStep(b, test_step, "activation", "src/activation.zig", prev_step);
     prev_step = addTestStep(b, test_step, "layer", "src/layer.zig", prev_step);
-    _ = addTestStep(b, test_step, "network", "src/network.zig", prev_step);
+    prev_step = addTestStep(b, test_step, "network", "src/network.zig", prev_step);
+    _ = addTestStep(b, test_step, "inference_service", "src/inference_service.zig", prev_step);
 }
 
 // Helper function to create a test step for a specific file
