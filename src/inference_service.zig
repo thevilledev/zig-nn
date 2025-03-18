@@ -59,7 +59,7 @@ pub const InferenceService = struct {
     /// Parameters:
     ///   - inputs: Array of input arrays
     /// Returns: Array of prediction arrays
-    pub fn predictBatch(self: *InferenceService, inputs: [][]const f64) ![][]f64 {
+    pub fn predictBatch(self: *InferenceService, inputs: []const []const f64) ![][]f64 {
         if (inputs.len == 0) {
             return error.EmptyInput;
         }
@@ -132,18 +132,22 @@ test "inference service initialization and prediction" {
 
     // Test single prediction
     const input = [_]f64{ 1.0, 0.5 };
-    const prediction = try service.predict(&input);
+    const prediction = try service.predict(input[0..]);
     defer allocator.free(prediction);
 
     try testing.expectEqual(@as(usize, 1), prediction.len);
     try testing.expect(prediction[0] >= 0.0 and prediction[0] <= 1.0);
 
     // Test batch prediction
-    const inputs = [_][]const f64{
-        &[_]f64{ 1.0, 0.5 },
-        &[_]f64{ 0.0, 1.0 },
+    var input1 = [_]f64{ 1.0, 0.5 };
+    var input2 = [_]f64{ 0.0, 1.0 };
+
+    var batch_inputs = [_][]const f64{
+        input1[0..],
+        input2[0..],
     };
-    const predictions = try service.predictBatch(&inputs);
+
+    const predictions = try service.predictBatch(batch_inputs[0..]);
     defer {
         for (predictions) |pred| {
             allocator.free(pred);
@@ -165,17 +169,32 @@ test "inference service error handling" {
     // Test with non-existent model file
     try testing.expectError(error.FileNotFound, InferenceService.init(allocator, "nonexistent.bin"));
 
+    // Create a simple network for testing
+    var network = Network.init(allocator, 0.1, .MeanSquaredError);
+    defer network.deinit();
+
+    try network.addLayer(2, 4, Activation.relu, Activation.relu_derivative);
+    try network.addLayer(4, 1, Activation.sigmoid, Activation.sigmoid_derivative);
+
+    // Save network to file
+    try network.saveToFile("test_model.bin");
+    defer std.fs.cwd().deleteFile("test_model.bin") catch {}; // Clean up after test
+
     // Test with empty batch
     var service = try InferenceService.init(allocator, "test_model.bin");
     defer service.deinit();
 
-    const empty_inputs = [_][]const f64{};
-    try testing.expectError(error.EmptyInput, service.predictBatch(&empty_inputs));
+    var empty_batch: [0][]const f64 = .{};
+    try testing.expectError(error.EmptyInput, service.predictBatch(empty_batch[0..]));
 
     // Test with inconsistent input sizes
-    const inconsistent_inputs = [_][]const f64{
-        &[_]f64{ 1.0, 0.5 },
-        &[_]f64{0.0}, // Different size
+    var inconsistent1 = [_]f64{ 1.0, 0.5 };
+    var inconsistent2 = [_]f64{0.0};
+
+    var inconsistent_batch = [_][]const f64{
+        inconsistent1[0..],
+        inconsistent2[0..], // Different size
     };
-    try testing.expectError(error.InconsistentInputSizes, service.predictBatch(&inconsistent_inputs));
+
+    try testing.expectError(error.InconsistentInputSizes, service.predictBatch(inconsistent_batch[0..]));
 }
