@@ -52,6 +52,11 @@ example-regression:
 	@echo "Running Regression example..."
 	$(ZIG) build run_regression -Doptimize=$(BUILD_MODE)
 
+.PHONY: example-acceptance
+example-acceptance:
+	@echo "Running Acceptance tests..."
+	$(ZIG) build test-acceptance
+
 # Build release version
 .PHONY: release
 release:

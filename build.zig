@@ -102,6 +102,26 @@ pub fn build(b: *std.Build) void {
     prev_step = addTestStep(b, test_step, "layer", "src/layer.zig", prev_step);
     prev_step = addTestStep(b, test_step, "network", "src/network.zig", prev_step);
     _ = addTestStep(b, test_step, "inference_service", "src/inference_service.zig", prev_step);
+
+    // Create a step for running acceptance tests from examples
+    const acceptance_test_step = b.step("test-acceptance", "Run all example acceptance tests");
+
+    // Add test steps for all examples
+    var example_prev_step: ?*std.Build.Step = null;
+    inline for ([_]struct {
+        name: []const u8,
+        path: []const u8,
+    }{
+        .{ .name = "gated_network", .path = "examples/gated_network/gated_network.zig" },
+        .{ .name = "simple_xor", .path = "examples/simple_xor/simple_xor.zig" },
+        .{ .name = "xor_training", .path = "examples/xor_training/xor_training.zig" },
+        .{ .name = "binary_classification", .path = "examples/binary_classification/binary_classification.zig" },
+        .{ .name = "regression", .path = "examples/regression/regression.zig" },
+        .{ .name = "mnist", .path = "examples/mnist/mnist.zig" },
+        .{ .name = "serving", .path = "examples/serving/server.zig" },
+    }) |example| {
+        example_prev_step = addTestStep(b, acceptance_test_step, example.name, example.path, example_prev_step);
+    }
 }
 
 // Helper function to create a test step for a specific file
