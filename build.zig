@@ -58,6 +58,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "regression", .src = "examples/regression/regression.zig", .description = "Run the regression example with nonlinear function approximation" },
         .{ .name = "mnist", .src = "examples/mnist/mnist.zig", .description = "Run the MNIST digit recognition example" },
         .{ .name = "serving", .src = "examples/serving/server.zig", .description = "Run the serving example" },
+        .{ .name = "network_visualisation", .src = "examples/network_visualisation/network_visualisation.zig", .description = "Run the network visualisation example" },
         // Add new examples here in the future
     }) |example| {
         // Build the example executable
@@ -101,7 +102,8 @@ pub fn build(b: *std.Build) void {
     prev_step = addTestStep(b, test_step, "activation", "src/activation.zig", prev_step);
     prev_step = addTestStep(b, test_step, "layer", "src/layer.zig", prev_step);
     prev_step = addTestStep(b, test_step, "network", "src/network.zig", prev_step);
-    _ = addTestStep(b, test_step, "inference_service", "src/inference_service.zig", prev_step);
+    prev_step = addTestStep(b, test_step, "inference_service", "src/inference_service.zig", prev_step);
+    _ = addTestStep(b, test_step, "visualiser", "src/visualiser.zig", prev_step);
 
     // Create a step for running acceptance tests from examples
     const acceptance_test_step = b.step("test-acceptance", "Run all example acceptance tests");
@@ -119,6 +121,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "regression", .path = "examples/regression/regression.zig" },
         .{ .name = "mnist", .path = "examples/mnist/mnist.zig" },
         .{ .name = "serving", .path = "examples/serving/server.zig" },
+        .{ .name = "network_visualisation", .path = "examples/network_visualisation/network_visualisation.zig" },
     }) |example| {
         example_prev_step = addTestStep(b, acceptance_test_step, example.name, example.path, example_prev_step);
     }
