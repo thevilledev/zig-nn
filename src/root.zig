@@ -11,6 +11,8 @@ const layer_mod = @import("layer.zig");
 const network_mod = @import("network.zig");
 const inference_service_mod = @import("inference_service.zig");
 const visualiser_mod = @import("visualiser.zig");
+const backend_mod = @import("backend.zig");
+const cpu_backend_mod = @import("cpu_backend.zig");
 
 /// Library usage example:
 ///
@@ -47,3 +49,12 @@ pub const LayerType = network_mod.LayerType;
 pub const LayerVariant = network_mod.LayerVariant;
 pub const InferenceService = inference_service_mod.InferenceService;
 pub const visualiseNetwork = visualiser_mod.visualiseNetwork;
+
+// Export backend-related types and functions
+pub const BackendMatrix = backend_mod.Matrix;
+pub const ComputeBackend = backend_mod.ComputeBackend;
+pub const BackendType = backend_mod.BackendType;
+pub const ActivationUtils = backend_mod.ActivationUtils;
+pub const createBackend = backend_mod.createBackend;
+pub const createCPUBackend = backend_mod.createCPUBackend;
+pub const CPUBackend = cpu_backend_mod.CPUBackend;

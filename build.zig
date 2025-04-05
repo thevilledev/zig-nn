@@ -15,6 +15,30 @@ pub fn build(b: *std.Build) void {
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
+    // Add options for GPU acceleration
+    const gpu_opt = b.option([]const u8, "gpu", "GPU acceleration backend to use [none, metal, cuda, auto]") orelse "none";
+
+    // Validate the GPU option
+    var gpu_option: enum { none, metal, cuda, auto } = .none;
+    if (std.mem.eql(u8, gpu_opt, "none")) {
+        gpu_option = .none;
+    } else if (std.mem.eql(u8, gpu_opt, "metal")) {
+        gpu_option = .metal;
+    } else if (std.mem.eql(u8, gpu_opt, "cuda")) {
+        gpu_option = .cuda;
+    } else if (std.mem.eql(u8, gpu_opt, "auto")) {
+        gpu_option = .auto;
+    } else {
+        std.debug.print("Invalid GPU option: {s}. Must be one of: none, metal, cuda, auto\n", .{gpu_opt});
+        std.process.exit(1);
+    }
+
+    // Create the options module
+    const options = b.addOptions();
+    options.addOption(bool, "enable_gpu", gpu_option != .none);
+    options.addOption(bool, "enable_metal", gpu_option == .metal or gpu_option == .auto);
+    options.addOption(bool, "enable_cuda", gpu_option == .cuda or gpu_option == .auto);
+
     // This creates a "module", which represents a collection of source files alongside
     // some compilation options, such as optimization mode and linked system libraries.
     // Every executable or library we compile will be based on one or more modules.
@@ -27,6 +51,37 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+
+    // Add the build options to the module
+    lib_mod.addOptions("build_options", options);
+
+    // Handle Metal framework for macOS if enabled
+    if (gpu_option == .metal or gpu_option == .auto) {
+        const is_darwin = target.result.os.tag == .macos or
+            target.result.os.tag == .ios or
+            target.result.os.tag == .watchos or
+            target.result.os.tag == .tvos;
+
+        if (is_darwin) {
+            // Add Metal framework for Apple platforms
+            lib_mod.linkFramework("Metal", .{});
+
+            // TODO: Add Metal shader compilation step
+            // lib_mod.addIncludePath(b.path("src/metal"));
+        } else if (gpu_option == .metal) {
+            // If Metal was specifically requested but we're not on macOS, fail
+            std.debug.print("Metal backend requested but target OS is not macOS. Use -Dgpu=auto to fall back to other backends.\n", .{});
+            std.process.exit(1);
+        }
+    }
+
+    // Handle CUDA if enabled
+    if (gpu_option == .cuda or gpu_option == .auto) {
+        // TODO: Add CUDA support
+        // Check for CUDA toolkit installation
+        // Link CUDA libraries
+        // Add compilation step for CUDA kernels
+    }
 
     // Now, we will create a static library based on the module we created above.
     // This creates a `std.Build.Step.Compile`, which is the build step responsible
@@ -59,6 +114,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "mnist", .src = "examples/mnist/mnist.zig", .description = "Run the MNIST digit recognition example" },
         .{ .name = "serving", .src = "examples/serving/server.zig", .description = "Run the serving example" },
         .{ .name = "network_visualisation", .src = "examples/network_visualisation/network_visualisation.zig", .description = "Run the network visualisation example" },
+        .{ .name = "backend_demo", .src = "examples/backend_demo/backend_demo.zig", .description = "Run the backend abstraction demonstration" },
         // Add new examples here in the future
     }) |example| {
         // Build the example executable
@@ -103,7 +159,11 @@ pub fn build(b: *std.Build) void {
     prev_step = addTestStep(b, test_step, "layer", "src/layer.zig", prev_step);
     prev_step = addTestStep(b, test_step, "network", "src/network.zig", prev_step);
     prev_step = addTestStep(b, test_step, "inference_service", "src/inference_service.zig", prev_step);
-    _ = addTestStep(b, test_step, "visualiser", "src/visualiser.zig", prev_step);
+    prev_step = addTestStep(b, test_step, "visualiser", "src/visualiser.zig", prev_step);
+
+    // Add backend-related tests
+    prev_step = addTestStep(b, test_step, "backend", "src/backend.zig", prev_step);
+    _ = addTestStep(b, test_step, "cpu_backend", "src/cpu_backend.zig", prev_step);
 
     // Create a step for running acceptance tests from examples
     const acceptance_test_step = b.step("test-acceptance", "Run all example acceptance tests");
@@ -122,6 +182,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "mnist", .path = "examples/mnist/mnist.zig" },
         .{ .name = "serving", .path = "examples/serving/server.zig" },
         .{ .name = "network_visualisation", .path = "examples/network_visualisation/network_visualisation.zig" },
+        .{ .name = "backend_demo", .path = "examples/backend_demo/backend_demo.zig" },
     }) |example| {
         example_prev_step = addTestStep(b, acceptance_test_step, example.name, example.path, example_prev_step);
     }
