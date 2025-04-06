@@ -1,6 +1,10 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const testing = std.testing;
+const cpu_backend_mod = @import("cpu_backend.zig");
+const metal_backend_mod = @import("metal_backend.zig"); // Ensure this import exists
+const root = @import("root.zig");
+const BackendInstance = root.BackendInstance;
 
 // Build options with safe defaults in case they're not provided
 const build_options = struct {
@@ -152,17 +156,23 @@ pub const ComputeBackend = struct {
 pub const Matrix = struct {
     rows: usize,
     cols: usize,
-    backend: *const ComputeBackend,
-    // Implementation-specific data
+    backend: BackendInstance, // Store the union instance directly
+    // Implementation-specific data (opaque pointer to CPUMatrix or MetalMatrix)
     impl_data: *anyopaque,
 
-    /// Creates a new matrix using the specified backend
-    pub fn init(backend: *const ComputeBackend, allocator: Allocator, rows: usize, cols: usize) !*Matrix {
-        return backend.initMatrix(allocator, rows, cols);
+    /// Creates a new matrix using the specified backend instance
+    pub fn init(backend_instance: BackendInstance, allocator: Allocator, rows: usize, cols: usize) !*Matrix {
+        // Call the initMatrix method on the BackendInstance union
+        const matrix = try backend_instance.initMatrix(allocator, rows, cols);
+        // The backend implementation (cpu/metal initMatrix) should have already created
+        // the Matrix struct and set impl_data. We just need to store the backend instance.
+        matrix.backend = backend_instance;
+        return matrix;
     }
 
     /// Frees the matrix memory
     pub fn deinit(self: *Matrix) void {
+        // Call the deinitMatrix method on the BackendInstance union
         self.backend.deinitMatrix(self);
     }
 
@@ -230,44 +240,41 @@ pub const Matrix = struct {
     pub fn extractBatch(self: *const Matrix, start: usize, end: usize, allocator: Allocator) !*Matrix {
         return self.backend.extractBatch(self, start, end, allocator);
     }
-};
 
-/// ActivationUtils provides utility functions for working with activation functions across backends
-pub const ActivationUtils = struct {
-    /// Apply an activation function to each element of a matrix
-    pub fn apply(backend: *const ComputeBackend, matrix: *const Matrix, activation_fn: fn (f64) f64, allocator: Allocator) !*Matrix {
-        return backend.applyActivation(matrix, activation_fn, allocator);
+    // --- Activation Functions directly on Matrix ---
+    // These now use the backend instance stored in the matrix
+
+    pub fn applyActivation(self: *const Matrix, activation_fn: fn (f64) f64, allocator: Allocator) !*Matrix {
+        return self.backend.applyActivation(self, activation_fn, allocator);
     }
 
-    /// Apply softmax activation to a matrix row-wise
-    pub fn applySoftmax(backend: *const ComputeBackend, matrix: *const Matrix, allocator: Allocator) !*Matrix {
-        return backend.applySoftmax(matrix, allocator);
+    pub fn applySoftmax(self: *const Matrix, allocator: Allocator) !*Matrix {
+        return self.backend.applySoftmax(self, allocator);
     }
 
-    /// Apply Gated Linear Unit (GLU) activation
-    pub fn applyGLU(backend: *const ComputeBackend, linear_part: *const Matrix, gating_part: *const Matrix, allocator: Allocator) !*Matrix {
-        return backend.applyGLU(linear_part, gating_part, allocator);
+    pub fn applyGLU(self: *const Matrix, gating_part: *const Matrix, allocator: Allocator) !*Matrix {
+        // Assuming GLU is self * sigmoid(gating_part)
+        return self.backend.applyGLU(self, gating_part, allocator);
     }
 
-    /// Apply Swish Gated Linear Unit (SwiGLU) activation
-    pub fn applySwiGLU(backend: *const ComputeBackend, linear_part: *const Matrix, gating_part: *const Matrix, allocator: Allocator) !*Matrix {
-        return backend.applySwiGLU(linear_part, gating_part, allocator);
+    pub fn applySwiGLU(self: *const Matrix, gating_part: *const Matrix, allocator: Allocator) !*Matrix {
+        // Assuming SwiGLU is self * swish(gating_part)
+        return self.backend.applySwiGLU(self, gating_part, allocator);
     }
 };
 
 /// This function creates an appropriate backend based on the requested type
 /// Falls back to CPU if the requested type is not available
-pub fn createBackend(allocator: Allocator, backend_type: BackendType) !*ComputeBackend {
-    // Use a simpler implementation that avoids comptime evaluation issues
+pub fn createBackend(allocator: Allocator, backend_type: BackendType) !BackendInstance {
     if (backend_type == .Metal) {
         if (@import("builtin").os.tag == .macos) {
             if (comptime @hasDecl(@import("root"), "enable_metal") and @import("root").enable_metal) {
                 std.debug.print("Metal backend requested. Attempting to create...\n", .{});
-                const metal_backend = @import("metal_backend.zig");
-                return metal_backend.createMetalBackend(allocator) catch |err| {
+                const metal_ptr = try metal_backend_mod.createMetalBackend(allocator) catch |err| {
                     std.debug.print("Failed to create Metal backend: {}, falling back to CPU\n", .{err});
-                    return createCPUBackend(allocator);
+                    return BackendInstance{ .CPU = try cpu_backend_mod.createCPUBackend(allocator) };
                 };
+                return BackendInstance{ .Metal = metal_ptr };
             }
             std.debug.print("Metal backend requested but not enabled in build, falling back to CPU\n", .{});
         } else {
@@ -279,10 +286,14 @@ pub fn createBackend(allocator: Allocator, backend_type: BackendType) !*ComputeB
         } else {
             std.debug.print("CUDA backend requested but not enabled in build, falling back to CPU\n", .{});
         }
+
+        // Create a CPU backend but use the CUDA tag
+        const cpu_ptr = try cpu_backend_mod.createCPUBackend(allocator);
+        return BackendInstance{ .CUDA = cpu_ptr };
     }
 
     // Default to CPU backend
-    return createCPUBackend(allocator);
+    return BackendInstance{ .CPU = try cpu_backend_mod.createCPUBackend(allocator) };
 }
 
 /// Signature of the function to create a CPU backend

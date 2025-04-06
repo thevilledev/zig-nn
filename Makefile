@@ -58,6 +58,16 @@ example-network-visualisation:
 	@echo "Running Network Visualisation example..."
 	$(ZIG) build run_network_visualisation -Doptimize=$(BUILD_MODE)
 
+.PHONY: example-gpu
+example-gpu:
+	@echo "Running GPU (auto) example..."
+	$(ZIG) build run_gpu -Dgpu=auto -Doptimize=$(BUILD_MODE)
+
+.PHONY: example-gpu-metal
+example-gpu-metal:
+	@echo "Running GPU (metal) example..."
+	$(ZIG) build run_gpu -Dgpu=metal -Doptimize=$(BUILD_MODE)
+
 # Build release version
 .PHONY: release
 release:

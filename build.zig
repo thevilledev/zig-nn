@@ -15,29 +15,28 @@ pub fn build(b: *std.Build) void {
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
-    // Add options for GPU acceleration
-    const gpu_opt = b.option([]const u8, "gpu", "GPU acceleration backend to use [none, metal, cuda, auto]") orelse "none";
+    // GPU backend option
+    const gpu_option = b.option(
+        []const u8,
+        "gpu",
+        "GPU backend to use: auto, metal, cuda, or none (default: none)",
+    ) orelse "none";
 
-    // Validate the GPU option
-    var gpu_option: enum { none, metal, cuda, auto } = .none;
-    if (std.mem.eql(u8, gpu_opt, "none")) {
-        gpu_option = .none;
-    } else if (std.mem.eql(u8, gpu_opt, "metal")) {
-        gpu_option = .metal;
-    } else if (std.mem.eql(u8, gpu_opt, "cuda")) {
-        gpu_option = .cuda;
-    } else if (std.mem.eql(u8, gpu_opt, "auto")) {
-        gpu_option = .auto;
-    } else {
-        std.debug.print("Invalid GPU option: {s}. Must be one of: none, metal, cuda, auto\n", .{gpu_opt});
-        std.process.exit(1);
-    }
+    // Determine enabled GPU backends based on target and option
+    const enable_gpu = !std.mem.eql(u8, gpu_option, "none");
+    const is_macos = target.result.os.tag == .macos;
 
-    // Create the options module
-    const options = b.addOptions();
-    options.addOption(bool, "enable_gpu", gpu_option != .none);
-    options.addOption(bool, "enable_metal", gpu_option == .metal or gpu_option == .auto);
-    options.addOption(bool, "enable_cuda", gpu_option == .cuda or gpu_option == .auto);
+    const enable_metal = is_macos and (std.mem.eql(u8, gpu_option, "metal") or
+        std.mem.eql(u8, gpu_option, "auto"));
+
+    const enable_cuda = !is_macos and (std.mem.eql(u8, gpu_option, "cuda") or
+        std.mem.eql(u8, gpu_option, "auto"));
+
+    // Build options
+    const build_options = b.addOptions();
+    build_options.addOption(bool, "enable_gpu", enable_gpu);
+    build_options.addOption(bool, "enable_metal", enable_metal);
+    build_options.addOption(bool, "enable_cuda", enable_cuda);
 
     // This creates a "module", which represents a collection of source files alongside
     // some compilation options, such as optimization mode and linked system libraries.
@@ -53,10 +52,10 @@ pub fn build(b: *std.Build) void {
     });
 
     // Add the build options to the module
-    lib_mod.addOptions("build_options", options);
+    lib_mod.addOptions("build_options", build_options);
 
     // Handle Metal framework for macOS if enabled
-    if (gpu_option == .metal or gpu_option == .auto) {
+    if (enable_metal) {
         const is_darwin = target.result.os.tag == .macos or
             target.result.os.tag == .ios or
             target.result.os.tag == .watchos or
@@ -65,10 +64,45 @@ pub fn build(b: *std.Build) void {
         if (is_darwin) {
             // Add Metal framework for Apple platforms
             lib_mod.linkFramework("Metal", .{});
+            lib_mod.linkFramework("Foundation", .{});
+            lib_mod.linkFramework("CoreGraphics", .{});
+            lib_mod.linkSystemLibrary("c", .{});
+            lib_mod.linkSystemLibrary("c++", .{});
+            lib_mod.linkSystemLibrary("objc", .{});
+
+            // Compile the Objective-C wrapper
+            const objc_file = b.addStaticLibrary(.{
+                .name = "metal_wrapper",
+                .target = target,
+                .optimize = optimize,
+            });
+
+            // Add source file for the wrapper
+            objc_file.addCSourceFile(.{
+                .file = b.path("src/metal/metal_wrapper.m"),
+                .flags = &.{ "-Wall", "-Wextra", "-fno-objc-arc" },
+            });
+
+            // Link necessary frameworks for the wrapper
+            objc_file.linkFramework("Metal");
+            objc_file.linkFramework("Foundation");
+            objc_file.linkFramework("CoreGraphics");
+            objc_file.linkSystemLibrary("c");
+            objc_file.linkSystemLibrary("c++");
+            objc_file.linkSystemLibrary("objc");
+
+            // Add the library to the build
+            b.installArtifact(objc_file);
+
+            // Link the compiled wrapper with the main library
+            lib_mod.linkLibrary(objc_file);
+
+            // Add the include path for the header
+            lib_mod.addIncludePath(b.path("src/metal"));
 
             // TODO: Add Metal shader compilation step
             // lib_mod.addIncludePath(b.path("src/metal"));
-        } else if (gpu_option == .metal) {
+        } else if (enable_metal) {
             // If Metal was specifically requested but we're not on macOS, fail
             std.debug.print("Metal backend requested but target OS is not macOS. Use -Dgpu=auto to fall back to other backends.\n", .{});
             std.process.exit(1);
@@ -76,12 +110,13 @@ pub fn build(b: *std.Build) void {
     }
 
     // Handle CUDA if enabled
-    if (gpu_option == .cuda or gpu_option == .auto) {
-        // TODO: Add CUDA support
-        // Check for CUDA toolkit installation
-        // Link CUDA libraries
-        // Add compilation step for CUDA kernels
-    }
+    // REMOVED CUDA linking from lib_mod (if any existed)
+    // if (enable_cuda) {
+    //     // TODO: Add CUDA support
+    //     // Check for CUDA toolkit installation
+    //     // Link CUDA libraries
+    //     // Add compilation step for CUDA kernels
+    // }
 
     // Now, we will create a static library based on the module we created above.
     // This creates a `std.Build.Step.Compile`, which is the build step responsible
@@ -115,6 +150,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "serving", .src = "examples/serving/server.zig", .description = "Run the serving example" },
         .{ .name = "network_visualisation", .src = "examples/network_visualisation/network_visualisation.zig", .description = "Run the network visualisation example" },
         .{ .name = "backend_demo", .src = "examples/backend_demo/backend_demo.zig", .description = "Run the backend abstraction demonstration" },
+        .{ .name = "gpu", .src = "examples/gpu/gpu.zig", .description = "Run the GPU example" },
         // Add new examples here in the future
     }) |example| {
         // Build the example executable
@@ -127,6 +163,32 @@ pub fn build(b: *std.Build) void {
 
         // Add the library module to the example executable
         exe.root_module.addImport("nn", lib_mod);
+
+        // Conditionally link frameworks/libraries for the GPU example
+        if (std.mem.eql(u8, example.name, "gpu")) {
+            if (enable_metal) {
+                // add log here for debug
+                std.debug.print("Linking Metal and Foundation frameworks on macOS\n", .{});
+                // Link Metal and Foundation frameworks on macOS
+                exe.linkFramework("Metal");
+                exe.linkFramework("Foundation");
+                exe.linkFramework("CoreGraphics");
+                exe.linkSystemLibrary("c");
+                exe.linkSystemLibrary("c++");
+                exe.linkSystemLibrary("objc");
+                //exe.linkSystemLibrary("metal");
+                // Add any other required system libraries for Metal here if needed
+            }
+            if (enable_cuda) {
+                // Link necessary CUDA libraries
+                // Common libraries include 'cuda' and 'cudart'
+                // Adjust these based on actual CUDA toolkit requirements
+                exe.linkSystemLibrary("cuda");
+                exe.linkSystemLibrary("cudart");
+                // Add C library if needed (often required with CUDA)
+                exe.linkSystemLibrary("c");
+            }
+        }
 
         // Install the example executable
         b.installArtifact(exe);
@@ -183,6 +245,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "serving", .path = "examples/serving/server.zig" },
         .{ .name = "network_visualisation", .path = "examples/network_visualisation/network_visualisation.zig" },
         .{ .name = "backend_demo", .path = "examples/backend_demo/backend_demo.zig" },
+        .{ .name = "gpu", .path = "examples/gpu/gpu.zig" },
     }) |example| {
         example_prev_step = addTestStep(b, acceptance_test_step, example.name, example.path, example_prev_step);
     }
