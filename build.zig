@@ -70,32 +70,11 @@ pub fn build(b: *std.Build) void {
             lib_mod.linkSystemLibrary("c++", .{});
             lib_mod.linkSystemLibrary("objc", .{});
 
-            // Compile the Objective-C wrapper
-            const objc_file = b.addStaticLibrary(.{
-                .name = "metal_wrapper",
-                .target = target,
-                .optimize = optimize,
-            });
-
-            // Add source file for the wrapper
-            objc_file.addCSourceFile(.{
+            // Compile the Objective-C wrapper into the main module.
+            lib_mod.addCSourceFile(.{
                 .file = b.path("src/metal/metal_wrapper.m"),
                 .flags = &.{ "-Wall", "-Wextra", "-fno-objc-arc" },
             });
-
-            // Link necessary frameworks for the wrapper
-            objc_file.linkFramework("Metal");
-            objc_file.linkFramework("Foundation");
-            objc_file.linkFramework("CoreGraphics");
-            objc_file.linkSystemLibrary("c");
-            objc_file.linkSystemLibrary("c++");
-            objc_file.linkSystemLibrary("objc");
-
-            // Add the library to the build
-            b.installArtifact(objc_file);
-
-            // Link the compiled wrapper with the main library
-            lib_mod.linkLibrary(objc_file);
 
             // Add the include path for the header
             lib_mod.addIncludePath(b.path("src/metal"));
@@ -153,16 +132,20 @@ pub fn build(b: *std.Build) void {
         .{ .name = "gpu", .src = "examples/gpu/gpu.zig", .description = "Run the GPU example" },
         // Add new examples here in the future
     }) |example| {
-        // Build the example executable
-        const exe = b.addExecutable(.{
-            .name = example.name,
+        const exe_mod = b.createModule(.{
             .root_source_file = b.path(example.src),
             .target = target,
             .optimize = optimize,
         });
 
         // Add the library module to the example executable
-        exe.root_module.addImport("nn", lib_mod);
+        exe_mod.addImport("nn", lib_mod);
+
+        // Build the example executable
+        const exe = b.addExecutable(.{
+            .name = example.name,
+            .root_module = exe_mod,
+        });
 
         // Conditionally link frameworks/libraries for the GPU example
         if (std.mem.eql(u8, example.name, "gpu")) {
@@ -170,12 +153,12 @@ pub fn build(b: *std.Build) void {
                 // add log here for debug
                 std.debug.print("Linking Metal and Foundation frameworks on macOS\n", .{});
                 // Link Metal and Foundation frameworks on macOS
-                exe.linkFramework("Metal");
-                exe.linkFramework("Foundation");
-                exe.linkFramework("CoreGraphics");
-                exe.linkSystemLibrary("c");
-                exe.linkSystemLibrary("c++");
-                exe.linkSystemLibrary("objc");
+                exe_mod.linkFramework("Metal", .{});
+                exe_mod.linkFramework("Foundation", .{});
+                exe_mod.linkFramework("CoreGraphics", .{});
+                exe_mod.linkSystemLibrary("c", .{});
+                exe_mod.linkSystemLibrary("c++", .{});
+                exe_mod.linkSystemLibrary("objc", .{});
                 //exe.linkSystemLibrary("metal");
                 // Add any other required system libraries for Metal here if needed
             }
@@ -183,10 +166,10 @@ pub fn build(b: *std.Build) void {
                 // Link necessary CUDA libraries
                 // Common libraries include 'cuda' and 'cudart'
                 // Adjust these based on actual CUDA toolkit requirements
-                exe.linkSystemLibrary("cuda");
-                exe.linkSystemLibrary("cudart");
+                exe_mod.linkSystemLibrary("cuda", .{});
+                exe_mod.linkSystemLibrary("cudart", .{});
                 // Add C library if needed (often required with CUDA)
-                exe.linkSystemLibrary("c");
+                exe_mod.linkSystemLibrary("c", .{});
             }
         }
 
