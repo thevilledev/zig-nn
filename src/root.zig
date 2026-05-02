@@ -14,6 +14,7 @@ const visualiser_mod = @import("visualiser.zig");
 const backend_mod = @import("backend.zig");
 const cpu_backend_mod = @import("cpu_backend.zig");
 const metal_backend_mod = @import("metal_backend.zig");
+const quantization_mod = @import("quantization.zig");
 
 /// Library usage example:
 ///
@@ -21,7 +22,7 @@ const metal_backend_mod = @import("metal_backend.zig");
 ///
 /// ```zig
 /// // Create a neural network
-/// var network = Network.init(allocator);
+/// var network = Network.init(allocator, 0.1, LossFunction.MeanSquaredError);
 /// defer network.deinit();
 ///
 /// // Add layers (input -> hidden -> output)
@@ -48,8 +49,10 @@ pub const GatedLayer = layer_mod.GatedLayer;
 pub const Network = network_mod.Network;
 pub const LayerType = network_mod.LayerType;
 pub const LayerVariant = network_mod.LayerVariant;
+pub const LossFunction = network_mod.LossFunction;
 pub const InferenceService = inference_service_mod.InferenceService;
 pub const visualiseNetwork = visualiser_mod.visualiseNetwork;
+pub const Quantization = quantization_mod;
 
 // Export backend interface types
 pub const BackendMatrix = backend_mod.Matrix;

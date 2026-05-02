@@ -35,7 +35,24 @@ Two main layer types:
 - Support for different loss functions:
   - Mean Squared Error
   - Cross Entropy
+  - Binary Cross Entropy
 - Mini-batch training capabilities
+
+### Backends (`backend.zig`, `cpu_backend.zig`, `metal_backend.zig`)
+- `BackendMatrix` provides a separate backend-aware matrix API
+- CPU backend implements all backend matrix operations
+- Metal backend accelerates backend matrix operations on macOS
+- CUDA currently falls back to CPU and is not implemented yet
+
+The high-level `Network` type still uses the CPU `Matrix` implementation.
+Metal support should be verified through backend tests and GPU examples.
+
+### Quantization (`quantization.zig`)
+- Uniform scalar quantization baseline
+- TurboQuant-inspired rotated scalar quantization experiment
+- Vector metrics for MSE, max error, cosine similarity, inner-product error,
+  and compression ratio
+- Intended for reproducible small experiments
 
 ## Memory Management
 
@@ -77,13 +94,19 @@ Using Zig's error union types for handling:
    - Aligned allocations
    - Efficient striding
 
+4. **GPU Backend Operations**
+   - Metal compute kernels for backend matrix operations on macOS
+   - CPU fallback when a requested GPU backend is unavailable
+
 ## Future Considerations
 
 Areas for potential improvement:
 1. SIMD optimizations
-2. GPU acceleration
+2. Wiring `Network` and `Layer` to the backend matrix API
 3. Distributed training support
 4. Additional layer types:
    - Convolutional layers
    - Attention mechanisms
-   - Residual connections 
+   - Residual connections
+5. Full CUDA backend support
+6. Quantized network inference and KV-cache experiments

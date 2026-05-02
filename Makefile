@@ -30,7 +30,7 @@ examples:
 
 # Run quick examples that do not require external data or model files
 .PHONY: run-examples
-run-examples: example-simple-xor example-gated-network example-network-visualisation example-backend-demo example-gpu
+run-examples: example-simple-xor example-gated-network example-network-visualisation example-backend-demo example-gpu example-turboquant
 
 # Individual examples
 .PHONY: example-simple-xor
@@ -91,6 +91,11 @@ example-gpu-metal:
 	@echo "Running GPU (metal) example..."
 	$(ZIG) build run_gpu -Dgpu=metal -Doptimize=$(BUILD_MODE)
 
+.PHONY: example-turboquant
+example-turboquant:
+	@echo "Running TurboQuant paper lab example..."
+	$(ZIG) build run_turboquant -Doptimize=$(BUILD_MODE)
+
 # Build release version
 .PHONY: release
 release:
@@ -129,5 +134,6 @@ help:
 	@printf "  example-backend-demo        Run backend demo\n"
 	@printf "  example-gpu                 Run GPU auto demo\n"
 	@printf "  example-gpu-metal           Run GPU Metal demo\n"
+	@printf "  example-turboquant          Run TurboQuant paper lab\n"
 	@printf "  example-serving             Run serving example (requires model)\n"
 	@printf "  example-mnist               Run MNIST example (requires data)\n"

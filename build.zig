@@ -98,6 +98,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "network_visualisation", .src = "examples/network_visualisation/network_visualisation.zig", .description = "Run the network visualisation example" },
         .{ .name = "backend_demo", .src = "examples/backend_demo/backend_demo.zig", .description = "Run the backend abstraction demonstration" },
         .{ .name = "gpu", .src = "examples/gpu/gpu.zig", .description = "Run the GPU example" },
+        .{ .name = "turboquant", .src = "examples/quantization/turboquant.zig", .description = "Run the TurboQuant paper lab example" },
         // Add new examples here in the future
     }) |example| {
         const exe_mod = b.createModule(.{
@@ -165,6 +166,7 @@ pub fn build(b: *std.Build) void {
     prev_step = addTestStep(b, test_step, "network", "src/network.zig", prev_step, target, optimize, build_options, enable_metal, null);
     prev_step = addTestStep(b, test_step, "inference_service", "src/inference_service.zig", prev_step, target, optimize, build_options, enable_metal, null);
     prev_step = addTestStep(b, test_step, "visualiser", "src/visualiser.zig", prev_step, target, optimize, build_options, enable_metal, null);
+    prev_step = addTestStep(b, test_step, "quantization", "src/quantization.zig", prev_step, target, optimize, build_options, enable_metal, null);
 
     // Add backend-related tests
     prev_step = addTestStep(b, test_step, "backend", "src/backend.zig", prev_step, target, optimize, build_options, enable_metal, null);
@@ -190,6 +192,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "network_visualisation", .path = "examples/network_visualisation/network_visualisation.zig" },
         .{ .name = "backend_demo", .path = "examples/backend_demo/backend_demo.zig" },
         .{ .name = "gpu", .path = "examples/gpu/gpu.zig" },
+        .{ .name = "turboquant", .path = "examples/quantization/turboquant.zig" },
     }) |example| {
         example_prev_step = addTestStep(b, acceptance_test_step, example.name, example.path, example_prev_step, target, optimize, build_options, enable_metal, lib_mod);
     }
