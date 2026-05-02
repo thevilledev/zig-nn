@@ -27,7 +27,7 @@ Make sure you have Zig `0.16.0` installed on your system. This project is develo
 For convenience, a Makefile is provided with common operations:
 
 ```bash
-# Build and run everything (build, test, examples)
+# Build, test, and build examples
 make
 
 # Run specific examples, for example:
