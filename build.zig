@@ -54,39 +54,7 @@ pub fn build(b: *std.Build) void {
     // Add the build options to the module
     lib_mod.addOptions("build_options", build_options);
 
-    // Handle Metal framework for macOS if enabled
-    if (enable_metal) {
-        const is_darwin = target.result.os.tag == .macos or
-            target.result.os.tag == .ios or
-            target.result.os.tag == .watchos or
-            target.result.os.tag == .tvos;
-
-        if (is_darwin) {
-            // Add Metal framework for Apple platforms
-            lib_mod.linkFramework("Metal", .{});
-            lib_mod.linkFramework("Foundation", .{});
-            lib_mod.linkFramework("CoreGraphics", .{});
-            lib_mod.linkSystemLibrary("c", .{});
-            lib_mod.linkSystemLibrary("c++", .{});
-            lib_mod.linkSystemLibrary("objc", .{});
-
-            // Compile the Objective-C wrapper into the main module.
-            lib_mod.addCSourceFile(.{
-                .file = b.path("src/metal/metal_wrapper.m"),
-                .flags = &.{ "-Wall", "-Wextra", "-fno-objc-arc" },
-            });
-
-            // Add the include path for the header
-            lib_mod.addIncludePath(b.path("src/metal"));
-
-            // TODO: Add Metal shader compilation step
-            // lib_mod.addIncludePath(b.path("src/metal"));
-        } else if (enable_metal) {
-            // If Metal was specifically requested but we're not on macOS, fail
-            std.debug.print("Metal backend requested but target OS is not macOS. Use -Dgpu=auto to fall back to other backends.\n", .{});
-            std.process.exit(1);
-        }
-    }
+    addMetalSupport(b, lib_mod, enable_metal, true);
 
     // Handle CUDA if enabled
     // REMOVED CUDA linking from lib_mod (if any existed)
@@ -152,15 +120,7 @@ pub fn build(b: *std.Build) void {
             if (enable_metal) {
                 // add log here for debug
                 std.debug.print("Linking Metal and Foundation frameworks on macOS\n", .{});
-                // Link Metal and Foundation frameworks on macOS
-                exe_mod.linkFramework("Metal", .{});
-                exe_mod.linkFramework("Foundation", .{});
-                exe_mod.linkFramework("CoreGraphics", .{});
-                exe_mod.linkSystemLibrary("c", .{});
-                exe_mod.linkSystemLibrary("c++", .{});
-                exe_mod.linkSystemLibrary("objc", .{});
-                //exe.linkSystemLibrary("metal");
-                // Add any other required system libraries for Metal here if needed
+                addMetalSupport(b, exe_mod, enable_metal, false);
             }
             if (enable_cuda) {
                 // Link necessary CUDA libraries
@@ -199,16 +159,17 @@ pub fn build(b: *std.Build) void {
 
     // Create individual test steps for each source file
     // Run them in a logical order: matrix -> activation -> layer -> network
-    var prev_step = addTestStep(b, test_step, "matrix", "src/matrix.zig", null);
-    prev_step = addTestStep(b, test_step, "activation", "src/activation.zig", prev_step);
-    prev_step = addTestStep(b, test_step, "layer", "src/layer.zig", prev_step);
-    prev_step = addTestStep(b, test_step, "network", "src/network.zig", prev_step);
-    prev_step = addTestStep(b, test_step, "inference_service", "src/inference_service.zig", prev_step);
-    prev_step = addTestStep(b, test_step, "visualiser", "src/visualiser.zig", prev_step);
+    var prev_step = addTestStep(b, test_step, "matrix", "src/matrix.zig", null, target, optimize, build_options, enable_metal, null);
+    prev_step = addTestStep(b, test_step, "activation", "src/activation.zig", prev_step, target, optimize, build_options, enable_metal, null);
+    prev_step = addTestStep(b, test_step, "layer", "src/layer.zig", prev_step, target, optimize, build_options, enable_metal, null);
+    prev_step = addTestStep(b, test_step, "network", "src/network.zig", prev_step, target, optimize, build_options, enable_metal, null);
+    prev_step = addTestStep(b, test_step, "inference_service", "src/inference_service.zig", prev_step, target, optimize, build_options, enable_metal, null);
+    prev_step = addTestStep(b, test_step, "visualiser", "src/visualiser.zig", prev_step, target, optimize, build_options, enable_metal, null);
 
     // Add backend-related tests
-    prev_step = addTestStep(b, test_step, "backend", "src/backend.zig", prev_step);
-    _ = addTestStep(b, test_step, "cpu_backend", "src/cpu_backend.zig", prev_step);
+    prev_step = addTestStep(b, test_step, "backend", "src/backend.zig", prev_step, target, optimize, build_options, enable_metal, null);
+    prev_step = addTestStep(b, test_step, "cpu_backend", "src/cpu_backend.zig", prev_step, target, optimize, build_options, enable_metal, null);
+    _ = addTestStep(b, test_step, "metal_backend", "src/metal_backend.zig", prev_step, target, optimize, build_options, enable_metal, null);
 
     // Create a step for running acceptance tests from examples
     const acceptance_test_step = b.step("test-acceptance", "Run all example acceptance tests");
@@ -230,8 +191,28 @@ pub fn build(b: *std.Build) void {
         .{ .name = "backend_demo", .path = "examples/backend_demo/backend_demo.zig" },
         .{ .name = "gpu", .path = "examples/gpu/gpu.zig" },
     }) |example| {
-        example_prev_step = addTestStep(b, acceptance_test_step, example.name, example.path, example_prev_step);
+        example_prev_step = addTestStep(b, acceptance_test_step, example.name, example.path, example_prev_step, target, optimize, build_options, enable_metal, lib_mod);
     }
+}
+
+fn addMetalSupport(b: *std.Build, mod: *std.Build.Module, enable_metal: bool, include_wrapper: bool) void {
+    if (!enable_metal) return;
+
+    mod.linkFramework("Metal", .{});
+    mod.linkFramework("Foundation", .{});
+    mod.linkFramework("CoreGraphics", .{});
+    mod.linkSystemLibrary("c", .{});
+    mod.linkSystemLibrary("c++", .{});
+    mod.linkSystemLibrary("objc", .{});
+
+    if (include_wrapper) {
+        mod.addCSourceFile(.{
+            .file = b.path("src/metal/metal_wrapper.m"),
+            .flags = &.{ "-Wall", "-Wextra", "-fno-objc-arc" },
+        });
+    }
+
+    mod.addIncludePath(b.path("src/metal"));
 }
 
 // Helper function to create a test step for a specific file
@@ -241,11 +222,27 @@ fn addTestStep(
     name: []const u8,
     path: []const u8,
     prev_step: ?*std.Build.Step,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    build_options: *std.Build.Step.Options,
+    enable_metal: bool,
+    nn_mod: ?*std.Build.Module,
 ) *std.Build.Step {
-    // Create a system command to run zig test directly
-    const test_cmd = b.addSystemCommand(&[_][]const u8{
-        "zig", "test", path,
+    const test_mod = b.createModule(.{
+        .root_source_file = b.path(path),
+        .target = target,
+        .optimize = optimize,
     });
+    test_mod.addOptions("build_options", build_options);
+    if (nn_mod) |module| {
+        test_mod.addImport("nn", module);
+    }
+    addMetalSupport(b, test_mod, enable_metal, nn_mod == null);
+
+    const test_artifact = b.addTest(.{
+        .root_module = test_mod,
+    });
+    const run_cmd = b.addRunArtifact(test_artifact);
 
     // Print the test name with a separator for better visibility
     const echo_step = b.addSystemCommand(&[_][]const u8{
@@ -253,7 +250,7 @@ fn addTestStep(
     });
 
     // Make sure echo runs before the test
-    test_cmd.step.dependOn(&echo_step.step);
+    run_cmd.step.dependOn(&echo_step.step);
 
     // If there's a previous step, make this step depend on it
     // This ensures sequential execution
@@ -265,10 +262,10 @@ fn addTestStep(
     const test_name = b.fmt("test-{s}", .{name});
     const test_desc = b.fmt("Run {s} tests", .{name});
     const file_test_step = b.step(test_name, test_desc);
-    file_test_step.dependOn(&test_cmd.step);
+    file_test_step.dependOn(&run_cmd.step);
 
     // Add this test to the main test step
-    main_test_step.dependOn(&test_cmd.step);
+    main_test_step.dependOn(&run_cmd.step);
 
-    return &test_cmd.step;
+    return &run_cmd.step;
 }
