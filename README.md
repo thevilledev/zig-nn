@@ -22,7 +22,7 @@ Detailed documentation is available in the `docs` directory:
 
 ## Building
 
-Make sure you have Zig installed on your system. This project is developed with the latest stable version of Zig.
+Make sure you have Zig `0.16.0` installed on your system. This project is developed with the latest stable version of Zig.
 
 For convenience, a Makefile is provided with common operations:
 
