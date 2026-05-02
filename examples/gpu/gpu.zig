@@ -4,9 +4,13 @@ const Matrix = nn.BackendMatrix;
 const BackendType = nn.BackendType;
 const BackendInstance = nn.BackendInstance;
 
+fn nowNs() i96 {
+    return std.Io.Clock.awake.now(std.Options.debug_io).toNanoseconds();
+}
+
 // TODO: Currently only supports CPU backend until Metal backend is fully implemented
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
@@ -27,31 +31,28 @@ pub fn main() !void {
     matrix_a.randomize(-1.0, 1.0);
     matrix_b.randomize(-1.0, 1.0);
 
-    // Create a timer to measure performance
-    var timer = try std.time.Timer.start();
-
     // Perform matrix operations directly on Matrix instances
     std.debug.print("Performing matrix operations...\n", .{});
 
     // Matrix multiplication
-    timer.reset();
+    var start = nowNs();
     var matrix_mul = try matrix_a.dotProduct(matrix_b, allocator);
-    const mul_time = timer.lap();
+    const mul_time = nowNs() - start;
 
     // Matrix addition
-    timer.reset();
+    start = nowNs();
     var matrix_add = try matrix_a.add(matrix_b, allocator);
-    const add_time = timer.lap();
+    const add_time = nowNs() - start;
 
     // Element-wise multiplication
-    timer.reset();
+    start = nowNs();
     var matrix_element_mul = try matrix_a.elementWiseMultiply(matrix_b, allocator);
-    const element_mul_time = timer.lap();
+    const element_mul_time = nowNs() - start;
 
     // Matrix transpose
-    timer.reset();
+    start = nowNs();
     var matrix_transpose = try matrix_a.transpose(allocator);
-    const transpose_time = timer.lap();
+    const transpose_time = nowNs() - start;
 
     // Display results
     std.debug.print("\nPerformance results:\n", .{});

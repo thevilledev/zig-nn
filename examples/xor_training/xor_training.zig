@@ -11,29 +11,28 @@ const LossFunction = nn.LossFunction;
 /// 0 XOR 1 = 1
 /// 1 XOR 0 = 1
 /// 1 XOR 1 = 0
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
     // Parse command line arguments
-    var args = try std.process.argsWithAllocator(std.heap.page_allocator);
-    defer args.deinit();
+    const args = try init.minimal.args.toSlice(init.arena.allocator());
 
     var output_file: ?[]const u8 = null;
-    while (args.next()) |arg| {
-        if (std.mem.eql(u8, arg, "--output")) {
-            if (args.next()) |file| {
-                output_file = file;
-            }
+    var arg_index: usize = 1;
+    while (arg_index < args.len) : (arg_index += 1) {
+        if (std.mem.eql(u8, args[arg_index], "--output")) {
+            arg_index += 1;
+            if (arg_index < args.len) output_file = args[arg_index];
         }
     }
 
     // Initialize allocator
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    // Create a console writer
-    const stdout = std.io.getStdOut().writer();
-    var buffered_writer = std.io.bufferedWriter(stdout);
-    const writer = buffered_writer.writer();
+    var stdout_buffer: [4096]u8 = undefined;
+    var stdout_writer = std.Io.File.stdout().writerStreaming(std.Options.debug_io, &stdout_buffer);
+    const writer = &stdout_writer.interface;
+    defer writer.flush() catch {};
 
     try writer.print("\n=== XOR Neural Network Training Example ===\n\n", .{});
 
@@ -59,7 +58,7 @@ pub fn main() !void {
     try writer.print("\nTraining Parameters:\n", .{});
     try writer.print("- Learning rate:   {d:.3}\n", .{network.learning_rate});
     try writer.print("- Loss function:   {s}\n", .{@tagName(network.loss_function)});
-    try buffered_writer.flush();
+    try writer.flush();
 
     // Create XOR training data
     var inputs = try Matrix.init(allocator, 4, 2);
@@ -99,26 +98,28 @@ pub fn main() !void {
             try writer.print("│ [{d}, {d}]  │ {d:.4}   │ {d}        │\n", .{ x1, x2, y_pred, y_true });
         }
         try writer.print("└─────────┴──────────┴──────────┘\n", .{});
-        try buffered_writer.flush();
+        try writer.flush();
     }
 
     // Train the network
     try writer.print("\nTraining Progress:\n", .{});
     try writer.print("Each '=' represents 2% progress. Loss shown every 5%.\n", .{});
-    try buffered_writer.flush();
+    try writer.flush();
 
     const epochs: usize = 10000;
     const batch_size: usize = 4;
     var last_progress: usize = 0;
 
     // Custom training loop for better progress display
-    var prng = std.Random.DefaultPrng.init(@intCast(std.time.milliTimestamp()));
+    var seed: u64 = undefined;
+    std.Options.debug_io.random(std.mem.asBytes(&seed));
+    var prng = std.Random.DefaultPrng.init(seed);
     const rand = prng.random();
     var loss_history = try allocator.alloc(f64, epochs);
     defer allocator.free(loss_history);
 
     try writer.print("[", .{});
-    try buffered_writer.flush();
+    try writer.flush();
 
     for (0..epochs) |epoch| {
         // Create a random permutation for shuffling
@@ -152,19 +153,19 @@ pub fn main() !void {
         const progress = (epoch * 50) / epochs;
         while (last_progress < progress) {
             try writer.print("=", .{});
-            try buffered_writer.flush();
+            try writer.flush();
             last_progress += 1;
         }
 
         // Print loss every 5% (500 epochs)
         if (epoch % 500 == 0 or epoch == epochs - 1) {
             try writer.print(" {d:.4}", .{loss});
-            try buffered_writer.flush();
+            try writer.flush();
         }
     }
 
     try writer.print("]\n\n", .{});
-    try buffered_writer.flush();
+    try writer.flush();
 
     // Test the trained network
     try writer.print("Final predictions (after training):\n", .{});
@@ -188,12 +189,12 @@ pub fn main() !void {
     }
     try writer.print("└─────────┴──────────┴──────────┴──────────┘\n", .{});
     try writer.print("\nAccuracy: {d}/{d} correct predictions\n", .{ correct, 4 });
-    try buffered_writer.flush();
+    try writer.flush();
 
     // Save the trained model if output file is specified
     if (output_file) |file| {
         try network.saveToFile(file);
         try writer.print("\nModel saved to: {s}\n", .{file});
-        try buffered_writer.flush();
+        try writer.flush();
     }
 }

@@ -1,5 +1,6 @@
 const std = @import("std");
-const Matrix = @import("matrix.zig").Matrix;
+const matrix_mod = @import("matrix.zig");
+const Matrix = matrix_mod.Matrix;
 const Activation = @import("activation.zig").Activation;
 const Network = @import("network.zig").Network;
 const testing = std.testing;
@@ -67,7 +68,7 @@ pub const Layer = struct {
         }
 
         // Initialize weights with scaled normal distribution
-        var prng = std.Random.DefaultPrng.init(@intCast(std.time.milliTimestamp()));
+        var prng = std.Random.DefaultPrng.init(matrix_mod.randomSeed());
         const rand = prng.random();
         for (0..input_size) |i| {
             for (0..output_size) |j| {
@@ -328,7 +329,7 @@ pub const GatedLayer = struct {
         const scale = @sqrt(2.0 / @as(f64, @floatFromInt(input_size + output_size)));
 
         // Initialize weights with scaled normal distribution
-        var prng = std.Random.DefaultPrng.init(@intCast(std.time.milliTimestamp()));
+        var prng = std.Random.DefaultPrng.init(matrix_mod.randomSeed());
         const rand = prng.random();
 
         // Initialize linear weights

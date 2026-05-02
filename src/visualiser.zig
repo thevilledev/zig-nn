@@ -22,17 +22,18 @@ const LayerDim = struct {
 /// Returns:
 ///   An ArrayList(u8) containing the ASCII visualization, or an error.
 pub fn visualiseNetwork(network: *const Network, allocator: Allocator) !ArrayList(u8) {
-    var buffer = ArrayList(u8).init(allocator);
-    const writer = buffer.writer();
+    var buffer = std.Io.Writer.Allocating.init(allocator);
+    errdefer buffer.deinit();
+    const writer = &buffer.writer;
 
     if (network.layers.items.len == 0) {
         try writer.print("Empty Network\n", .{});
-        return buffer;
+        return buffer.toArrayList();
     }
 
     // 1. Gather layer dimensions and find max height
-    var layer_dims = ArrayList(LayerDim).init(allocator);
-    defer layer_dims.deinit();
+    var layer_dims: ArrayList(LayerDim) = .empty;
+    defer layer_dims.deinit(allocator);
 
     var max_height: usize = 0;
     var max_label_len: usize = 0;
@@ -41,7 +42,7 @@ pub fn visualiseNetwork(network: *const Network, allocator: Allocator) !ArrayLis
     const first_layer = network.layers.items[0];
     const input_size = first_layer.getInputSize();
     const input_label = try fmt.allocPrint(allocator, "Input (Size: {d})", .{input_size});
-    try layer_dims.append(.{
+    try layer_dims.append(allocator, .{
         .input_size = 0, // Not applicable for input pseudo-layer
         .output_size = input_size,
         .height = input_size,
@@ -62,7 +63,7 @@ pub fn visualiseNetwork(network: *const Network, allocator: Allocator) !ArrayLis
         const layer_label_prefix = if (i == network.layers.items.len) "Output" else "Layer";
         const layer_label = try fmt.allocPrint(allocator, "{s} {d}: {s} (In: {d}, Out: {d})", .{ layer_label_prefix, i, layer_type_str, layer_input_size, layer_output_size });
 
-        try layer_dims.append(.{
+        try layer_dims.append(allocator, .{
             .input_size = layer_input_size,
             .output_size = layer_output_size,
             .height = layer_height,
@@ -78,18 +79,18 @@ pub fn visualiseNetwork(network: *const Network, allocator: Allocator) !ArrayLis
 
     // There's a memory leak in our test because we allocate labels but don't free them
     // Let's create a free list for these allocations
-    var label_free_list = ArrayList([]const u8).init(allocator);
+    var label_free_list: ArrayList([]const u8) = .empty;
     defer {
         for (label_free_list.items) |label| {
             allocator.free(label);
         }
-        label_free_list.deinit();
+        label_free_list.deinit(allocator);
     }
 
     // Track the labels we allocate for cleanup
-    try label_free_list.append(input_label);
+    try label_free_list.append(allocator, input_label);
     for (layer_dims.items[1..]) |ld| {
-        try label_free_list.append(ld.label);
+        try label_free_list.append(allocator, ld.label);
     }
 
     // Constants for drawing - reduce spacing for compactness
@@ -135,7 +136,7 @@ pub fn visualiseNetwork(network: *const Network, allocator: Allocator) !ArrayLis
                 try writer.print("Layer {d}: {s} ({d}->{d})\n", .{ i, layer_type, ld.input_size, ld.output_size });
             }
         }
-        return buffer;
+        return buffer.toArrayList();
     }
 
     // For narrower networks, use the visual representation
@@ -144,7 +145,7 @@ pub fn visualiseNetwork(network: *const Network, allocator: Allocator) !ArrayLis
         try writer.print("{s}", .{ld.label});
 
         if (layer_idx < layer_dims.items.len - 1) {
-            try writer.writeByteNTimes(' ', h_spacing);
+            try writer.splatByteAll(' ', h_spacing);
         }
     }
     try writer.writeByte('\n');
@@ -163,18 +164,18 @@ pub fn visualiseNetwork(network: *const Network, allocator: Allocator) !ArrayLis
             const should_draw_neuron = (row_idx >= top_padding) and (row_idx < max_height - bottom_padding);
 
             // Add padding before neuron
-            try writer.writeByteNTimes(' ', 6);
+            try writer.splatByteAll(' ', 6);
 
             // Draw neuron or space
             if (should_draw_neuron) {
                 try writer.print("{s}", .{neuron_str});
             } else {
-                try writer.writeByteNTimes(' ', neuron_width);
+                try writer.splatByteAll(' ', neuron_width);
             }
 
             // Add connection if not the last layer
             if (!is_last_layer) {
-                try writer.writeByteNTimes(' ', 1); // Reduced space after neuron
+                try writer.splatByteAll(' ', 1); // Reduced space after neuron
 
                 // For networks with different sized layers, we need to ensure connections
                 // are shown between all neurons in adjacent layers
@@ -191,16 +192,16 @@ pub fn visualiseNetwork(network: *const Network, allocator: Allocator) !ArrayLis
                 if (should_draw_neuron or connects_to_next) {
                     try writer.print("{s}", .{connection_str});
                 } else {
-                    try writer.writeByteNTimes(' ', connection_str.len);
+                    try writer.splatByteAll(' ', connection_str.len);
                 }
 
-                try writer.writeByteNTimes(' ', h_spacing); // Reduced spacing
+                try writer.splatByteAll(' ', h_spacing); // Reduced spacing
             }
         }
         try writer.writeByte('\n');
     }
 
-    return buffer;
+    return buffer.toArrayList();
 }
 
 // TODO: Add tests later
@@ -219,7 +220,7 @@ test "visualize simple network" {
 
     // Generate visualization
     var viz_buffer = try visualiseNetwork(&network, allocator);
-    defer viz_buffer.deinit();
+    defer viz_buffer.deinit(allocator);
 
     // Don't test exact string output as it's implementation dependent
     // Just verify we got some output and it contains expected elements

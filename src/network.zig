@@ -4,8 +4,13 @@ const ArrayList = std.ArrayList;
 const testing = std.testing;
 const Layer = @import("layer.zig").Layer;
 const GatedLayer = @import("layer.zig").GatedLayer;
-const Matrix = @import("matrix.zig").Matrix;
+const matrix_mod = @import("matrix.zig");
+const Matrix = matrix_mod.Matrix;
 const Activation = @import("activation.zig").Activation;
+
+fn unixMilliTimestamp() i64 {
+    return std.Io.Clock.real.now(std.Options.debug_io).toMilliseconds();
+}
 
 /// Neural Network Implementation
 /// Provides a flexible neural network architecture supporting:
@@ -119,7 +124,7 @@ pub const Network = struct {
     ///   - loss_function: Type of loss function to use
     pub fn init(allocator: Allocator, learning_rate: f64, loss_function: LossFunction) Network {
         return Network{
-            .layers = ArrayList(LayerVariant).init(allocator),
+            .layers = .empty,
             .allocator = allocator,
             .learning_rate = learning_rate,
             .loss_function = loss_function,
@@ -132,7 +137,7 @@ pub const Network = struct {
         for (self.layers.items) |layer| {
             layer.deinit(self.allocator);
         }
-        self.layers.deinit();
+        self.layers.deinit(self.allocator);
     }
 
     /// Adds a standard fully connected layer to the network
@@ -144,7 +149,7 @@ pub const Network = struct {
     pub fn addLayer(self: *Network, input_size: usize, output_size: usize, activation_fn: *const fn (f64) f64, activation_derivative_fn: *const fn (f64) f64) !void {
         const layer_ptr = try self.allocator.create(Layer);
         layer_ptr.* = try Layer.init(self.allocator, input_size, output_size, activation_fn, activation_derivative_fn);
-        try self.layers.append(LayerVariant{ .Standard = layer_ptr });
+        try self.layers.append(self.allocator, LayerVariant{ .Standard = layer_ptr });
     }
 
     /// Adds a gated layer (GLU/SwiGLU) to the network
@@ -155,7 +160,7 @@ pub const Network = struct {
     pub fn addGatedLayer(self: *Network, input_size: usize, output_size: usize, use_swiglu: bool) !void {
         const layer_ptr = try self.allocator.create(GatedLayer);
         layer_ptr.* = try GatedLayer.init(self.allocator, input_size, output_size, use_swiglu);
-        try self.layers.append(LayerVariant{ .Gated = layer_ptr });
+        try self.layers.append(self.allocator, LayerVariant{ .Gated = layer_ptr });
     }
 
     /// Performs forward propagation through the entire network
@@ -379,7 +384,7 @@ pub const Network = struct {
         var loss_history = try self.allocator.alloc(f64, epochs);
         errdefer self.allocator.free(loss_history);
 
-        var prng = std.Random.DefaultPrng.init(@intCast(std.time.milliTimestamp()));
+        var prng = std.Random.DefaultPrng.init(matrix_mod.randomSeed());
         const rand = prng.random();
 
         // Training loop
@@ -468,10 +473,13 @@ pub const Network = struct {
     ///   * Bias vector (output_size * 8 bytes)
     ///   * For gated layers: additional weight matrix and bias vector
     pub fn saveToFile(self: Network, filepath: []const u8) !void {
-        const file = try std.fs.cwd().createFile(filepath, .{});
-        defer file.close();
+        const io = std.Options.debug_io;
+        const file = try std.Io.Dir.cwd().createFile(io, filepath, .{});
+        defer file.close(io);
 
-        var writer = file.writer();
+        var buffer: [4096]u8 = undefined;
+        var file_writer = file.writerStreaming(io, &buffer);
+        const writer = &file_writer.interface;
 
         // Write magic number
         try writer.writeAll("ZNN\x00");
@@ -480,7 +488,7 @@ pub const Network = struct {
         try writer.writeInt(u32, 1, .little);
 
         // Write creation timestamp
-        try writer.writeInt(i64, std.time.milliTimestamp(), .little);
+        try writer.writeInt(i64, unixMilliTimestamp(), .little);
 
         // Write network metadata
         const input_size = try self.getInputSize();
@@ -554,46 +562,51 @@ pub const Network = struct {
                 },
             }
         }
+
+        try writer.flush();
     }
 
     /// Loads a network from a binary file
     /// Returns a new Network instance with the loaded architecture and weights
     pub fn loadFromFile(allocator: Allocator, filepath: []const u8) !Network {
-        const file = try std.fs.cwd().openFile(filepath, .{});
-        defer file.close();
+        const io = std.Options.debug_io;
+        const file = try std.Io.Dir.cwd().openFile(io, filepath, .{});
+        defer file.close(io);
 
-        var reader = file.reader();
+        var buffer: [4096]u8 = undefined;
+        var file_reader = file.readerStreaming(io, &buffer);
+        const reader = &file_reader.interface;
 
         // Read and validate magic number
         var magic: [4]u8 = undefined;
-        try reader.readNoEof(&magic);
+        @memcpy(&magic, try reader.take(4));
         if (!std.mem.eql(u8, &magic, "ZNN\x00")) {
             return error.InvalidFileFormat;
         }
 
         // Read version
-        const version = try reader.readInt(u32, .little);
+        const version = try reader.takeInt(u32, .little);
         if (version != 1) {
             return error.UnsupportedVersion;
         }
 
         // Skip creation timestamp
-        _ = try reader.readInt(i64, .little);
+        _ = try reader.takeInt(i64, .little);
 
         // Read network metadata
-        _ = try reader.readInt(u32, .little); // input_size
-        _ = try reader.readInt(u32, .little); // output_size
-        const layer_count = try reader.readInt(u32, .little);
+        _ = try reader.takeInt(u32, .little); // input_size
+        _ = try reader.takeInt(u32, .little); // output_size
+        const layer_count = try reader.takeInt(u32, .little);
 
         // Create network with default learning rate and loss function
         var network = Network.init(allocator, 0.1, .MeanSquaredError);
 
         // Read each layer
         for (0..layer_count) |_| {
-            const layer_type = try reader.readByte();
-            const layer_input_size = try reader.readInt(u32, .little);
-            const layer_output_size = try reader.readInt(u32, .little);
-            const activation_type = try reader.readByte();
+            const layer_type = try reader.takeByte();
+            const layer_input_size = try reader.takeInt(u32, .little);
+            const layer_output_size = try reader.takeInt(u32, .little);
+            const activation_type = try reader.takeByte();
 
             switch (layer_type) {
                 0 => { // Standard layer
@@ -620,14 +633,14 @@ pub const Network = struct {
                     const layer = network.layers.items[network.layers.items.len - 1].Standard;
                     for (0..layer.weights.rows) |i| {
                         for (0..layer.weights.cols) |j| {
-                            const weight = @as(f64, @bitCast(try reader.readInt(i64, .little)));
+                            const weight = @as(f64, @bitCast(try reader.takeInt(i64, .little)));
                             layer.weights.set(i, j, weight);
                         }
                     }
 
                     // Read biases
                     for (0..layer.bias.cols) |j| {
-                        const bias = @as(f64, @bitCast(try reader.readInt(i64, .little)));
+                        const bias = @as(f64, @bitCast(try reader.takeInt(i64, .little)));
                         layer.bias.set(0, j, bias);
                     }
                 },
@@ -639,28 +652,28 @@ pub const Network = struct {
                     const layer = network.layers.items[network.layers.items.len - 1].Gated;
                     for (0..layer.linear_weights.rows) |i| {
                         for (0..layer.linear_weights.cols) |j| {
-                            const weight = @as(f64, @bitCast(try reader.readInt(i64, .little)));
+                            const weight = @as(f64, @bitCast(try reader.takeInt(i64, .little)));
                             layer.linear_weights.set(i, j, weight);
                         }
                     }
 
                     // Read linear biases
                     for (0..layer.linear_bias.cols) |j| {
-                        const bias = @as(f64, @bitCast(try reader.readInt(i64, .little)));
+                        const bias = @as(f64, @bitCast(try reader.takeInt(i64, .little)));
                         layer.linear_bias.set(0, j, bias);
                     }
 
                     // Read gate weights
                     for (0..layer.gate_weights.rows) |i| {
                         for (0..layer.gate_weights.cols) |j| {
-                            const weight = @as(f64, @bitCast(try reader.readInt(i64, .little)));
+                            const weight = @as(f64, @bitCast(try reader.takeInt(i64, .little)));
                             layer.gate_weights.set(i, j, weight);
                         }
                     }
 
                     // Read gate biases
                     for (0..layer.gate_bias.cols) |j| {
-                        const bias = @as(f64, @bitCast(try reader.readInt(i64, .little)));
+                        const bias = @as(f64, @bitCast(try reader.takeInt(i64, .little)));
                         layer.gate_bias.set(0, j, bias);
                     }
                 },
@@ -882,5 +895,5 @@ test "model persistence" {
     try testing.expectApproxEqAbs(initial_output.get(0, 0), loaded_output.get(0, 0), 1e-10);
 
     // Clean up test file
-    try std.fs.cwd().deleteFile("test_model.bin");
+    try std.Io.Dir.cwd().deleteFile(std.Options.debug_io, "test_model.bin");
 }

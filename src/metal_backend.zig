@@ -4,6 +4,7 @@ const backend = @import("backend.zig");
 const ComputeBackend = backend.ComputeBackend;
 const BackendType = backend.BackendType;
 const Matrix = backend.Matrix;
+const randomSeed = @import("matrix.zig").randomSeed;
 
 // Add build options to check if Metal is enabled
 const build_options = @import("build_options");
@@ -539,7 +540,7 @@ pub const MetalBackend = struct {
         const metal_matrix = getMetalMatrix(matrix);
 
         // Initialize random number generator
-        var rng = std.Random.DefaultPrng.init(@as(u64, @bitCast(std.time.milliTimestamp())));
+        var rng = std.Random.DefaultPrng.init(randomSeed());
 
         // Fill with random values
         for (metal_matrix.host_data) |*element| {

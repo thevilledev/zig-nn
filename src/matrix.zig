@@ -2,6 +2,12 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const testing = std.testing;
 
+pub fn randomSeed() u64 {
+    var seed: u64 = undefined;
+    std.Options.debug_io.random(std.mem.asBytes(&seed));
+    return seed;
+}
+
 /// Matrix struct representing a 2D array of f64 values
 /// Used for linear algebra operations in neural networks
 /// Stores data in row-major order for efficient memory access
@@ -110,7 +116,7 @@ pub const Matrix = struct {
     ///   - min: Minimum value (inclusive)
     ///   - max: Maximum value (inclusive)
     pub fn randomize(self: *Matrix, min: f64, max: f64) void {
-        var prng = std.Random.DefaultPrng.init(@intCast(std.time.milliTimestamp()));
+        var prng = std.Random.DefaultPrng.init(randomSeed());
         const rand = prng.random();
 
         for (0..self.rows) |i| {

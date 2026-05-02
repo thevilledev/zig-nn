@@ -4,6 +4,7 @@ const backend = @import("backend.zig");
 const ComputeBackend = backend.ComputeBackend;
 const BackendType = backend.BackendType;
 const Matrix = backend.Matrix;
+const randomSeed = @import("matrix.zig").randomSeed;
 
 /// CPU-specific implementation of a matrix
 const CPUMatrix = struct {
@@ -282,7 +283,7 @@ pub const CPUBackend = struct {
     }
 
     pub fn randomize(_: *anyopaque, matrix: *Matrix, min: f64, max: f64) void {
-        var prng = std.Random.DefaultPrng.init(@intCast(std.time.milliTimestamp()));
+        var prng = std.Random.DefaultPrng.init(randomSeed());
         const rand = prng.random();
 
         const matrix_cpu = @as(*CPUMatrix, @ptrCast(@alignCast(matrix.impl_data)));

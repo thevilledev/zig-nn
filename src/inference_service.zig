@@ -160,7 +160,7 @@ test "inference service initialization and prediction" {
     try testing.expectEqual(@as(usize, 1), predictions[1].len);
 
     // Clean up test file
-    try std.fs.cwd().deleteFile("test_model.bin");
+    try std.Io.Dir.cwd().deleteFile(std.Options.debug_io, "test_model.bin");
 }
 
 test "inference service error handling" {
@@ -178,7 +178,7 @@ test "inference service error handling" {
 
     // Save network to file
     try network.saveToFile("test_model.bin");
-    defer std.fs.cwd().deleteFile("test_model.bin") catch {}; // Clean up after test
+    defer std.Io.Dir.cwd().deleteFile(std.Options.debug_io, "test_model.bin") catch {}; // Clean up after test
 
     // Test with empty batch
     var service = try InferenceService.init(allocator, "test_model.bin");

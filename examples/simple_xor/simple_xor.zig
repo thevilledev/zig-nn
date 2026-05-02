@@ -12,12 +12,14 @@ const Activation = nn.Activation;
 /// 1 XOR 1 = 0
 pub fn main() !void {
     // Initialize allocator
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    // Create a console writer
-    const stdout = std.io.getStdOut().writer();
+    var stdout_buffer: [4096]u8 = undefined;
+    var stdout_writer = std.Io.File.stdout().writerStreaming(std.Options.debug_io, &stdout_buffer);
+    const stdout = &stdout_writer.interface;
+    defer stdout.flush() catch {};
 
     try stdout.print("\n=== Simple Neural Network Example ===\n\n", .{});
 

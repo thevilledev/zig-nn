@@ -3,7 +3,7 @@ const nn = @import("nn");
 const InferenceService = nn.InferenceService;
 const json = std.json;
 const http = std.http;
-const net = std.net;
+const net = std.Io.net;
 const testing = std.testing;
 
 const Request = struct {
@@ -19,65 +19,62 @@ const Response = struct {
         try writer.writeAll("{\"prediction\":[");
         for (self.prediction, 0..) |value, i| {
             if (i > 0) try writer.writeAll(",");
-            try std.fmt.format(writer, "{d}", .{value});
+            try writer.print("{d}", .{value});
         }
         try writer.writeAll("],\"confidence\":");
-        try std.fmt.format(writer, "{d}", .{self.confidence});
+        try writer.print("{d}", .{self.confidence});
         try writer.writeAll("}");
     }
 };
 
 pub fn main() !void {
     // Initialize allocator
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
+    const io = std.Options.debug_io;
 
     // Initialize inference service
     var inference = try InferenceService.init(allocator, "xor_model.bin");
     defer inference.deinit();
 
     // Create server
-    const address = try net.Address.resolveIp("0.0.0.0", 8080);
-    var server = try address.listen(.{ .reuse_port = true });
-    defer server.deinit();
+    const address = try net.IpAddress.parse("0.0.0.0", 8080);
+    var server = try address.listen(io, .{ .reuse_address = true });
+    defer server.deinit(io);
 
     std.debug.print("Server listening on http://127.0.0.1:8080\n", .{});
 
     while (true) {
-        var connection = try server.accept();
-        defer connection.stream.close();
+        const stream = try server.accept(io);
+        defer stream.close(io);
 
-        var buf: [8192]u8 = undefined;
-        var http_server = http.Server.init(connection, &buf);
+        var read_buf: [8192]u8 = undefined;
+        var write_buf: [8192]u8 = undefined;
+        var stream_reader = stream.reader(io, &read_buf);
+        var stream_writer = stream.writer(io, &write_buf);
+        var http_server = http.Server.init(&stream_reader.interface, &stream_writer.interface);
 
         // Handle request
         var request = try http_server.receiveHead();
-        std.debug.print("request size: {}\n{s}\n", .{ request.head_end, buf[0..request.head_end] });
-
-        // Find the start of the body (after the double newline)
-        var body_start: usize = request.head_end;
-        // Skip any remaining newlines after headers
-        while (body_start < buf.len and (buf[body_start] == '\r' or buf[body_start] == '\n')) {
-            body_start += 1;
-        }
+        std.debug.print("request size: {}\n{s}\n", .{ request.head_buffer.len, request.head_buffer });
 
         // Get Content-Length
         const content_length = if (request.head.content_length) |l| l else 0;
+        if (content_length > read_buf.len) return error.RequestBodyTooLarge;
 
-        // Debug print positions and content
-        std.debug.print("head_end: {}, body_start: {}, content_length: {}\n", .{ request.head_end, body_start, content_length });
-        std.debug.print("Body content (hex): ", .{});
-        for (buf[body_start .. body_start + content_length]) |byte| {
-            std.debug.print("{x:0>2} ", .{byte});
-        }
-        std.debug.print("\nBody content: {s}\n", .{buf[body_start .. body_start + content_length]});
+        var body_buf: [8192]u8 = undefined;
+        const body_reader = request.readerExpectNone(&body_buf);
+        const body = try body_reader.take(@intCast(content_length));
+
+        std.debug.print("content_length: {}\n", .{content_length});
+        std.debug.print("Body content: {s}\n", .{body});
 
         // Parse JSON request
         const parsed = try std.json.parseFromSlice(
             Request,
             allocator,
-            buf[body_start .. body_start + content_length],
+            body,
             .{},
         );
         defer parsed.deinit();
@@ -98,9 +95,9 @@ pub fn main() !void {
 
         // Serialize response to JSON
         var json_buffer: [4096]u8 = undefined;
-        var fbs = std.io.fixedBufferStream(&json_buffer);
-        try response_data.writeJson(fbs.writer());
-        const json_response = fbs.getWritten();
+        var json_writer = std.Io.Writer.fixed(&json_buffer);
+        try response_data.writeJson(&json_writer);
+        const json_response = json_writer.buffered();
 
         // Send response
         try request.respond(json_response, .{
@@ -143,9 +140,9 @@ test "response formatting" {
     };
 
     var buffer: [256]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buffer);
-    try response_data.writeJson(fbs.writer());
-    const json_str = fbs.getWritten();
+    var writer = std.Io.Writer.fixed(&buffer);
+    try response_data.writeJson(&writer);
+    const json_str = writer.buffered();
 
     // Print actual JSON for debugging
     std.debug.print("\nActual JSON: {s}\n", .{json_str});

@@ -9,12 +9,14 @@ const visualiseNetwork = nn.visualiseNetwork;
 /// using the ASCII visualization tool.
 pub fn main() !void {
     // Initialize allocator
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    // Create a console writer
-    const stdout = std.io.getStdOut().writer();
+    var stdout_buffer: [4096]u8 = undefined;
+    var stdout_writer = std.Io.File.stdout().writerStreaming(std.Options.debug_io, &stdout_buffer);
+    const stdout = &stdout_writer.interface;
+    defer stdout.flush() catch {};
 
     try stdout.print("\n=== Neural Network Visualization Examples ===\n\n", .{});
 
@@ -30,7 +32,7 @@ pub fn main() !void {
         try network.addLayer(3, 1, Activation.sigmoid, Activation.sigmoid_derivative);
 
         var viz = try visualiseNetwork(&network, allocator);
-        defer viz.deinit();
+        defer viz.deinit(allocator);
 
         try stdout.print("{s}\n\n", .{viz.items});
     }
@@ -48,7 +50,7 @@ pub fn main() !void {
         try network.addLayer(4, 2, Activation.sigmoid, Activation.sigmoid_derivative);
 
         var viz = try visualiseNetwork(&network, allocator);
-        defer viz.deinit();
+        defer viz.deinit(allocator);
 
         try stdout.print("{s}\n\n", .{viz.items});
     }
@@ -68,7 +70,7 @@ pub fn main() !void {
         try network.addLayer(4, 1, Activation.sigmoid, Activation.sigmoid_derivative);
 
         var viz = try visualiseNetwork(&network, allocator);
-        defer viz.deinit();
+        defer viz.deinit(allocator);
 
         try stdout.print("{s}\n\n", .{viz.items});
     }
@@ -85,7 +87,7 @@ pub fn main() !void {
         try network.addLayer(20, 4, Activation.sigmoid, Activation.sigmoid_derivative);
 
         var viz = try visualiseNetwork(&network, allocator);
-        defer viz.deinit();
+        defer viz.deinit(allocator);
 
         try stdout.print("{s}\n\n", .{viz.items});
     }
@@ -103,7 +105,7 @@ pub fn main() !void {
         try network.addLayer(3, 1, Activation.sigmoid, Activation.sigmoid_derivative);
 
         var viz = try visualiseNetwork(&network, allocator);
-        defer viz.deinit();
+        defer viz.deinit(allocator);
 
         try stdout.print("{s}\n", .{viz.items});
     }

@@ -25,7 +25,7 @@ const math = std.math;
 
 pub fn main() !void {
     // Initialize memory allocator
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
@@ -88,7 +88,10 @@ pub fn main() !void {
     // 1. Split data into mini-batches
     // 2. Train network on each batch
     // 3. Calculate and display average loss every 50 epochs
-    const stdout = std.io.getStdOut().writer();
+    var stdout_buffer: [4096]u8 = undefined;
+    var stdout_writer = std.Io.File.stdout().writerStreaming(std.Options.debug_io, &stdout_buffer);
+    const stdout = &stdout_writer.interface;
+    defer stdout.flush() catch {};
     var epoch: usize = 0;
     while (epoch < num_epochs) : (epoch += 1) {
         var total_loss: f64 = 0.0;

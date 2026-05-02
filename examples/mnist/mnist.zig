@@ -27,17 +27,26 @@ const MnistData = struct {
 ///   - images_path: Path to IDX file containing image data
 ///   - labels_path: Path to IDX file containing label data
 fn readMnistData(allocator: std.mem.Allocator, images_path: []const u8, labels_path: []const u8) !MnistData {
+    const io = std.Options.debug_io;
+
     // Open image file
-    const images_file = try std.fs.cwd().openFile(images_path, .{});
-    defer images_file.close();
+    const images_file = try std.Io.Dir.cwd().openFile(io, images_path, .{});
+    defer images_file.close(io);
 
     // Open labels file
-    const labels_file = try std.fs.cwd().openFile(labels_path, .{});
-    defer labels_file.close();
+    const labels_file = try std.Io.Dir.cwd().openFile(io, labels_path, .{});
+    defer labels_file.close(io);
+
+    var images_reader_buffer: [4096]u8 = undefined;
+    var labels_reader_buffer: [4096]u8 = undefined;
+    var images_reader = images_file.readerStreaming(io, &images_reader_buffer);
+    var labels_reader = labels_file.readerStreaming(io, &labels_reader_buffer);
+    const images_in = &images_reader.interface;
+    const labels_in = &labels_reader.interface;
 
     // Read image file header
     var header: [16]u8 = undefined;
-    _ = try images_file.read(header[0..]);
+    try images_in.readSliceAll(header[0..]);
 
     // Read header values in big-endian format
     const magic_number = std.mem.bytesToValue(u32, header[0..4]);
@@ -57,7 +66,7 @@ fn readMnistData(allocator: std.mem.Allocator, images_path: []const u8, labels_p
 
     // Read label file header
     var label_header: [8]u8 = undefined;
-    _ = try labels_file.read(label_header[0..]);
+    try labels_in.readSliceAll(label_header[0..]);
 
     // Read label header values in big-endian format
     const label_magic = std.mem.bytesToValue(u32, label_header[0..4]);
@@ -74,11 +83,11 @@ fn readMnistData(allocator: std.mem.Allocator, images_path: []const u8, labels_p
     // Read image data
     const image_size = num_rows_be * num_cols_be;
     const images = try allocator.alloc(u8, num_images_be * image_size);
-    _ = try images_file.read(images);
+    try images_in.readSliceAll(images);
 
     // Read label data
     const labels = try allocator.alloc(u8, num_images_be);
-    _ = try labels_file.read(labels);
+    try labels_in.readSliceAll(labels);
 
     return MnistData{
         .images = images,
@@ -127,7 +136,7 @@ fn prepareData(allocator: std.mem.Allocator, data: MnistData, start_idx: usize, 
 
 pub fn main() !void {
     // Initialize memory allocator
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
