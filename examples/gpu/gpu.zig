@@ -8,16 +8,13 @@ fn nowNs() i96 {
     return std.Io.Clock.awake.now(std.Options.debug_io).toNanoseconds();
 }
 
-// TODO: Currently only supports CPU backend until Metal backend is fully implemented
 pub fn main() !void {
     var gpa: std.heap.DebugAllocator(.{}) = .init;
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
-    // Always use CPU backend for now until Metal backend is fully implemented
-    std.debug.print("Creating CPU backend...\n", .{});
-    const cpu_ptr = try nn.createCPUBackend(allocator);
-    var backend_instance = BackendInstance{ .CPU = cpu_ptr };
+    std.debug.print("Creating requested GPU backend...\n", .{});
+    var backend_instance = try nn.createBackend(allocator, .Metal);
     defer backend_instance.deinit();
 
     // Print the backend type
@@ -69,6 +66,6 @@ pub fn main() !void {
     matrix_b.deinit();
     matrix_a.deinit();
 
-    std.debug.print("\nCPU backend demo completed successfully!\n", .{});
+    std.debug.print("\nGPU backend demo completed successfully!\n", .{});
     return;
 }

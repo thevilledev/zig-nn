@@ -403,16 +403,20 @@ pub const MetalBackend = struct {
     }
 
     pub fn subtract(ptr: *anyopaque, a: *const Matrix, b: *const Matrix, allocator: Allocator) error{ OutOfMemory, DimensionMismatch }!*Matrix {
-        // Similar to add but using the subtraction kernel
-        // Check dimensions
         if (a.rows != b.rows or a.cols != b.cols) {
             return error.DimensionMismatch;
         }
 
         _ = @as(*MetalBackend, @ptrCast(@alignCast(ptr))); // Mark ptr as unused if not needed for init
 
-        // Create result matrix and perform computation (omitted for brevity)
         const result = try initMatrix(ptr, allocator, a.rows, a.cols);
+        const a_metal = getMetalMatrix(a);
+        const b_metal = getMetalMatrix(b);
+        const result_metal = getMetalMatrix(result);
+
+        for (0..a.rows * a.cols) |i| {
+            result_metal.host_data[i] = a_metal.host_data[i] - b_metal.host_data[i];
+        }
 
         return result;
     }
@@ -448,7 +452,7 @@ pub const MetalBackend = struct {
         return result;
     }
 
-    pub fn scale(ptr: *anyopaque, matrix: *const Matrix, _: f64, allocator: Allocator) error{OutOfMemory}!*Matrix {
+    pub fn scale(ptr: *anyopaque, matrix: *const Matrix, scalar: f64, allocator: Allocator) error{OutOfMemory}!*Matrix {
         _ = @as(*MetalBackend, @ptrCast(@alignCast(ptr))); // Mark ptr as unused if not needed for init
 
         // Create result matrix
@@ -461,9 +465,11 @@ pub const MetalBackend = struct {
         // Ensure data is on GPU
         matrix_metal.syncToGPU();
 
-        // Execute compute kernel (omitted for brevity)
+        for (0..matrix.rows * matrix.cols) |i| {
+            result_metal.host_data[i] = matrix_metal.host_data[i] * scalar;
+        }
 
-        return result_metal;
+        return result;
     }
 
     pub fn sumRows(ptr: *anyopaque, matrix: *const Matrix, allocator: Allocator) error{OutOfMemory}!*Matrix {
@@ -479,10 +485,15 @@ pub const MetalBackend = struct {
         // Ensure data is on GPU
         matrix_metal.syncToGPU();
 
-        // Execute compute kernel (omitted for brevity)
-        // This would likely use a reduction algorithm
+        for (0..matrix.cols) |j| {
+            var sum: f64 = 0;
+            for (0..matrix.rows) |i| {
+                sum += matrix_metal.host_data[i * matrix.cols + j];
+            }
+            result_metal.host_data[j] = sum;
+        }
 
-        return result_metal;
+        return result;
     }
 
     pub fn transpose(ptr: *anyopaque, matrix: *const Matrix, allocator: Allocator) error{OutOfMemory}!*Matrix {
@@ -581,16 +592,27 @@ pub const MetalBackend = struct {
         const matrix_metal = getMetalMatrix(matrix);
         const result_metal = getMetalMatrix(result);
 
-        // Ensure data is on GPU
-        matrix_metal.syncToGPU();
+        for (0..matrix.rows) |i| {
+            var max_val: f64 = -std.math.inf(f64);
+            for (0..matrix.cols) |j| {
+                max_val = @max(max_val, matrix_metal.host_data[i * matrix.cols + j]);
+            }
 
-        // Execute softmax compute kernels (omitted for brevity)
-        // This would use the three-step softmax process in Metal:
-        // 1. Find max per row
-        // 2. Compute exp(x - max) and sum
-        // 3. Normalize by sum
+            var sum: f64 = 0.0;
+            for (0..matrix.cols) |j| {
+                const idx = i * matrix.cols + j;
+                const exp_val = std.math.exp(matrix_metal.host_data[idx] - max_val);
+                result_metal.host_data[idx] = exp_val;
+                sum += exp_val;
+            }
 
-        return result_metal;
+            for (0..matrix.cols) |j| {
+                const idx = i * matrix.cols + j;
+                result_metal.host_data[idx] /= sum;
+            }
+        }
+
+        return result;
     }
 
     pub fn applyGLU(ptr: *anyopaque, linear_part: *const Matrix, gating_part: *const Matrix, allocator: Allocator) error{ OutOfMemory, DimensionMismatch }!*Matrix {
@@ -609,14 +631,12 @@ pub const MetalBackend = struct {
         const gating_metal = getMetalMatrix(gating_part);
         const result_metal = getMetalMatrix(result);
 
-        // Ensure data is on GPU
-        linear_metal.syncToGPU();
-        gating_metal.syncToGPU();
+        for (0..linear_part.rows * linear_part.cols) |i| {
+            const sigmoid = 1.0 / (1.0 + std.math.exp(-gating_metal.host_data[i]));
+            result_metal.host_data[i] = linear_metal.host_data[i] * sigmoid;
+        }
 
-        // Execute compute kernel (omitted for brevity)
-        // GLU: result = linear_part * sigmoid(gating_part)
-
-        return result_metal;
+        return result;
     }
 
     pub fn applySwiGLU(ptr: *anyopaque, linear_part: *const Matrix, gating_part: *const Matrix, allocator: Allocator) error{ OutOfMemory, DimensionMismatch }!*Matrix {
@@ -635,14 +655,13 @@ pub const MetalBackend = struct {
         const gating_metal = getMetalMatrix(gating_part);
         const result_metal = getMetalMatrix(result);
 
-        // Ensure data is on GPU
-        linear_metal.syncToGPU();
-        gating_metal.syncToGPU();
+        for (0..linear_part.rows * linear_part.cols) |i| {
+            const gate = gating_metal.host_data[i];
+            const sigmoid = 1.0 / (1.0 + std.math.exp(-gate));
+            result_metal.host_data[i] = linear_metal.host_data[i] * gate * sigmoid;
+        }
 
-        // Execute compute kernel (omitted for brevity)
-        // SwiGLU: result = linear_part * swish(gating_part)
-
-        return result_metal;
+        return result;
     }
 
     pub fn getBackendType(_: *anyopaque) BackendType {

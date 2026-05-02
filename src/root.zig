@@ -67,12 +67,18 @@ pub const BackendInstance = union(BackendType) {
 
     // --- Mirrored Interface Methods ---
 
+    fn attachBackend(self: BackendInstance, matrix: *BackendMatrix) *BackendMatrix {
+        matrix.backend = self;
+        return matrix;
+    }
+
     pub fn initMatrix(self: BackendInstance, allocator: std.mem.Allocator, rows: usize, cols: usize) !*BackendMatrix {
-        return switch (self) {
+        const matrix = try switch (self) {
             .CPU => |ptr| CPUBackend.initMatrix(ptr, allocator, rows, cols),
             .Metal => |ptr| MetalBackend.initMatrix(ptr, allocator, rows, cols),
             .CUDA => |ptr| CPUBackend.initMatrix(ptr, allocator, rows, cols), // Use CPU as fallback
         };
+        return self.attachBackend(matrix);
     }
 
     pub fn deinitMatrix(self: BackendInstance, matrix: *BackendMatrix) void {
@@ -84,11 +90,12 @@ pub const BackendInstance = union(BackendType) {
     }
 
     pub fn copyMatrix(self: BackendInstance, source: *const BackendMatrix, allocator: std.mem.Allocator) !*BackendMatrix {
-        return switch (self) {
+        const matrix = try switch (self) {
             .CPU => |ptr| CPUBackend.copyMatrix(ptr, source, allocator),
             .Metal => |ptr| MetalBackend.copyMatrix(ptr, source, allocator),
             .CUDA => |ptr| CPUBackend.copyMatrix(ptr, source, allocator), // Use CPU as fallback
         };
+        return self.attachBackend(matrix);
     }
 
     pub fn getMatrixElement(self: BackendInstance, matrix: *const BackendMatrix, row: usize, col: usize) f64 {
@@ -116,67 +123,75 @@ pub const BackendInstance = union(BackendType) {
     }
 
     pub fn dotProduct(self: BackendInstance, a: *const BackendMatrix, b: *const BackendMatrix, allocator: std.mem.Allocator) !*BackendMatrix {
-        return switch (self) {
+        const matrix = try switch (self) {
             .CPU => |ptr| CPUBackend.dotProduct(ptr, a, b, allocator),
             .Metal => |ptr| MetalBackend.dotProduct(ptr, a, b, allocator),
             .CUDA => |ptr| CPUBackend.dotProduct(ptr, a, b, allocator), // Use CPU as fallback
         };
+        return self.attachBackend(matrix);
     }
 
     pub fn add(self: BackendInstance, a: *const BackendMatrix, b: *const BackendMatrix, allocator: std.mem.Allocator) !*BackendMatrix {
-        return switch (self) {
+        const matrix = try switch (self) {
             .CPU => |ptr| CPUBackend.add(ptr, a, b, allocator),
             .Metal => |ptr| MetalBackend.add(ptr, a, b, allocator),
             .CUDA => |ptr| CPUBackend.add(ptr, a, b, allocator), // Use CPU as fallback
         };
+        return self.attachBackend(matrix);
     }
 
     pub fn subtract(self: BackendInstance, a: *const BackendMatrix, b: *const BackendMatrix, allocator: std.mem.Allocator) !*BackendMatrix {
-        return switch (self) {
+        const matrix = try switch (self) {
             .CPU => |ptr| CPUBackend.subtract(ptr, a, b, allocator),
             .Metal => |ptr| MetalBackend.subtract(ptr, a, b, allocator),
             .CUDA => |ptr| CPUBackend.subtract(ptr, a, b, allocator), // Use CPU as fallback
         };
+        return self.attachBackend(matrix);
     }
 
     pub fn elementWiseMultiply(self: BackendInstance, a: *const BackendMatrix, b: *const BackendMatrix, allocator: std.mem.Allocator) !*BackendMatrix {
-        return switch (self) {
+        const matrix = try switch (self) {
             .CPU => |ptr| CPUBackend.elementWiseMultiply(ptr, a, b, allocator),
             .Metal => |ptr| MetalBackend.elementWiseMultiply(ptr, a, b, allocator),
             .CUDA => |ptr| CPUBackend.elementWiseMultiply(ptr, a, b, allocator), // Use CPU as fallback
         };
+        return self.attachBackend(matrix);
     }
 
     pub fn scale(self: BackendInstance, matrix: *const BackendMatrix, scalar: f64, allocator: std.mem.Allocator) !*BackendMatrix {
-        return switch (self) {
+        const result = try switch (self) {
             .CPU => |ptr| CPUBackend.scale(ptr, matrix, scalar, allocator),
             .Metal => |ptr| MetalBackend.scale(ptr, matrix, scalar, allocator),
             .CUDA => |ptr| CPUBackend.scale(ptr, matrix, scalar, allocator), // Use CPU as fallback
         };
+        return self.attachBackend(result);
     }
 
     pub fn sumRows(self: BackendInstance, matrix: *const BackendMatrix, allocator: std.mem.Allocator) !*BackendMatrix {
-        return switch (self) {
+        const result = try switch (self) {
             .CPU => |ptr| CPUBackend.sumRows(ptr, matrix, allocator),
             .Metal => |ptr| MetalBackend.sumRows(ptr, matrix, allocator),
             .CUDA => |ptr| CPUBackend.sumRows(ptr, matrix, allocator), // Use CPU as fallback
         };
+        return self.attachBackend(result);
     }
 
     pub fn transpose(self: BackendInstance, matrix: *const BackendMatrix, allocator: std.mem.Allocator) !*BackendMatrix {
-        return switch (self) {
+        const result = try switch (self) {
             .CPU => |ptr| CPUBackend.transpose(ptr, matrix, allocator),
             .Metal => |ptr| MetalBackend.transpose(ptr, matrix, allocator),
             .CUDA => |ptr| CPUBackend.transpose(ptr, matrix, allocator), // Use CPU as fallback
         };
+        return self.attachBackend(result);
     }
 
     pub fn extractBatch(self: BackendInstance, matrix: *const BackendMatrix, start: usize, end: usize, allocator: std.mem.Allocator) !*BackendMatrix {
-        return switch (self) {
+        const result = try switch (self) {
             .CPU => |ptr| CPUBackend.extractBatch(ptr, matrix, start, end, allocator),
             .Metal => |ptr| MetalBackend.extractBatch(ptr, matrix, start, end, allocator),
             .CUDA => |ptr| CPUBackend.extractBatch(ptr, matrix, start, end, allocator), // Use CPU as fallback
         };
+        return self.attachBackend(result);
     }
 
     pub fn randomize(self: BackendInstance, matrix: *BackendMatrix, min: f64, max: f64) void {
@@ -188,35 +203,39 @@ pub const BackendInstance = union(BackendType) {
     }
 
     pub fn applyActivation(self: BackendInstance, matrix: *const BackendMatrix, activation_fn: fn (f64) f64, allocator: std.mem.Allocator) !*BackendMatrix {
-        return switch (self) {
+        const result = try switch (self) {
             .CPU => |ptr| CPUBackend.applyActivation(ptr, matrix, activation_fn, allocator),
             .Metal => |ptr| MetalBackend.applyActivation(ptr, matrix, activation_fn, allocator),
             .CUDA => |ptr| CPUBackend.applyActivation(ptr, matrix, activation_fn, allocator), // Use CPU as fallback
         };
+        return self.attachBackend(result);
     }
 
     pub fn applySoftmax(self: BackendInstance, matrix: *const BackendMatrix, allocator: std.mem.Allocator) !*BackendMatrix {
-        return switch (self) {
+        const result = try switch (self) {
             .CPU => |ptr| CPUBackend.applySoftmax(ptr, matrix, allocator),
             .Metal => |ptr| MetalBackend.applySoftmax(ptr, matrix, allocator),
             .CUDA => |ptr| CPUBackend.applySoftmax(ptr, matrix, allocator), // Use CPU as fallback
         };
+        return self.attachBackend(result);
     }
 
     pub fn applyGLU(self: BackendInstance, linear_part: *const BackendMatrix, gating_part: *const BackendMatrix, allocator: std.mem.Allocator) !*BackendMatrix {
-        return switch (self) {
+        const result = try switch (self) {
             .CPU => |ptr| CPUBackend.applyGLU(ptr, linear_part, gating_part, allocator),
             .Metal => |ptr| MetalBackend.applyGLU(ptr, linear_part, gating_part, allocator),
             .CUDA => |ptr| CPUBackend.applyGLU(ptr, linear_part, gating_part, allocator), // Use CPU as fallback
         };
+        return self.attachBackend(result);
     }
 
     pub fn applySwiGLU(self: BackendInstance, linear_part: *const BackendMatrix, gating_part: *const BackendMatrix, allocator: std.mem.Allocator) !*BackendMatrix {
-        return switch (self) {
+        const result = try switch (self) {
             .CPU => |ptr| CPUBackend.applySwiGLU(ptr, linear_part, gating_part, allocator),
             .Metal => |ptr| MetalBackend.applySwiGLU(ptr, linear_part, gating_part, allocator),
             .CUDA => |ptr| CPUBackend.applySwiGLU(ptr, linear_part, gating_part, allocator), // Use CPU as fallback
         };
+        return self.attachBackend(result);
     }
 
     // --- End Mirrored Interface Methods ---

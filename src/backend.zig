@@ -6,13 +6,6 @@ const metal_backend_mod = @import("metal_backend.zig"); // Ensure this import ex
 const root = @import("root.zig");
 const BackendInstance = root.BackendInstance;
 
-// Build options with safe defaults in case they're not provided
-const build_options = struct {
-    pub const enable_gpu = false;
-    pub const enable_metal = false;
-    pub const enable_cuda = false;
-};
-
 /// BackendType enum represents the available computation backends
 pub const BackendType = enum {
     CPU,
@@ -268,15 +261,12 @@ pub const Matrix = struct {
 pub fn createBackend(allocator: Allocator, backend_type: BackendType) !BackendInstance {
     if (backend_type == .Metal) {
         if (@import("builtin").os.tag == .macos) {
-            if (comptime @hasDecl(@import("root"), "enable_metal") and @import("root").enable_metal) {
-                std.debug.print("Metal backend requested. Attempting to create...\n", .{});
-                const metal_ptr = try metal_backend_mod.createMetalBackend(allocator) catch |err| {
-                    std.debug.print("Failed to create Metal backend: {}, falling back to CPU\n", .{err});
-                    return BackendInstance{ .CPU = try cpu_backend_mod.createCPUBackend(allocator) };
-                };
-                return BackendInstance{ .Metal = metal_ptr };
-            }
-            std.debug.print("Metal backend requested but not enabled in build, falling back to CPU\n", .{});
+            std.debug.print("Metal backend requested. Attempting to create...\n", .{});
+            const metal_ptr = metal_backend_mod.createMetalBackend(allocator) catch |err| {
+                std.debug.print("Failed to create Metal backend: {}, falling back to CPU\n", .{err});
+                return BackendInstance{ .CPU = try cpu_backend_mod.createCPUBackend(allocator) };
+            };
+            return BackendInstance{ .Metal = metal_ptr };
         } else {
             std.debug.print("Metal backend requested but not available on this OS, falling back to CPU\n", .{});
         }
