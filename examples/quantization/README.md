@@ -18,6 +18,12 @@ Run:
 zig build run_turboquant
 ```
 
+The command prints one illustrative vector comparison and an aggregate
+benchmark over deterministic outlier-heavy vectors. The aggregate table
+compares the previous baseline, uniform scalar quantization, against the
+rotated scalar variant and reports MSE gain, inner-product error gain, and
+average encode/decode time.
+
 The current example implements:
 
 - uniform scalar quantization baseline
