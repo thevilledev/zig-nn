@@ -17,3 +17,14 @@ jobs:
           version: 0.16.0
       - run: zig build test
       - run: zig build test-acceptance
+
+  metal-test:
+    runs-on: macos-latest
+    name: Metal Test
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.16.0
+      - run: zig build -Dgpu=metal test-metal_backend --summary all
+      - run: zig build -Dgpu=metal run_gpu
