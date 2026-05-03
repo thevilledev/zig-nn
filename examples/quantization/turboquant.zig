@@ -5,6 +5,8 @@ const Quantization = nn.Quantization;
 
 const dimension = 384;
 const benchmark_trials = 128;
+const compression_dimension = 16384;
+const compression_trials = 16;
 const data_seed: u64 = 0x5442_5155_414e_5431;
 const rotation_seed: u64 = 0x9e37_79b9_7f4a_7c15;
 
@@ -52,6 +54,29 @@ pub fn main() !void {
     );
     try runBenchmark(allocator, 8);
     try runBenchmark(allocator, 4);
+
+    std.debug.print(
+        "\nCompression benchmark: TurboQuant 4-bit vs previous uniform 8-bit\n",
+        .{},
+    );
+    std.debug.print(
+        "{s: >7} {s: >6} {s: >6} {s: >11} {s: >12} {s: >12} {s: >11} {s: >12} {s: >12} {s: >11} {s: >10} {s: >10}\n",
+        .{
+            "vectors",
+            "dims",
+            "bits",
+            "payload win",
+            "base mse",
+            "tq mse",
+            "mse gain",
+            "base inner",
+            "tq inner",
+            "inner gain",
+            "base us",
+            "tq us",
+        },
+    );
+    try runCompressionBenchmark(allocator);
 }
 
 fn fillExperimentVectors(source: []f64, query: []f64, seed: u64) void {
@@ -73,6 +98,24 @@ fn fillExperimentVectors(source: []f64, query: []f64, seed: u64) void {
     }
 }
 
+fn fillSparseOutlierVectors(source: []f64, query: []f64, seed: u64) void {
+    var prng = std.Random.DefaultPrng.init(seed);
+    const random = prng.random();
+    const spike_index = seed % source.len;
+
+    for (source, query, 0..) |*value, *q, i| {
+        const index = @as(f64, @floatFromInt(i));
+        const baseline = std.math.sin(index * 0.013) * 0.8 +
+            std.math.cos(index * 0.047) * 0.35;
+        const noise = (random.float(f64) - 0.5) * 0.08;
+        const spike: f64 = if (i == spike_index) 2048.0 else 0.0;
+
+        value.* = baseline + noise + spike;
+        q.* = std.math.sin(index * 0.005) * 0.7 +
+            std.math.cos(index * 0.019) * 0.3;
+    }
+}
+
 const BenchTotals = struct {
     uniform_mse: f64 = 0.0,
     rotated_mse: f64 = 0.0,
@@ -80,6 +123,17 @@ const BenchTotals = struct {
     rotated_inner_error: f64 = 0.0,
     uniform_total_ns: f64 = 0.0,
     rotated_total_ns: f64 = 0.0,
+};
+
+const CompressionTotals = struct {
+    uniform_mse: f64 = 0.0,
+    turbo_mse: f64 = 0.0,
+    uniform_inner_error: f64 = 0.0,
+    turbo_inner_error: f64 = 0.0,
+    uniform_total_ns: f64 = 0.0,
+    turbo_total_ns: f64 = 0.0,
+    uniform_payload_bits: usize = 0,
+    turbo_payload_bits: usize = 0,
 };
 
 fn runUniform(
@@ -198,6 +252,90 @@ fn runBenchmark(allocator: std.mem.Allocator, bits: u8) !void {
             percentGain(uniform_inner, rotated_inner),
             totals.uniform_total_ns / trials / 1000.0,
             totals.rotated_total_ns / trials / 1000.0,
+        },
+    );
+}
+
+fn runCompressionBenchmark(allocator: std.mem.Allocator) !void {
+    var totals = CompressionTotals{};
+
+    for (0..compression_trials) |trial| {
+        const source = try allocator.alloc(f64, compression_dimension);
+        defer allocator.free(source);
+        const query = try allocator.alloc(f64, compression_dimension);
+        defer allocator.free(query);
+
+        fillSparseOutlierVectors(
+            source,
+            query,
+            data_seed +% @as(u64, @intCast(trial * 97)),
+        );
+
+        var start = nowNs();
+        const uniform = try Quantization.encodeUniformScalar(allocator, source, 8);
+        const uniform_decoded = try uniform.decode(allocator);
+        const uniform_ns = nowNs() - start;
+        defer allocator.free(uniform_decoded);
+        defer uniform.deinit();
+
+        start = nowNs();
+        const turbo = try Quantization.encodeTurboQuant(
+            allocator,
+            source,
+            4,
+            rotation_seed +% @as(u64, @intCast(trial)),
+        );
+        const turbo_decoded = try turbo.decode(allocator);
+        const turbo_ns = nowNs() - start;
+        defer allocator.free(turbo_decoded);
+        defer turbo.deinit();
+
+        const uniform_metrics = try Quantization.measureVectorError(
+            source,
+            uniform_decoded,
+            query,
+            uniform.payloadBits(),
+        );
+        const turbo_metrics = try Quantization.measureVectorError(
+            source,
+            turbo_decoded,
+            query,
+            turbo.payloadBits(),
+        );
+
+        totals.uniform_mse += uniform_metrics.mse;
+        totals.turbo_mse += turbo_metrics.mse;
+        totals.uniform_inner_error += uniform_metrics.inner_product_error;
+        totals.turbo_inner_error += turbo_metrics.inner_product_error;
+        totals.uniform_total_ns += @as(f64, @floatFromInt(uniform_ns));
+        totals.turbo_total_ns += @as(f64, @floatFromInt(turbo_ns));
+        totals.uniform_payload_bits += uniform_metrics.quantized_bits;
+        totals.turbo_payload_bits += turbo_metrics.quantized_bits;
+    }
+
+    const trials = @as(f64, @floatFromInt(compression_trials));
+    const uniform_mse = totals.uniform_mse / trials;
+    const turbo_mse = totals.turbo_mse / trials;
+    const uniform_inner = totals.uniform_inner_error / trials;
+    const turbo_inner = totals.turbo_inner_error / trials;
+    const payload_win = @as(f64, @floatFromInt(totals.uniform_payload_bits)) /
+        @as(f64, @floatFromInt(totals.turbo_payload_bits));
+
+    std.debug.print(
+        "{d: >7} {d: >6} {s: >6} {d: >10.2}x {d: >12.6} {d: >12.6} {d: >10.1}% {d: >12.6} {d: >12.6} {d: >10.1}% {d: >10.2} {d: >10.2}\n",
+        .{
+            compression_trials,
+            compression_dimension,
+            "8->4",
+            payload_win,
+            uniform_mse,
+            turbo_mse,
+            percentGain(uniform_mse, turbo_mse),
+            uniform_inner,
+            turbo_inner,
+            percentGain(uniform_inner, turbo_inner),
+            totals.uniform_total_ns / trials / 1000.0,
+            totals.turbo_total_ns / trials / 1000.0,
         },
     );
 }

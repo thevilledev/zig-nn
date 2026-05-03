@@ -24,6 +24,11 @@ compares the previous baseline, uniform scalar quantization, against the
 rotated scalar variant and reports MSE gain, inner-product error gain, and
 average encode/decode time.
 
+It also includes a compression benchmark where the previous uniform 8-bit
+baseline is compared against the rotated 4-bit variant on high-dimensional
+sparse-outlier vectors. That benchmark is meant to show whether the rotated
+method can win on quality while using fewer payload bits.
+
 The current example implements:
 
 - uniform scalar quantization baseline
