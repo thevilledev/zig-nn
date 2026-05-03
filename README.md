@@ -57,6 +57,7 @@ make
 # Run specific examples, for example:
 make example-simple-xor
 make example-turboquant
+make example-gpu-benchmark
 
 # Build with different optimization modes
 make BUILD_MODE=ReleaseFast
@@ -89,6 +90,12 @@ On macOS, run:
 ```bash
 zig build -Dgpu=metal test-metal_backend --summary all
 zig build -Dgpu=metal run_gpu
+```
+
+To compare Metal against the CPU backend on larger matrix multiplications:
+
+```bash
+zig build run_gpu_benchmark -Dgpu=metal -Doptimize=ReleaseFast
 ```
 
 On non-macOS targets, Metal tests are skipped or unavailable. The default

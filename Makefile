@@ -91,6 +91,11 @@ example-gpu-metal:
 	@echo "Running GPU (metal) example..."
 	$(ZIG) build run_gpu -Dgpu=metal -Doptimize=$(BUILD_MODE)
 
+.PHONY: example-gpu-benchmark
+example-gpu-benchmark:
+	@echo "Running GPU benchmark..."
+	$(ZIG) build run_gpu_benchmark -Dgpu=metal -Doptimize=ReleaseFast
+
 .PHONY: example-turboquant
 example-turboquant:
 	@echo "Running TurboQuant paper lab example..."
@@ -134,6 +139,7 @@ help:
 	@printf "  example-backend-demo        Run backend demo\n"
 	@printf "  example-gpu                 Run GPU auto demo\n"
 	@printf "  example-gpu-metal           Run GPU Metal demo\n"
+	@printf "  example-gpu-benchmark       Benchmark Metal vs CPU\n"
 	@printf "  example-turboquant          Run TurboQuant paper lab\n"
 	@printf "  example-serving             Run serving example (requires model)\n"
 	@printf "  example-mnist               Run MNIST example (requires data)\n"

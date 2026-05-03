@@ -98,6 +98,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "network_visualisation", .src = "examples/network_visualisation/network_visualisation.zig", .description = "Run the network visualisation example" },
         .{ .name = "backend_demo", .src = "examples/backend_demo/backend_demo.zig", .description = "Run the backend abstraction demonstration" },
         .{ .name = "gpu", .src = "examples/gpu/gpu.zig", .description = "Run the GPU example" },
+        .{ .name = "gpu_benchmark", .src = "examples/gpu_benchmark/gpu_benchmark.zig", .description = "Benchmark Metal backend against CPU" },
         .{ .name = "turboquant", .src = "examples/quantization/turboquant.zig", .description = "Run the TurboQuant paper lab example" },
         // Add new examples here in the future
     }) |example| {
@@ -116,8 +117,8 @@ pub fn build(b: *std.Build) void {
             .root_module = exe_mod,
         });
 
-        // Conditionally link frameworks/libraries for the GPU example
-        if (std.mem.eql(u8, example.name, "gpu")) {
+        // Conditionally link frameworks/libraries for GPU examples
+        if (std.mem.eql(u8, example.name, "gpu") or std.mem.eql(u8, example.name, "gpu_benchmark")) {
             if (enable_metal) {
                 // add log here for debug
                 std.debug.print("Linking Metal and Foundation frameworks on macOS\n", .{});
@@ -192,6 +193,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "network_visualisation", .path = "examples/network_visualisation/network_visualisation.zig" },
         .{ .name = "backend_demo", .path = "examples/backend_demo/backend_demo.zig" },
         .{ .name = "gpu", .path = "examples/gpu/gpu.zig" },
+        .{ .name = "gpu_benchmark", .path = "examples/gpu_benchmark/gpu_benchmark.zig" },
         .{ .name = "turboquant", .path = "examples/quantization/turboquant.zig" },
     }) |example| {
         example_prev_step = addTestStep(b, acceptance_test_step, example.name, example.path, example_prev_step, target, optimize, build_options, enable_metal, lib_mod);
