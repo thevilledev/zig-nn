@@ -71,6 +71,9 @@ const CliOptions = struct {
     learning_rate: f64 = 0.5,
     full_train_steps: usize = 120,
     full_learning_rate: f64 = 0.03,
+    min_learning_rate: f64 = 0.0,
+    lr_schedule: LearningRateSchedule = .constant,
+    warmup_steps: usize = 0,
     full_train_stride: usize = 1,
     full_batch_size: usize = 1,
     full_optimizer: OptimizerKind = .sgd,
@@ -80,8 +83,11 @@ const CliOptions = struct {
     adam_epsilon: f64 = 1e-8,
     train_chars: usize = 512,
     validation_chars: usize = 0,
+    eval_split: f64 = 0.0,
+    eval_windows: usize = 12,
     prior_chars: usize = 32768,
     corpus_prior: bool = true,
+    summary_path: ?[]const u8 = null,
 };
 
 const CorpusPreset = enum {
@@ -94,6 +100,12 @@ const CorpusPreset = enum {
 pub const OptimizerKind = enum {
     sgd,
     adamw,
+};
+
+pub const LearningRateSchedule = enum {
+    constant,
+    linear,
+    cosine,
 };
 
 const Corpus = struct {
@@ -125,6 +137,7 @@ const toy_corpus_path = "examples/tiny_gpt/data/toy.txt";
 const shakespeare_corpus_path = "examples/tiny_gpt/data/shakespeare/input.txt";
 const tinystories_corpus_path = "examples/tiny_gpt/data/tinystories/tinystories_1mb.txt";
 const max_corpus_bytes = 8 * 1024 * 1024;
+const checkpoint_format_version: u32 = 2;
 
 const Linear = struct {
     weights: Matrix,
@@ -609,6 +622,10 @@ pub const TinyGPT = struct {
     }
 
     pub fn saveToFile(self: *const TinyGPT, path: []const u8) !void {
+        try self.saveToFileWithMetadata(path, "");
+    }
+
+    pub fn saveToFileWithMetadata(self: *const TinyGPT, path: []const u8, metadata_json: []const u8) !void {
         const io = std.Options.debug_io;
         const file = try std.Io.Dir.cwd().createFile(io, path, .{});
         defer file.close(io);
@@ -618,7 +635,7 @@ pub const TinyGPT = struct {
         const writer = &file_writer.interface;
 
         try writer.writeAll("TGPT");
-        try writer.writeInt(u32, 1, .little);
+        try writer.writeInt(u32, checkpoint_format_version, .little);
         try writer.writeInt(u32, @intCast(self.config.block_size), .little);
         try writer.writeInt(u32, @intCast(self.config.n_layer), .little);
         try writer.writeInt(u32, @intCast(self.config.n_head), .little);
@@ -637,6 +654,8 @@ pub const TinyGPT = struct {
         }
         try writeLayerNorm(writer, self.ln_f);
         try writeLinear(writer, self.lm_head);
+        try writer.writeInt(u32, @intCast(metadata_json.len), .little);
+        try writer.writeAll(metadata_json);
 
         try writer.flush();
     }
@@ -655,7 +674,7 @@ pub const TinyGPT = struct {
         if (!std.mem.eql(u8, &magic, "TGPT")) return error.InvalidFileFormat;
 
         const version = try reader.takeInt(u32, .little);
-        if (version != 1) return error.UnsupportedVersion;
+        if (version != 1 and version != checkpoint_format_version) return error.UnsupportedVersion;
 
         const config: Config = .{
             .block_size = @intCast(try reader.takeInt(u32, .little)),
@@ -681,6 +700,10 @@ pub const TinyGPT = struct {
         }
         try readLayerNormInto(reader, &model.ln_f);
         try readLinearInto(reader, &model.lm_head);
+        if (version >= 2) {
+            const metadata_len = try reader.takeInt(u32, .little);
+            if (metadata_len > 0) _ = try reader.take(metadata_len);
+        }
 
         return model;
     }
@@ -912,9 +935,26 @@ fn limitedCorpus(text: []const u8, limit: usize) []const u8 {
     return text[0..limit];
 }
 
+fn resolvedEvalChars(text_len: usize, train_limit: usize, validation_chars: usize, eval_split: f64) usize {
+    if (validation_chars > 0) return validation_chars;
+    if (eval_split <= 0.0 or text_len < 3) return 0;
+
+    const max_eval = if (train_limit == 0 or train_limit >= text_len)
+        text_len - 1
+    else
+        text_len - train_limit;
+    if (max_eval < 2) return 0;
+
+    const requested = @max(
+        @as(usize, 1),
+        @as(usize, @intFromFloat(@ceil(@as(f64, @floatFromInt(text_len)) * eval_split))),
+    );
+    return @min(requested, max_eval);
+}
+
 fn trainingCorpus(text: []const u8, train_limit: usize, validation_chars: usize) []const u8 {
     var end = if (train_limit == 0 or train_limit >= text.len) text.len else train_limit;
-    if (train_limit == 0 and validation_chars > 0 and text.len > validation_chars + 1) {
+    if ((train_limit == 0 or train_limit >= text.len) and validation_chars > 0 and text.len > validation_chars + 1) {
         end = text.len - validation_chars;
     }
     return text[0..end];
@@ -1051,6 +1091,9 @@ fn trainOutputHeadStep(
 pub const FullTrainingOptions = struct {
     steps: usize = 120,
     learning_rate: f64 = 0.03,
+    min_learning_rate: f64 = 0.0,
+    lr_schedule: LearningRateSchedule = .constant,
+    warmup_steps: usize = 0,
     context_len: usize = 16,
     stride: usize = 1,
     batch_size: usize = 1,
@@ -1059,6 +1102,7 @@ pub const FullTrainingOptions = struct {
     adam_beta1: f64 = 0.9,
     adam_beta2: f64 = 0.999,
     adam_epsilon: f64 = 1e-8,
+    eval_windows: usize = 12,
 };
 
 pub const FullTrainingStats = struct {
@@ -1070,6 +1114,10 @@ pub const FullTrainingStats = struct {
     final_loss: f64,
     validation_initial_loss: ?f64 = null,
     validation_final_loss: ?f64 = null,
+    learning_rate_initial: f64,
+    learning_rate_final: f64,
+    learning_rate_min: f64,
+    eval_windows: usize,
 };
 
 const ParamState = struct {
@@ -1232,6 +1280,40 @@ const SequenceTrainCache = struct {
     }
 };
 
+fn scheduledLearningRate(options: FullTrainingOptions, step: usize) f64 {
+    if (options.steps == 0) return options.learning_rate;
+
+    const current_step = step + 1;
+    if (options.warmup_steps > 0 and current_step <= options.warmup_steps) {
+        return options.learning_rate * @as(f64, @floatFromInt(current_step)) /
+            @as(f64, @floatFromInt(options.warmup_steps));
+    }
+
+    const decay_steps = if (options.steps > options.warmup_steps)
+        options.steps - options.warmup_steps
+    else
+        1;
+    const schedule_step = if (step >= options.warmup_steps)
+        step - options.warmup_steps
+    else
+        0;
+    const progress = if (decay_steps <= 1)
+        0.0
+    else
+        @min(
+            @as(f64, @floatFromInt(schedule_step)) / @as(f64, @floatFromInt(decay_steps - 1)),
+            1.0,
+        );
+    const floor = @min(options.min_learning_rate, options.learning_rate);
+
+    return switch (options.lr_schedule) {
+        .constant => options.learning_rate,
+        .linear => options.learning_rate - (options.learning_rate - floor) * progress,
+        .cosine => floor + 0.5 * (options.learning_rate - floor) *
+            (1.0 + math.cos(math.pi * progress)),
+    };
+}
+
 pub fn trainFullOnCorpus(
     model: *TinyGPT,
     corpus: []const u8,
@@ -1248,6 +1330,7 @@ pub fn trainFullOnCorpus(
     const window_count = tokens.len - context_len;
     if (window_count == 0) return error.SequenceTooShort;
     const batch_size = @max(options.batch_size, @as(usize, 1));
+    const eval_windows = @max(options.eval_windows, @as(usize, 1));
     const update_count = options.steps * batch_size;
 
     var validation_tokens: ?[]usize = null;
@@ -1257,13 +1340,13 @@ pub fn trainFullOnCorpus(
         const encoded = try Tokenizer.encode(allocator, validation_text);
         if (encoded.len > context_len) {
             validation_tokens = encoded;
-            validation_initial_loss = try averageCorpusLoss(model, encoded, context_len, 12);
+            validation_initial_loss = try averageCorpusLoss(model, encoded, context_len, eval_windows);
         } else {
             allocator.free(encoded);
         }
     }
 
-    const initial_loss = try averageCorpusLoss(model, tokens, context_len, 12);
+    const initial_loss = try averageCorpusLoss(model, tokens, context_len, eval_windows);
     var optimizer_options = options;
     optimizer_options.learning_rate = options.learning_rate / @as(f64, @floatFromInt(batch_size));
     var optimizer = TrainingOptimizer.init(allocator, optimizer_options);
@@ -1271,6 +1354,8 @@ pub fn trainFullOnCorpus(
 
     var update_index: usize = 0;
     for (0..options.steps) |step| {
+        optimizer.learning_rate = scheduledLearningRate(options, step) /
+            @as(f64, @floatFromInt(batch_size));
         for (0..batch_size) |batch_item| {
             const start = ((step * batch_size + batch_item) * stride) % window_count;
             optimizer.beginStep(update_index + 1);
@@ -1280,11 +1365,16 @@ pub fn trainFullOnCorpus(
             _ = try trainFullStep(model, inputs, targets, &optimizer);
         }
     }
-    const final_loss = try averageCorpusLoss(model, tokens, context_len, 12);
+    const final_loss = try averageCorpusLoss(model, tokens, context_len, eval_windows);
     const validation_final_loss: ?f64 = if (validation_tokens) |items|
-        try averageCorpusLoss(model, items, context_len, 12)
+        try averageCorpusLoss(model, items, context_len, eval_windows)
     else
         null;
+
+    const final_learning_rate = if (options.steps == 0)
+        options.learning_rate
+    else
+        scheduledLearningRate(options, options.steps - 1);
 
     return .{
         .steps = options.steps,
@@ -1295,6 +1385,10 @@ pub fn trainFullOnCorpus(
         .final_loss = final_loss,
         .validation_initial_loss = validation_initial_loss,
         .validation_final_loss = validation_final_loss,
+        .learning_rate_initial = if (options.steps == 0) options.learning_rate else scheduledLearningRate(options, 0),
+        .learning_rate_final = final_learning_rate,
+        .learning_rate_min = @min(options.min_learning_rate, options.learning_rate),
+        .eval_windows = eval_windows,
     };
 }
 
@@ -1936,6 +2030,18 @@ fn parseArgs(args: []const [:0]const u8) !CliOptions {
             i += 1;
             if (i >= args.len) return error.MissingArgument;
             options.full_learning_rate = try std.fmt.parseFloat(f64, args[i]);
+        } else if (std.mem.eql(u8, arg, "--min-learning-rate")) {
+            i += 1;
+            if (i >= args.len) return error.MissingArgument;
+            options.min_learning_rate = try std.fmt.parseFloat(f64, args[i]);
+        } else if (std.mem.eql(u8, arg, "--lr-schedule")) {
+            i += 1;
+            if (i >= args.len) return error.MissingArgument;
+            options.lr_schedule = try parseLearningRateSchedule(args[i]);
+        } else if (std.mem.eql(u8, arg, "--warmup-steps")) {
+            i += 1;
+            if (i >= args.len) return error.MissingArgument;
+            options.warmup_steps = try std.fmt.parseInt(usize, args[i], 10);
         } else if (std.mem.eql(u8, arg, "--full-train-stride")) {
             i += 1;
             if (i >= args.len) return error.MissingArgument;
@@ -1972,12 +2078,28 @@ fn parseArgs(args: []const [:0]const u8) !CliOptions {
             i += 1;
             if (i >= args.len) return error.MissingArgument;
             options.validation_chars = try std.fmt.parseInt(usize, args[i], 10);
+        } else if (std.mem.eql(u8, arg, "--eval-chars")) {
+            i += 1;
+            if (i >= args.len) return error.MissingArgument;
+            options.validation_chars = try std.fmt.parseInt(usize, args[i], 10);
+        } else if (std.mem.eql(u8, arg, "--eval-split")) {
+            i += 1;
+            if (i >= args.len) return error.MissingArgument;
+            options.eval_split = try std.fmt.parseFloat(f64, args[i]);
+        } else if (std.mem.eql(u8, arg, "--eval-windows")) {
+            i += 1;
+            if (i >= args.len) return error.MissingArgument;
+            options.eval_windows = try std.fmt.parseInt(usize, args[i], 10);
         } else if (std.mem.eql(u8, arg, "--prior-chars")) {
             i += 1;
             if (i >= args.len) return error.MissingArgument;
             options.prior_chars = try std.fmt.parseInt(usize, args[i], 10);
         } else if (std.mem.eql(u8, arg, "--no-corpus-prior")) {
             options.corpus_prior = false;
+        } else if (std.mem.eql(u8, arg, "--summary-path")) {
+            i += 1;
+            if (i >= args.len) return error.MissingArgument;
+            options.summary_path = args[i];
         } else if (std.mem.eql(u8, arg, "--help")) {
             return error.HelpRequested;
         } else {
@@ -1999,6 +2121,13 @@ fn parseOptimizerKind(value: []const u8) !OptimizerKind {
     if (std.mem.eql(u8, value, "sgd")) return .sgd;
     if (std.mem.eql(u8, value, "adamw")) return .adamw;
     return error.UnknownOptimizer;
+}
+
+fn parseLearningRateSchedule(value: []const u8) !LearningRateSchedule {
+    if (std.mem.eql(u8, value, "constant")) return .constant;
+    if (std.mem.eql(u8, value, "linear")) return .linear;
+    if (std.mem.eql(u8, value, "cosine")) return .cosine;
+    return error.UnknownLearningRateSchedule;
 }
 
 fn printUsage(writer: anytype) !void {
@@ -2026,6 +2155,9 @@ fn printUsage(writer: anytype) !void {
         \\  --learning-rate <float>  Output-head learning rate (default: 0.5)
         \\  --full-train-steps <n>   Full-model context-window updates (default: 120)
         \\  --full-learning-rate <f> Full-model learning rate (default: 0.03)
+        \\  --min-learning-rate <f>  Schedule floor for full training (default: 0)
+        \\  --lr-schedule <name>     constant, linear, or cosine (default: constant)
+        \\  --warmup-steps <n>       Linear warmup steps before decay (default: 0)
         \\  --full-train-stride <n>  Full-model corpus window stride (default: 1)
         \\  --full-batch-size <n>    Full-model corpus windows per step (default: 1)
         \\  --optimizer <name>       sgd or adamw for full training (default: sgd)
@@ -2035,14 +2167,184 @@ fn printUsage(writer: anytype) !void {
         \\  --adam-epsilon <f>       AdamW epsilon (default: 1e-8)
         \\  --train-chars <n>        Corpus prefix for output-head training (default: 512)
         \\  --validation-chars <n>   Corpus holdout chars after the train slice (default: 0)
+        \\  --eval-chars <n>         Alias for --validation-chars
+        \\  --eval-split <float>     Eval fraction used when validation chars are 0
+        \\  --eval-windows <n>       Windows sampled for train/eval loss (default: 12)
         \\  --prior-chars <n>        Corpus prefix for readable sampling prior (default: 32768)
         \\  --no-corpus-prior        Skip the tiny backoff corpus prior used for readable sampling
+        \\  --summary-path <path>    Write a deterministic JSON run summary
         \\
         \\Data:
         \\  `--corpus auto` uses prepared TinyStories, then Tiny Shakespeare, then toy.
         \\  Run `nnctl data tiny-gpt` to download the sourced corpora.
         \\
     );
+}
+
+fn writeJsonString(writer: anytype, text: []const u8) !void {
+    const hex = "0123456789abcdef";
+    try writer.writeByte('"');
+    for (text) |ch| {
+        switch (ch) {
+            '"' => try writer.writeAll("\\\""),
+            '\\' => try writer.writeAll("\\\\"),
+            '\n' => try writer.writeAll("\\n"),
+            '\r' => try writer.writeAll("\\r"),
+            '\t' => try writer.writeAll("\\t"),
+            else => {
+                if (ch < 32) {
+                    try writer.writeAll("\\u00");
+                    try writer.writeByte(hex[ch >> 4]);
+                    try writer.writeByte(hex[ch & 0x0f]);
+                } else {
+                    try writer.writeByte(ch);
+                }
+            },
+        }
+    }
+    try writer.writeByte('"');
+}
+
+fn writeOptionalJsonString(writer: anytype, text: ?[]const u8) !void {
+    if (text) |value| {
+        try writeJsonString(writer, value);
+    } else {
+        try writer.writeAll("null");
+    }
+}
+
+fn writeOptionalJsonFloat(writer: anytype, value: ?f64) !void {
+    if (value) |number| {
+        try writer.print("{d:.6}", .{number});
+    } else {
+        try writer.writeAll("null");
+    }
+}
+
+fn runSummaryJson(
+    allocator: std.mem.Allocator,
+    model: *const TinyGPT,
+    options: CliOptions,
+    corpus: Corpus,
+    training_corpus: []const u8,
+    validation_corpus: ?[]const u8,
+    training_stats: ?TrainingStats,
+    full_training_stats: ?FullTrainingStats,
+    checkpoint_out: ?[]const u8,
+    generated_text: []const u8,
+) ![]u8 {
+    var out: std.Io.Writer.Allocating = .init(allocator);
+    errdefer out.deinit();
+    const writer = &out.writer;
+    const config = model.config;
+    const training_mode = if (full_training_stats != null)
+        "full"
+    else if (training_stats != null)
+        "head"
+    else
+        "none";
+
+    try writer.writeAll("{\n");
+    try writer.writeAll("  \"schema\": \"zig-nn.tiny-gpt.run-summary.v1\",\n");
+    try writer.print("  \"seed\": {},\n", .{options.seed});
+    try writer.writeAll("  \"corpus\": {\n");
+    try writer.writeAll("    \"label\": ");
+    try writeJsonString(writer, corpus.label);
+    try writer.writeAll(",\n    \"path\": ");
+    try writeOptionalJsonString(writer, corpus.path);
+    try writer.print(",\n    \"chars\": {}\n", .{corpus.text.len});
+    try writer.writeAll("  },\n");
+
+    try writer.writeAll("  \"split\": {\n");
+    try writer.print("    \"train_chars\": {},\n", .{training_corpus.len});
+    try writer.print("    \"eval_chars\": {},\n", .{if (validation_corpus) |text| text.len else 0});
+    try writer.print("    \"eval_split\": {d:.6},\n", .{options.eval_split});
+    try writer.print("    \"eval_windows\": {}\n", .{options.eval_windows});
+    try writer.writeAll("  },\n");
+
+    try writer.writeAll("  \"model\": {\n");
+    try writer.print("    \"block_size\": {},\n", .{config.block_size});
+    try writer.print("    \"layers\": {},\n", .{config.n_layer});
+    try writer.print("    \"heads\": {},\n", .{config.n_head});
+    try writer.print("    \"embd\": {},\n", .{config.n_embd});
+    try writer.print("    \"vocab_size\": {},\n", .{config.vocab_size});
+    try writer.print("    \"parameters\": {}\n", .{model.parameterCount()});
+    try writer.writeAll("  },\n");
+
+    try writer.writeAll("  \"training\": {\n");
+    try writer.writeAll("    \"mode\": ");
+    try writeJsonString(writer, training_mode);
+    try writer.print(",\n    \"steps\": {},\n", .{if (full_training_stats) |stats| stats.steps else 0});
+    try writer.print("    \"updates\": {},\n", .{if (full_training_stats) |stats| stats.updates else 0});
+    try writer.print("    \"batch_size\": {},\n", .{if (full_training_stats) |stats| stats.batch_size else options.full_batch_size});
+    try writer.print("    \"tokens_seen\": {},\n", .{if (full_training_stats) |stats| stats.tokens_seen else 0});
+    try writer.writeAll("    \"optimizer\": ");
+    try writeJsonString(writer, @tagName(options.full_optimizer));
+    try writer.writeAll(",\n    \"lr_schedule\": ");
+    try writeJsonString(writer, @tagName(options.lr_schedule));
+    try writer.print(",\n    \"learning_rate\": {d:.6},\n", .{options.full_learning_rate});
+    try writer.print("    \"min_learning_rate\": {d:.6},\n", .{options.min_learning_rate});
+    try writer.writeAll("    \"learning_rate_initial\": ");
+    try writeOptionalJsonFloat(writer, if (full_training_stats) |stats| stats.learning_rate_initial else null);
+    try writer.writeAll(",\n    \"learning_rate_final\": ");
+    try writeOptionalJsonFloat(writer, if (full_training_stats) |stats| stats.learning_rate_final else null);
+    try writer.print(",\n    \"warmup_steps\": {},\n", .{options.warmup_steps});
+    try writer.print("    \"weight_decay\": {d:.6}\n", .{options.full_weight_decay});
+    try writer.writeAll("  },\n");
+
+    try writer.writeAll("  \"loss\": {\n");
+    if (full_training_stats) |stats| {
+        try writer.print("    \"train_initial\": {d:.6},\n", .{stats.initial_loss});
+        try writer.print("    \"train_final\": {d:.6},\n", .{stats.final_loss});
+        try writer.writeAll("    \"eval_initial\": ");
+        try writeOptionalJsonFloat(writer, stats.validation_initial_loss);
+        try writer.writeAll(",\n    \"eval_final\": ");
+        try writeOptionalJsonFloat(writer, stats.validation_final_loss);
+        try writer.writeByte('\n');
+    } else if (training_stats) |stats| {
+        try writer.print("    \"train_initial\": {d:.6},\n", .{stats.initial_loss});
+        try writer.print("    \"train_final\": {d:.6},\n", .{stats.final_loss});
+        try writer.writeAll("    \"eval_initial\": null,\n");
+        try writer.writeAll("    \"eval_final\": null\n");
+    } else {
+        try writer.writeAll("    \"train_initial\": null,\n");
+        try writer.writeAll("    \"train_final\": null,\n");
+        try writer.writeAll("    \"eval_initial\": null,\n");
+        try writer.writeAll("    \"eval_final\": null\n");
+    }
+    try writer.writeAll("  },\n");
+
+    try writer.writeAll("  \"checkpoint\": {\n");
+    try writer.writeAll("    \"loaded\": ");
+    try writeOptionalJsonString(writer, options.checkpoint_in);
+    try writer.writeAll(",\n    \"saved\": ");
+    try writeOptionalJsonString(writer, checkpoint_out);
+    try writer.writeAll("\n  },\n");
+
+    try writer.writeAll("  \"sample\": {\n");
+    try writer.writeAll("    \"prompt\": ");
+    try writeJsonString(writer, options.prompt);
+    try writer.print(",\n    \"tokens\": {},\n", .{options.tokens});
+    try writer.print("    \"temperature\": {d:.6},\n", .{options.temperature});
+    try writer.print("    \"top_k\": {},\n", .{options.top_k});
+    try writer.writeAll("    \"text\": ");
+    try writeJsonString(writer, generated_text);
+    try writer.writeAll("\n  }\n");
+    try writer.writeAll("}\n");
+
+    return out.toOwnedSlice();
+}
+
+fn writeTextFile(path: []const u8, text: []const u8) !void {
+    const io = std.Options.debug_io;
+    const file = try std.Io.Dir.cwd().createFile(io, path, .{});
+    defer file.close(io);
+
+    var buffer: [4096]u8 = undefined;
+    var file_writer = file.writerStreaming(io, &buffer);
+    const writer = &file_writer.interface;
+    try writer.writeAll(text);
+    try writer.flush();
 }
 
 pub fn main(init: std.process.Init) !void {
@@ -2062,6 +2364,9 @@ pub fn main(init: std.process.Init) !void {
         if (err == error.HelpRequested) return;
         return err;
     };
+    if (options.eval_split < 0.0 or options.eval_split >= 1.0) return error.InvalidEvalSplit;
+    if (options.eval_windows == 0) return error.InvalidEvalWindows;
+    if (options.full_learning_rate < 0.0 or options.min_learning_rate < 0.0) return error.InvalidLearningRate;
 
     if (options.checkpoint_in != null and options.config_overridden) {
         return error.ConfigOverridesCheckpoint;
@@ -2086,8 +2391,9 @@ pub fn main(init: std.process.Init) !void {
     };
     defer corpus.deinit();
 
-    const training_corpus = trainingCorpus(corpus.text, options.train_chars, options.validation_chars);
-    const validation_corpus = validationCorpus(corpus.text, options.train_chars, options.validation_chars);
+    const eval_chars = resolvedEvalChars(corpus.text.len, options.train_chars, options.validation_chars, options.eval_split);
+    const training_corpus = trainingCorpus(corpus.text, options.train_chars, eval_chars);
+    const validation_corpus = validationCorpus(corpus.text, options.train_chars, eval_chars);
     const prior_corpus = limitedCorpus(corpus.text, options.prior_chars);
 
     const training_stats: ?TrainingStats = if (options.train_demo_head and !options.train_full)
@@ -2098,6 +2404,9 @@ pub fn main(init: std.process.Init) !void {
         try trainFullOnCorpus(&model, training_corpus, validation_corpus, .{
             .steps = options.full_train_steps,
             .learning_rate = options.full_learning_rate,
+            .min_learning_rate = options.min_learning_rate,
+            .lr_schedule = options.lr_schedule,
+            .warmup_steps = options.warmup_steps,
             .context_len = config.block_size,
             .stride = options.full_train_stride,
             .batch_size = options.full_batch_size,
@@ -2106,13 +2415,10 @@ pub fn main(init: std.process.Init) !void {
             .adam_beta1 = options.adam_beta1,
             .adam_beta2 = options.adam_beta2,
             .adam_epsilon = options.adam_epsilon,
+            .eval_windows = options.eval_windows,
         })
     else
         null;
-
-    if (checkpoint_out) |path| {
-        try model.saveToFile(path);
-    }
 
     const generated_tokens = if (options.corpus_prior)
         try model.generateTokensWithCorpusPrior(
@@ -2135,6 +2441,26 @@ pub fn main(init: std.process.Init) !void {
 
     const generated_text = try Tokenizer.decode(allocator, generated_tokens);
     defer allocator.free(generated_text);
+    const summary_json = try runSummaryJson(
+        allocator,
+        &model,
+        options,
+        corpus,
+        training_corpus,
+        validation_corpus,
+        training_stats,
+        full_training_stats,
+        checkpoint_out,
+        generated_text,
+    );
+    defer allocator.free(summary_json);
+
+    if (checkpoint_out) |path| {
+        try model.saveToFileWithMetadata(path, summary_json);
+    }
+    if (options.summary_path) |path| {
+        try writeTextFile(path, summary_json);
+    }
 
     try stdout.print("\n=== Tiny GPT Example ===\n\n", .{});
     try stdout.print("Architecture: {} layers, {} heads, {} channels, block size {}, vocab {}\n", .{
@@ -2154,6 +2480,14 @@ pub fn main(init: std.process.Init) !void {
         try stdout.print(" ({s})", .{path});
     }
     try stdout.print(", {} chars loaded\n", .{corpus.text.len});
+    try stdout.print("Split: {} train chars, {} eval chars", .{
+        training_corpus.len,
+        if (validation_corpus) |text| text.len else 0,
+    });
+    if (options.eval_split > 0.0 and options.validation_chars == 0) {
+        try stdout.print(" ({d:.2}% eval split)", .{options.eval_split * 100.0});
+    }
+    try stdout.print("\n", .{});
     if (full_training_stats) |stats| {
         try stdout.print("Full training: {} steps, {} updates, batch {}, {} tokens seen, {} train chars\n", .{
             stats.steps,
@@ -2162,16 +2496,28 @@ pub fn main(init: std.process.Init) !void {
             stats.tokens_seen,
             training_corpus.len,
         });
-        try stdout.print("Full optimizer: {s}, learning rate {d}, weight decay {d}\n", .{
+        try stdout.print("Full optimizer: {s}, learning rate {d:.6}, weight decay {d:.6}\n", .{
             @tagName(options.full_optimizer),
             options.full_learning_rate,
             options.full_weight_decay,
         });
+        try stdout.print("LR schedule: {s}, warmup {}, min {d:.6}, final {d:.6}\n", .{
+            @tagName(options.lr_schedule),
+            options.warmup_steps,
+            stats.learning_rate_min,
+            stats.learning_rate_final,
+        });
         try stdout.print("Full training loss: {d:.4} -> {d:.4}\n", .{ stats.initial_loss, stats.final_loss });
         if (stats.validation_initial_loss) |initial_validation| {
             if (stats.validation_final_loss) |final_validation| {
-                try stdout.print("Validation loss: {d:.4} -> {d:.4}\n", .{ initial_validation, final_validation });
+                try stdout.print("Validation loss: {d:.4} -> {d:.4} ({} sampled windows)\n", .{
+                    initial_validation,
+                    final_validation,
+                    stats.eval_windows,
+                });
             }
+        } else {
+            try stdout.print("Validation loss: unavailable (no eval slice long enough for block size {})\n", .{config.block_size});
         }
     } else if (training_stats) |stats| {
         try stdout.print("Demo training: {} frozen-context samples, {} output-head epochs, {} chars\n", .{
@@ -2184,7 +2530,10 @@ pub fn main(init: std.process.Init) !void {
         try stdout.print("Demo training: skipped, output head remains random\n", .{});
     }
     if (checkpoint_out) |path| {
-        try stdout.print("Checkpoint saved: {s}\n", .{path});
+        try stdout.print("Checkpoint saved: {s} (metadata embedded)\n", .{path});
+    }
+    if (options.summary_path) |path| {
+        try stdout.print("Run summary saved: {s}\n", .{path});
     }
     try stdout.print("Readable sampling: {s}", .{if (options.corpus_prior) "corpus prior enabled" else "corpus prior disabled"});
     if (options.corpus_prior) {
@@ -2470,6 +2819,66 @@ test "tiny gpt checkpoint round trip preserves logits" {
     }
 }
 
+test "checkpoint metadata footer is embedded and remains loadable" {
+    const allocator = testing.allocator;
+    const config: Config = .{
+        .block_size = 8,
+        .n_layer = 1,
+        .n_head = 2,
+        .n_embd = 16,
+    };
+    var model = try TinyGPT.init(allocator, config, 12);
+    defer model.deinit();
+
+    const path = "test_tiny_gpt_checkpoint_metadata.bin";
+    const metadata = "{\"schema\":\"test-metadata\"}\n";
+    try model.saveToFileWithMetadata(path, metadata);
+    defer std.Io.Dir.cwd().deleteFile(std.Options.debug_io, path) catch {};
+
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(std.Options.debug_io, path, allocator, .limited(1024 * 1024));
+    defer allocator.free(bytes);
+    try testing.expect(std.mem.indexOf(u8, bytes, metadata) != null);
+
+    var loaded = try TinyGPT.loadFromFile(allocator, path);
+    defer loaded.deinit();
+    try testing.expectEqual(model.config.block_size, loaded.config.block_size);
+}
+
+test "eval split derives a deterministic holdout slice" {
+    const text = "abcdefghijklmnopqrstuvwxyz";
+    const eval_chars = resolvedEvalChars(text.len, 10, 0, 0.25);
+    const train = trainingCorpus(text, 10, eval_chars);
+    const eval = validationCorpus(text, 10, eval_chars).?;
+
+    try testing.expectEqual(@as(usize, 7), eval_chars);
+    try testing.expectEqualStrings("abcdefghij", train);
+    try testing.expectEqualStrings("klmnopq", eval);
+}
+
+test "eval split remains disjoint when train limit covers corpus" {
+    const text = "abcdefghijklmnopqrstuvwxyz";
+    const eval_chars = resolvedEvalChars(text.len, 999, 0, 0.25);
+    const train = trainingCorpus(text, 999, eval_chars);
+    const eval = validationCorpus(text, 999, eval_chars).?;
+
+    try testing.expectEqualStrings("abcdefghijklmnopqrs", train);
+    try testing.expectEqualStrings("tuvwxyz", eval);
+}
+
+test "learning rate schedule reaches warmup peak and final floor" {
+    const options: FullTrainingOptions = .{
+        .steps = 6,
+        .learning_rate = 0.1,
+        .min_learning_rate = 0.01,
+        .lr_schedule = .linear,
+        .warmup_steps = 2,
+    };
+
+    try testing.expectApproxEqAbs(0.05, scheduledLearningRate(options, 0), 1e-12);
+    try testing.expectApproxEqAbs(0.1, scheduledLearningRate(options, 1), 1e-12);
+    try testing.expectApproxEqAbs(0.01, scheduledLearningRate(options, 5), 1e-12);
+}
+
 test "full transformer training lowers corpus loss" {
     const allocator = testing.allocator;
     const config: Config = .{
@@ -2489,10 +2898,15 @@ test "full transformer training lowers corpus loss" {
         .batch_size = 2,
         .optimizer = .adamw,
         .weight_decay = 0.01,
+        .lr_schedule = .cosine,
+        .min_learning_rate = 0.01,
+        .eval_windows = 4,
     });
 
     try testing.expect(stats.tokens_seen > 0);
     try testing.expect(stats.updates == stats.steps * stats.batch_size);
     try testing.expect(stats.final_loss < stats.initial_loss);
     try testing.expect(stats.validation_initial_loss != null);
+    try testing.expectEqual(@as(usize, 4), stats.eval_windows);
+    try testing.expectApproxEqAbs(0.01, stats.learning_rate_final, 1e-12);
 }

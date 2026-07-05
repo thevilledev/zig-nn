@@ -20,12 +20,14 @@ readable enough to inspect. To see the raw untrained architecture sample, pass
 
 For an end-to-end training pass over all Transformer weights, embeddings, layer
 norms, and the output head, use `nnctl train tiny-gpt`. This trains multiple
-next-token context windows per step, uses AdamW by default, prints validation
-loss when a holdout is available, and saves a reusable checkpoint:
+next-token context windows per step, uses AdamW by default, applies a repeatable
+train/eval split, prints validation loss, embeds run metadata in the checkpoint,
+and can write a JSON summary for comparing runs:
 
 ```bash
 bin/nnctl train tiny-gpt --corpus tinystories --output tiny-gpt.bin \
-  --steps 5000 --block-size 32 --layers 4 --heads 4 --embd 64
+  --steps 5000 --block-size 32 --layers 4 --heads 4 --embd 64 \
+  --eval-split 0.05 --lr-schedule cosine --summary-path runs/tiny-gpt.json
 ```
 
 Resume a checkpoint for more training:
@@ -93,6 +95,8 @@ Better checkpoints come from matching capacity, data, and training time:
 - increase `--layers`, `--heads`, and `--embd` for more parameters
 - increase `--train-chars` and use `bin/nnctl data tiny-gpt` for real corpora
 - increase `--steps` and watch both training and validation loss
+- keep `--summary-path` outputs when comparing runs
+- try `--lr-schedule cosine --warmup-steps 50 --min-learning-rate 0.001`
 - resume with `--resume` instead of starting from scratch
 - use `--optimizer adamw --weight-decay 0.01` unless you are comparing SGD
 
@@ -105,9 +109,10 @@ Implemented pieces:
 - residual connections and final layernorm
 - trainable output projection head
 - manual next-token backpropagation for the full tiny Transformer
-- binary checkpoints for trained model weights
+- binary checkpoints for trained model weights and run metadata
 - temperature and top-k autoregressive sampling
 - data presets for toy, Tiny Shakespeare, TinyStories, and custom text files
+- deterministic JSON run summaries for experiment comparison
 - fast demo-corpus output-head training
 - OpenAI-compatible non-streaming `/v1/chat/completions`, `/v1/completions`,
   and `/v1/models` serving example

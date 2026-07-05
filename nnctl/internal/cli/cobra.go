@@ -244,6 +244,7 @@ func (a *App) newTrainTinyGPTCommand(withRepo repoRunner) *cobra.Command {
 		Short:   "Train a TinyGPT checkpoint",
 		Long: `Trains all TinyGPT Transformer weights, embeddings, layer norms, and the output head.
 Fresh checkpoints accept model-shape flags; resumed checkpoints load the shape from the checkpoint.
+Runs include an explicit train/eval split, validation loss, scheduled learning rates, checkpoint metadata, and optional JSON summaries.
 
 Corpora:
   auto         Use prepared TinyStories, then Tiny Shakespeare, then toy.
@@ -256,6 +257,7 @@ Use --corpus-path to train on any local UTF-8 text file instead of a preset.`,
   nnctl train tiny-gpt --corpus toy --output toy-gpt.bin
   nnctl train tiny-gpt --corpus shakespeare --output shakespeare-gpt.bin
   nnctl train tiny-gpt --corpus tinystories --output tinystories-gpt.bin
+  nnctl train tiny-gpt --corpus tinystories --summary-path runs/tinystories.json
   nnctl train tiny-gpt --corpus-path /tmp/my-corpus.txt --output custom-gpt.bin
   nnctl train tiny-gpt --resume tinystories-gpt.bin --steps 2000
   nnctl chat --model tinystories-gpt.bin`,
@@ -480,9 +482,15 @@ func addTinyGPTTrainFlags(cmd *cobra.Command, opts *tinyGPTTrainOptions) {
 	cmd.Flags().StringVar(&opts.corpusPath, "corpus-path", opts.corpusPath, "custom UTF-8 text corpus path")
 	cmd.Flags().IntVar(&opts.steps, "steps", opts.steps, "full-model training steps")
 	cmd.Flags().StringVar(&opts.learningRate, "learning-rate", opts.learningRate, "full-model learning rate")
+	cmd.Flags().StringVar(&opts.minLearningRate, "min-learning-rate", opts.minLearningRate, "learning-rate floor for schedules")
+	cmd.Flags().StringVar(&opts.lrSchedule, "lr-schedule", opts.lrSchedule, "constant, linear, or cosine")
+	cmd.Flags().IntVar(&opts.warmupSteps, "warmup-steps", opts.warmupSteps, "linear warmup steps before LR decay")
 	cmd.Flags().IntVar(&opts.batchSize, "batch-size", opts.batchSize, "corpus windows per training step")
 	cmd.Flags().IntVar(&opts.trainChars, "train-chars", opts.trainChars, "training corpus characters")
 	cmd.Flags().IntVar(&opts.validationChars, "validation-chars", opts.validationChars, "validation holdout characters")
+	cmd.Flags().IntVar(&opts.validationChars, "eval-chars", opts.validationChars, "alias for --validation-chars")
+	cmd.Flags().StringVar(&opts.evalSplit, "eval-split", opts.evalSplit, "eval fraction when validation chars are 0")
+	cmd.Flags().IntVar(&opts.evalWindows, "eval-windows", opts.evalWindows, "sampled windows for train/eval loss")
 	cmd.Flags().IntVar(&opts.blockSize, "block-size", opts.blockSize, "context length for new checkpoints")
 	cmd.Flags().IntVar(&opts.layers, "layers", opts.layers, "Transformer block count for new checkpoints")
 	cmd.Flags().IntVar(&opts.heads, "heads", opts.heads, "attention head count for new checkpoints")
@@ -495,6 +503,7 @@ func addTinyGPTTrainFlags(cmd *cobra.Command, opts *tinyGPTTrainOptions) {
 	cmd.Flags().IntVar(&opts.topK, "top-k", opts.topK, "top-k sampler cutoff")
 	cmd.Flags().IntVar(&opts.seed, "seed", opts.seed, "deterministic seed")
 	cmd.Flags().BoolVar(&opts.corpusPrior, "corpus-prior", opts.corpusPrior, "enable readable corpus-prior sampling in the post-training sample")
+	cmd.Flags().StringVar(&opts.summaryPath, "summary-path", opts.summaryPath, "write deterministic JSON run summary")
 	cmd.Flags().SortFlags = false
 }
 

@@ -16,9 +16,14 @@ type tinyGPTTrainOptions struct {
 	corpusPath      string
 	steps           int
 	learningRate    string
+	minLearningRate string
+	lrSchedule      string
+	warmupSteps     int
 	batchSize       int
 	trainChars      int
 	validationChars int
+	evalSplit       string
+	evalWindows     int
 	blockSize       int
 	layers          int
 	heads           int
@@ -31,6 +36,7 @@ type tinyGPTTrainOptions struct {
 	topK            int
 	seed            int
 	corpusPrior     bool
+	summaryPath     string
 }
 
 func defaultTinyGPTTrainOptions() tinyGPTTrainOptions {
@@ -40,9 +46,14 @@ func defaultTinyGPTTrainOptions() tinyGPTTrainOptions {
 		corpus:          "auto",
 		steps:           5000,
 		learningRate:    "0.01",
+		minLearningRate: "0.001",
+		lrSchedule:      "cosine",
+		warmupSteps:     50,
 		batchSize:       4,
 		trainChars:      65536,
-		validationChars: 4096,
+		validationChars: 0,
+		evalSplit:       "0.05",
+		evalWindows:     32,
 		blockSize:       32,
 		layers:          4,
 		heads:           4,
@@ -80,7 +91,19 @@ func (a *App) runTrainTinyGPT(ctx context.Context, opts tinyGPTTrainOptions) err
 }
 
 func tinyGPTTrainArgs(opts tinyGPTTrainOptions) ([]string, error) {
-	if opts.steps < 0 || opts.batchSize <= 0 || opts.trainChars < 0 || opts.validationChars < 0 ||
+	if opts.minLearningRate == "" {
+		opts.minLearningRate = "0"
+	}
+	if opts.lrSchedule == "" {
+		opts.lrSchedule = "constant"
+	}
+	if opts.evalSplit == "" {
+		opts.evalSplit = "0"
+	}
+	if opts.evalWindows <= 0 {
+		opts.evalWindows = 12
+	}
+	if opts.steps < 0 || opts.warmupSteps < 0 || opts.batchSize <= 0 || opts.trainChars < 0 || opts.validationChars < 0 ||
 		opts.tokens < 0 || opts.topK < 0 || opts.seed < 0 {
 		return nil, fmt.Errorf("numeric train options must be non-negative, and batch size must be positive")
 	}
@@ -95,9 +118,14 @@ func tinyGPTTrainArgs(opts tinyGPTTrainOptions) ([]string, error) {
 		"--train-full",
 		"--full-train-steps", strconv.Itoa(opts.steps),
 		"--full-learning-rate", opts.learningRate,
+		"--min-learning-rate", opts.minLearningRate,
+		"--lr-schedule", opts.lrSchedule,
+		"--warmup-steps", strconv.Itoa(opts.warmupSteps),
 		"--full-batch-size", strconv.Itoa(opts.batchSize),
 		"--train-chars", strconv.Itoa(opts.trainChars),
 		"--validation-chars", strconv.Itoa(opts.validationChars),
+		"--eval-split", opts.evalSplit,
+		"--eval-windows", strconv.Itoa(opts.evalWindows),
 		"--optimizer", opts.optimizer,
 		"--weight-decay", opts.weightDecay,
 		"--prompt", opts.prompt,
@@ -126,6 +154,9 @@ func tinyGPTTrainArgs(opts tinyGPTTrainOptions) ([]string, error) {
 	}
 	if !opts.corpusPrior {
 		args = append(args, "--no-corpus-prior")
+	}
+	if opts.summaryPath != "" {
+		args = append(args, "--summary-path", opts.summaryPath)
 	}
 	return args, nil
 }

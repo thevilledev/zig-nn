@@ -66,6 +66,9 @@ func TestNestedHelpContainsTinyGPTCorpusWorkflow(t *testing.T) {
 		"shakespeare",
 		"tinystories",
 		"--corpus-path",
+		"--eval-split",
+		"--lr-schedule",
+		"--summary-path",
 		"nnctl data tiny-gpt",
 	} {
 		if !strings.Contains(help, want) {

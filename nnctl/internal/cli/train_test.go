@@ -10,9 +10,13 @@ func TestTinyGPTTrainArgsFreshCheckpoint(t *testing.T) {
 		corpus:          "tinystories",
 		steps:           10,
 		learningRate:    "0.01",
+		minLearningRate: "0.001",
+		lrSchedule:      "cosine",
+		warmupSteps:     2,
 		batchSize:       2,
 		trainChars:      1024,
-		validationChars: 128,
+		evalSplit:       "0.1",
+		evalWindows:     16,
 		blockSize:       16,
 		layers:          2,
 		heads:           2,
@@ -24,6 +28,7 @@ func TestTinyGPTTrainArgsFreshCheckpoint(t *testing.T) {
 		temperature:     "0.8",
 		topK:            8,
 		seed:            7,
+		summaryPath:     "runs/tinystories.json",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -31,6 +36,10 @@ func TestTinyGPTTrainArgsFreshCheckpoint(t *testing.T) {
 
 	wantContains := []string{
 		"--train-full",
+		"--lr-schedule", "cosine",
+		"--warmup-steps", "2",
+		"--eval-split", "0.1",
+		"--eval-windows", "16",
 		"--corpus", "tinystories",
 		"--block-size", "16",
 		"--layers", "2",
@@ -38,6 +47,7 @@ func TestTinyGPTTrainArgsFreshCheckpoint(t *testing.T) {
 		"--embd", "32",
 		"--save-checkpoint", "model.bin",
 		"--no-corpus-prior",
+		"--summary-path", "runs/tinystories.json",
 	}
 	if !containsOrdered(got, wantContains) {
 		t.Fatalf("args did not contain expected ordered subsequence\n got: %#v\nwant subsequence: %#v", got, wantContains)
@@ -51,9 +61,12 @@ func TestTinyGPTTrainArgsResumeSavesBackByDefault(t *testing.T) {
 		corpus:          "toy",
 		steps:           1,
 		learningRate:    "0.01",
+		minLearningRate: "0",
+		lrSchedule:      "constant",
 		batchSize:       1,
 		trainChars:      64,
 		validationChars: 0,
+		evalWindows:     1,
 		optimizer:       "sgd",
 		weightDecay:     "0",
 		prompt:          "to",
