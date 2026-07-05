@@ -40,6 +40,9 @@ Run the OpenAI-compatible inference service:
 zig build run_tiny_gpt_openai -- --model tiny-gpt.bin --port 8080
 ```
 
+The server requires `--model` by default. For quick protocol testing with a
+seeded untrained model, pass `--allow-untrained`.
+
 Then call it with an OpenAI-style non-streaming request:
 
 ```bash
@@ -91,6 +94,9 @@ Implemented pieces:
 The full-training path is intentionally educational rather than high-throughput:
 it uses explicit backward passes in the example file, trains single context
 windows, and keeps the model character-level and small enough to inspect.
+The serving path accepts common OpenAI request fields and returns explicit JSON
+errors for unsupported streaming, `n > 1`, token-array prompts, and multimodal
+message content.
 
 See [data/README.md](data/README.md) for source links, dataset notes, and the
 intended story arc for improving the model over time.
