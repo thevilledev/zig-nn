@@ -74,6 +74,7 @@ func (a *App) newRootCommand() *cobra.Command {
 		a.newCleanCommand(withRepo),
 		a.newDataCommand(withRepo),
 		a.newDoctorCommand(withRepo),
+		a.newCompletionCommand(),
 		a.newTinyGPTTopicCommand(),
 		newVersionCommand(a),
 	)

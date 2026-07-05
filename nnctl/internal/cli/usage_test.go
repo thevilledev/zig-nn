@@ -28,6 +28,10 @@ func TestDirectHelpAvailableForEveryCommand(t *testing.T) {
 		{"data", "tiny-gpt", "--help"},
 		{"doctor", "--help"},
 		{"env", "--help"},
+		{"completion", "--help"},
+		{"completion", "bash", "--help"},
+		{"completion", "zsh", "--help"},
+		{"completion", "fish", "--help"},
 		{"version", "--help"},
 		{"help", "tiny-gpt"},
 	}
@@ -89,5 +93,60 @@ func TestHelpAfterRunPassthroughSeparatorReachesExample(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "--help") {
 		t.Fatalf("passthrough --help did not reach the example command:\nstdout:\n%s\nstderr:\n%s", stdout.String(), stderr.String())
+	}
+}
+
+func TestCompletionScripts(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want []string
+	}{
+		{
+			name: "bash",
+			args: []string{"completion", "bash"},
+			want: []string{"# bash completion V2 for nnctl", "__complete"},
+		},
+		{
+			name: "zsh",
+			args: []string{"completion", "zsh"},
+			want: []string{"#compdef nnctl", "__complete"},
+		},
+		{
+			name: "fish",
+			args: []string{"completion", "fish"},
+			want: []string{"complete -c nnctl", "__complete"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			app := &App{Stdout: &stdout, Stderr: &stderr}
+
+			if err := app.Run(context.Background(), tt.args); err != nil {
+				t.Fatalf("Run() error = %v\nstderr:\n%s", err, stderr.String())
+			}
+			for _, want := range tt.want {
+				if !strings.Contains(stdout.String(), want) {
+					t.Fatalf("completion output missing %q:\n%s", want, stdout.String())
+				}
+			}
+			if stderr.Len() != 0 {
+				t.Fatalf("completion wrote to stderr:\n%s", stderr.String())
+			}
+		})
+	}
+}
+
+func TestCompletionDoesNotResolveRepo(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	app := &App{Stdout: &stdout, Stderr: &stderr}
+
+	if err := app.Run(context.Background(), []string{"--repo", "/definitely/not/zig-nn", "completion", "bash"}); err != nil {
+		t.Fatalf("Run() error = %v\nstderr:\n%s", err, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "# bash completion V2 for nnctl") {
+		t.Fatalf("completion output missing bash script:\n%s", stdout.String())
 	}
 }
