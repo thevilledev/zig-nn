@@ -18,12 +18,11 @@ pub fn main() !void {
     const stdout = &stdout_writer.interface;
     defer stdout.flush() catch {};
 
-    try stdout.print("\n=== Neural Network Visualization Examples ===\n\n", .{});
+    try stdout.print("\n== Unicode Network Topologies ==\n", .{});
 
     // Example 1: Simple XOR Network (2-3-1)
     {
-        try stdout.print("Example 1: Simple XOR Network (2-3-1)\n", .{});
-        try stdout.print("----------------------------------------\n", .{});
+        try stdout.print("\nXOR: 2 -> 3 -> 1\n", .{});
 
         var network = Network.init(allocator, 0.1, .MeanSquaredError);
         defer network.deinit();
@@ -34,13 +33,12 @@ pub fn main() !void {
         var viz = try visualiseNetwork(&network, allocator);
         defer viz.deinit(allocator);
 
-        try stdout.print("{s}\n\n", .{viz.items});
+        try stdout.print("{s}\n", .{viz.items});
     }
 
     // Example 2: Multi-layer Network (3-5-4-2)
     {
-        try stdout.print("Example 2: Multi-layer Network (3-5-4-2)\n", .{});
-        try stdout.print("------------------------------------------\n", .{});
+        try stdout.print("\nClassifier: 3 -> 5 -> 4 -> 2\n", .{});
 
         var network = Network.init(allocator, 0.1, .MeanSquaredError);
         defer network.deinit();
@@ -52,13 +50,12 @@ pub fn main() !void {
         var viz = try visualiseNetwork(&network, allocator);
         defer viz.deinit(allocator);
 
-        try stdout.print("{s}\n\n", .{viz.items});
+        try stdout.print("{s}\n", .{viz.items});
     }
 
     // Example 3: Deep Network (2-10-8-6-4-1)
     {
-        try stdout.print("Example 3: Deep Network (2-10-8-6-4-1)\n", .{});
-        try stdout.print("------------------------------------------\n", .{});
+        try stdout.print("\nDeep stack: 2 -> 10 -> 8 -> 6 -> 4 -> 1\n", .{});
 
         var network = Network.init(allocator, 0.1, .MeanSquaredError);
         defer network.deinit();
@@ -72,13 +69,12 @@ pub fn main() !void {
         var viz = try visualiseNetwork(&network, allocator);
         defer viz.deinit(allocator);
 
-        try stdout.print("{s}\n\n", .{viz.items});
+        try stdout.print("{s}\n", .{viz.items});
     }
 
     // Example 4: Wide Network (4-20-4)
     {
-        try stdout.print("Example 4: Wide Network (4-20-4)\n", .{});
-        try stdout.print("----------------------------------\n", .{});
+        try stdout.print("\nWide hidden layer: 4 -> 20 -> 4\n", .{});
 
         var network = Network.init(allocator, 0.1, .MeanSquaredError);
         defer network.deinit();
@@ -89,13 +85,12 @@ pub fn main() !void {
         var viz = try visualiseNetwork(&network, allocator);
         defer viz.deinit(allocator);
 
-        try stdout.print("{s}\n\n", .{viz.items});
+        try stdout.print("{s}\n", .{viz.items});
     }
 
     // Example 5: Gated Network with mixed layer types
     {
-        try stdout.print("Example 5: Gated Network with mixed layer types\n", .{});
-        try stdout.print("----------------------------------------------\n", .{});
+        try stdout.print("\nMixed gated stack: 2 -> 4 -> 3 -> 1\n", .{});
 
         var network = Network.init(allocator, 0.1, .MeanSquaredError);
         defer network.deinit();
@@ -109,7 +104,4 @@ pub fn main() !void {
 
         try stdout.print("{s}\n", .{viz.items});
     }
-
-    try stdout.print("\nNetwork visualization allows for easier understanding of\n", .{});
-    try stdout.print("neural network architecture and can help with debugging.\n", .{});
 }

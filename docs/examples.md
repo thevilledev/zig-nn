@@ -22,7 +22,7 @@ toolchain, prefer the individual CPU examples below.
 | Binary classification | `zig build run_binary_classification` | `./bin/nnctl run binary-classification` | Circular decision-boundary classification |
 | Regression | `zig build run_regression` | `./bin/nnctl run regression` | Nonlinear function approximation |
 | Gated network | `zig build run_gated_network` | `./bin/nnctl run gated-network` | GLU/SwiGLU-style gated layer behavior |
-| Network visualisation | `zig build run_network_visualisation` | `./bin/nnctl run network-visualisation` | Text visualization of a network shape |
+| Network visualisation | `zig build run_network_visualisation` | `./bin/nnctl run network-visualisation` | Unicode terminal topology diagram of a network shape |
 | Backend demo | `zig build run_backend_demo` | `./bin/nnctl run backend-demo` | Basic matrix operations through the public API |
 | GPU demo | `zig build run_gpu -Dgpu=metal` | `./bin/nnctl run gpu --gpu metal` | Metal-backed matrix operations on macOS |
 | GPU benchmark | `zig build run_gpu_benchmark -Dgpu=metal -Doptimize=ReleaseFast` | `./bin/nnctl run gpu-benchmark` | CPU vs Metal matrix multiplication timing |
