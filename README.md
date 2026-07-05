@@ -43,6 +43,8 @@ Research experiments live beside the examples they run. The first one is:
 
 - [TurboQuant](examples/quantization/README.md) - vector quantization metrics
   and a rotated scalar quantization experiment
+- [Tiny GPT](examples/tiny_gpt/README.md) - a small decoder-only Transformer
+  with causal attention and autoregressive sampling
 
 ## Building
 
@@ -57,6 +59,7 @@ make
 # Run specific examples, for example:
 make example-simple-xor
 make example-turboquant
+make example-tiny-gpt
 make example-gpu-benchmark
 
 # Build with different optimization modes
@@ -116,6 +119,12 @@ Run the TurboQuant lab with:
 
 ```bash
 zig build run_turboquant
+```
+
+Run the tiny GPT architecture demo with:
+
+```bash
+zig build run_tiny_gpt -- --prompt "to be" --tokens 80 --seed 42
 ```
 
 ## Learning Goals

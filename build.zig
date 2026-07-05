@@ -100,6 +100,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "gpu", .src = "examples/gpu/gpu.zig", .description = "Run the GPU example" },
         .{ .name = "gpu_benchmark", .src = "examples/gpu_benchmark/gpu_benchmark.zig", .description = "Benchmark Metal backend against CPU" },
         .{ .name = "turboquant", .src = "examples/quantization/turboquant.zig", .description = "Run the TurboQuant paper lab example" },
+        .{ .name = "tiny_gpt", .src = "examples/tiny_gpt/tiny_gpt.zig", .description = "Run the tiny GPT decoder-only Transformer example" },
         // Add new examples here in the future
     }) |example| {
         const exe_mod = b.createModule(.{
@@ -195,6 +196,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "gpu", .path = "examples/gpu/gpu.zig" },
         .{ .name = "gpu_benchmark", .path = "examples/gpu_benchmark/gpu_benchmark.zig" },
         .{ .name = "turboquant", .path = "examples/quantization/turboquant.zig" },
+        .{ .name = "tiny_gpt", .path = "examples/tiny_gpt/tiny_gpt.zig" },
     }) |example| {
         example_prev_step = addTestStep(b, acceptance_test_step, example.name, example.path, example_prev_step, target, optimize, build_options, enable_metal, lib_mod);
     }
