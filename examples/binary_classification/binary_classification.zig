@@ -37,12 +37,12 @@ pub fn main() !void {
         // Generate random points in [-1, 1] x [-1, 1]
         const x = random.float(f64) * 2.0 - 1.0;
         const y = random.float(f64) * 2.0 - 1.0;
-        training_data.set(i, 0, x);
-        training_data.set(i, 1, y);
+        try training_data.set(i, 0, x);
+        try training_data.set(i, 1, y);
 
         // Label: 1 if inside unit circle, 0 if outside
         const distance = std.math.sqrt(x * x + y * y);
-        labels.set(i, 0, if (distance <= 0.5) 1.0 else 0.0);
+        try labels.set(i, 0, if (distance <= 0.5) 1.0 else 0.0);
     }
 
     // Training parameters
@@ -87,13 +87,13 @@ pub fn main() !void {
         while (col < grid_size) : (col += 1) {
             var test_point = try Matrix.init(allocator, 1, 2);
             defer test_point.deinit();
-            test_point.set(0, 0, x);
-            test_point.set(0, 1, y);
+            try test_point.set(0, 0, x);
+            try test_point.set(0, 1, y);
 
             const output = try net.forward(test_point);
             defer output.deinit();
 
-            const prediction = output.get(0, 0);
+            const prediction = try output.get(0, 0);
             const symbol = if (prediction > 0.5) "●" else "○";
             std.debug.print("{s} ", .{symbol});
 

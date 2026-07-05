@@ -76,7 +76,7 @@ pub const Layer = struct {
                 const rand1 = rand.float(f64);
                 const rand2 = rand.float(f64);
                 const z = @sqrt(-2.0 * @log(rand1)) * @cos(2.0 * std.math.pi * rand2);
-                weights.set(i, j, z * scale);
+                try weights.set(i, j, z * scale);
             }
         }
 
@@ -160,7 +160,7 @@ pub const Layer = struct {
         errdefer biased.deinit();
         for (0..weighted_sum.rows) |i| {
             for (0..weighted_sum.cols) |j| {
-                biased.set(i, j, weighted_sum.get(i, j) + self.bias.get(0, j));
+                try biased.set(i, j, (try weighted_sum.get(i, j)) + (try self.bias.get(0, j)));
             }
         }
 
@@ -212,19 +212,40 @@ pub const Layer = struct {
             return error.NoForwardPassPerformed;
         }
 
-        // Calculate activation derivative σ'(z)
-        var activation_derivative = try Matrix.init(self.allocator, self.last_weighted_sum.?.rows, self.last_weighted_sum.?.cols);
-        defer activation_derivative.deinit();
+        var weighted_sum_gradient: Matrix = undefined;
+        if (self.activation_fn == Activation.softmax) {
+            // For softmax, multiply the incoming dL/dy by the full row-wise
+            // Jacobian: dL/dz_j = y_j * (g_j - sum_k(g_k * y_k)).
+            const output = self.last_output.?;
+            weighted_sum_gradient = try Matrix.init(self.allocator, output_gradient.rows, output_gradient.cols);
+            errdefer weighted_sum_gradient.deinit();
 
-        for (0..self.last_weighted_sum.?.rows) |i| {
-            for (0..self.last_weighted_sum.?.cols) |j| {
-                const value = self.last_weighted_sum.?.get(i, j);
-                activation_derivative.set(i, j, self.activation_derivative_fn(value));
+            for (0..output_gradient.rows) |i| {
+                var weighted_dot: f64 = 0.0;
+                for (0..output_gradient.cols) |j| {
+                    weighted_dot += (try output_gradient.get(i, j)) * (try output.get(i, j));
+                }
+                for (0..output_gradient.cols) |j| {
+                    const y = try output.get(i, j);
+                    const g = try output_gradient.get(i, j);
+                    try weighted_sum_gradient.set(i, j, y * (g - weighted_dot));
+                }
             }
-        }
+        } else {
+            // Calculate activation derivative σ'(z)
+            var activation_derivative = try Matrix.init(self.allocator, self.last_weighted_sum.?.rows, self.last_weighted_sum.?.cols);
+            defer activation_derivative.deinit();
 
-        // Calculate δz = δy ⊗ σ'(z)
-        var weighted_sum_gradient = try output_gradient.elementWiseMultiply(activation_derivative, self.allocator);
+            for (0..self.last_weighted_sum.?.rows) |i| {
+                for (0..self.last_weighted_sum.?.cols) |j| {
+                    const value = try self.last_weighted_sum.?.get(i, j);
+                    try activation_derivative.set(i, j, self.activation_derivative_fn(value));
+                }
+            }
+
+            // Calculate δz = δy ⊗ σ'(z)
+            weighted_sum_gradient = try output_gradient.elementWiseMultiply(activation_derivative, self.allocator);
+        }
 
         // Calculate δW = xᵀ·δz
         var transposed_input = try self.last_input.?.transpose(self.allocator);
@@ -338,7 +359,7 @@ pub const GatedLayer = struct {
                 const rand1 = rand.float(f64);
                 const rand2 = rand.float(f64);
                 const z = @sqrt(-2.0 * @log(rand1)) * @cos(2.0 * std.math.pi * rand2);
-                linear_weights.set(i, j, z * scale);
+                try linear_weights.set(i, j, z * scale);
             }
         }
 
@@ -348,7 +369,7 @@ pub const GatedLayer = struct {
                 const rand1 = rand.float(f64);
                 const rand2 = rand.float(f64);
                 const z = @sqrt(-2.0 * @log(rand1)) * @cos(2.0 * std.math.pi * rand2);
-                gate_weights.set(i, j, z * scale);
+                try gate_weights.set(i, j, z * scale);
             }
         }
 
@@ -413,7 +434,7 @@ pub const GatedLayer = struct {
         errdefer linear_biased.deinit();
         for (0..linear_weighted_sum.rows) |i| {
             for (0..linear_weighted_sum.cols) |j| {
-                linear_biased.set(i, j, linear_weighted_sum.get(i, j) + self.linear_bias.get(0, j));
+                try linear_biased.set(i, j, (try linear_weighted_sum.get(i, j)) + (try self.linear_bias.get(0, j)));
             }
         }
 
@@ -434,7 +455,7 @@ pub const GatedLayer = struct {
         errdefer gate_biased.deinit();
         for (0..gate_weighted_sum.rows) |i| {
             for (0..gate_weighted_sum.cols) |j| {
-                gate_biased.set(i, j, gate_weighted_sum.get(i, j) + self.gate_bias.get(0, j));
+                try gate_biased.set(i, j, (try gate_weighted_sum.get(i, j)) + (try self.gate_bias.get(0, j)));
             }
         }
 
@@ -636,22 +657,22 @@ test "layer forward propagation" {
     defer layer.deinit();
 
     // Set specific weights and bias for testing
-    layer.weights.set(0, 0, 0.5);
-    layer.weights.set(1, 0, 0.5);
-    layer.bias.set(0, 0, 0.0);
+    try layer.weights.set(0, 0, 0.5);
+    try layer.weights.set(1, 0, 0.5);
+    try layer.bias.set(0, 0, 0.0);
 
     // Create input (1x2 matrix)
     var input = try Matrix.init(allocator, 1, 2);
     defer input.deinit();
-    input.set(0, 0, 1.0);
-    input.set(0, 1, 1.0);
+    try input.set(0, 0, 1.0);
+    try input.set(0, 1, 1.0);
 
     // Forward propagation
     var output = try layer.forward(input);
     defer output.deinit();
 
     // Expected output: sigmoid(1.0 * 0.5 + 1.0 * 0.5 + 0.0) = sigmoid(1.0) ≈ 0.7311
-    try testing.expectApproxEqAbs(@as(f64, 0.7310585786300049), output.get(0, 0), 0.0001);
+    try testing.expectApproxEqAbs(@as(f64, 0.7310585786300049), try output.get(0, 0), 0.0001);
 }
 
 // Tests initialization of gated layers (both GLU and SwiGLU variants)
@@ -699,26 +720,26 @@ test "GLU layer forward propagation" {
     defer layer.deinit();
 
     // Set specific weights and biases for testing
-    layer.linear_weights.set(0, 0, 1.0);
-    layer.linear_weights.set(1, 0, 1.0);
-    layer.linear_bias.set(0, 0, 0.0);
+    try layer.linear_weights.set(0, 0, 1.0);
+    try layer.linear_weights.set(1, 0, 1.0);
+    try layer.linear_bias.set(0, 0, 0.0);
 
-    layer.gate_weights.set(0, 0, 0.0);
-    layer.gate_weights.set(1, 0, 0.0);
-    layer.gate_bias.set(0, 0, 0.0); // sigmoid(0) = 0.5
+    try layer.gate_weights.set(0, 0, 0.0);
+    try layer.gate_weights.set(1, 0, 0.0);
+    try layer.gate_bias.set(0, 0, 0.0); // sigmoid(0) = 0.5
 
     // Create input (1x2 matrix)
     var input = try Matrix.init(allocator, 1, 2);
     defer input.deinit();
-    input.set(0, 0, 1.0);
-    input.set(0, 1, 1.0);
+    try input.set(0, 0, 1.0);
+    try input.set(0, 1, 1.0);
 
     // Forward propagation
     var output = try layer.forward(input);
     defer output.deinit();
 
     // Expected output: (1.0 * 1.0 + 1.0 * 1.0 + 0.0) * sigmoid(0.0) = 2.0 * 0.5 = 1.0
-    try testing.expectApproxEqAbs(@as(f64, 1.0), output.get(0, 0), 0.0001);
+    try testing.expectApproxEqAbs(@as(f64, 1.0), try output.get(0, 0), 0.0001);
 }
 
 // Tests backpropagation through a standard layer
@@ -744,15 +765,15 @@ test "layer backpropagation" {
     defer layer.deinit();
 
     // Set specific weights and bias for testing
-    layer.weights.set(0, 0, 0.5);
-    layer.weights.set(1, 0, 0.5);
-    layer.bias.set(0, 0, 0.0);
+    try layer.weights.set(0, 0, 0.5);
+    try layer.weights.set(1, 0, 0.5);
+    try layer.bias.set(0, 0, 0.0);
 
     // Create input (1x2 matrix)
     var input = try Matrix.init(allocator, 1, 2);
     defer input.deinit();
-    input.set(0, 0, 1.0);
-    input.set(0, 1, 1.0);
+    try input.set(0, 0, 1.0);
+    try input.set(0, 1, 1.0);
 
     // Forward propagation
     var output = try layer.forward(input);
@@ -761,7 +782,7 @@ test "layer backpropagation" {
     // Create output gradient (1x1 matrix)
     var output_gradient = try Matrix.init(allocator, 1, 1);
     defer output_gradient.deinit();
-    output_gradient.set(0, 0, 1.0);
+    try output_gradient.set(0, 0, 1.0);
 
     // Backward propagation
     var input_gradient = try layer.backward(output_gradient, 0.1);
@@ -794,19 +815,19 @@ test "gated layer backpropagation" {
     defer layer.deinit();
 
     // Set specific weights and biases for testing
-    layer.linear_weights.set(0, 0, 1.0);
-    layer.linear_weights.set(1, 0, 1.0);
-    layer.linear_bias.set(0, 0, 0.0);
+    try layer.linear_weights.set(0, 0, 1.0);
+    try layer.linear_weights.set(1, 0, 1.0);
+    try layer.linear_bias.set(0, 0, 0.0);
 
-    layer.gate_weights.set(0, 0, 0.0);
-    layer.gate_weights.set(1, 0, 0.0);
-    layer.gate_bias.set(0, 0, 0.0); // sigmoid(0) = 0.5
+    try layer.gate_weights.set(0, 0, 0.0);
+    try layer.gate_weights.set(1, 0, 0.0);
+    try layer.gate_bias.set(0, 0, 0.0); // sigmoid(0) = 0.5
 
     // Create input (1x2 matrix)
     var input = try Matrix.init(allocator, 1, 2);
     defer input.deinit();
-    input.set(0, 0, 1.0);
-    input.set(0, 1, 1.0);
+    try input.set(0, 0, 1.0);
+    try input.set(0, 1, 1.0);
 
     // Forward propagation
     var output = try layer.forward(input);
@@ -815,7 +836,7 @@ test "gated layer backpropagation" {
     // Create output gradient (1x1 matrix)
     var output_gradient = try Matrix.init(allocator, 1, 1);
     defer output_gradient.deinit();
-    output_gradient.set(0, 0, 1.0);
+    try output_gradient.set(0, 0, 1.0);
 
     // Backward propagation
     var input_gradient = try layer.backward(output_gradient, 0.1);
@@ -852,7 +873,7 @@ test "weight initialization statistics" {
     var relu_variance: f64 = 0.0;
     for (0..input_size) |i| {
         for (0..output_size) |j| {
-            const weight = relu_layer.weights.get(i, j);
+            const weight = try relu_layer.weights.get(i, j);
             relu_mean += weight;
             relu_variance += weight * weight;
         }
@@ -873,7 +894,7 @@ test "weight initialization statistics" {
     var tanh_variance: f64 = 0.0;
     for (0..input_size) |i| {
         for (0..output_size) |j| {
-            const weight = tanh_layer.weights.get(i, j);
+            const weight = try tanh_layer.weights.get(i, j);
             tanh_mean += weight;
             tanh_variance += weight * weight;
         }
@@ -894,7 +915,7 @@ test "weight initialization statistics" {
     var softmax_variance: f64 = 0.0;
     for (0..input_size) |i| {
         for (0..output_size) |j| {
-            const weight = softmax_layer.weights.get(i, j);
+            const weight = try softmax_layer.weights.get(i, j);
             softmax_mean += weight;
             softmax_variance += weight * weight;
         }
@@ -934,9 +955,9 @@ test "weight initialization impact on training" {
     for (0..num_samples) |i| {
         const x1: f64 = if (rand.boolean()) 1.0 else 0.0;
         const x2: f64 = if (rand.boolean()) 1.0 else 0.0;
-        inputs.set(i, 0, x1);
-        inputs.set(i, 1, x2);
-        targets.set(i, 0, if (x1 != x2) 1.0 else 0.0);
+        try inputs.set(i, 0, x1);
+        try inputs.set(i, 1, x2);
+        try targets.set(i, 0, if (x1 != x2) 1.0 else 0.0);
     }
 
     // Test different initialization schemes
@@ -1022,7 +1043,7 @@ test "gated layer weight initialization statistics" {
     var linear_variance: f64 = 0.0;
     for (0..input_size) |i| {
         for (0..output_size) |j| {
-            const weight = glu_layer.linear_weights.get(i, j);
+            const weight = try glu_layer.linear_weights.get(i, j);
             linear_mean += weight;
             linear_variance += weight * weight;
         }
@@ -1035,7 +1056,7 @@ test "gated layer weight initialization statistics" {
     var gate_variance: f64 = 0.0;
     for (0..input_size) |i| {
         for (0..output_size) |j| {
-            const weight = glu_layer.gate_weights.get(i, j);
+            const weight = try glu_layer.gate_weights.get(i, j);
             gate_mean += weight;
             gate_variance += weight * weight;
         }
@@ -1059,7 +1080,7 @@ test "gated layer weight initialization statistics" {
     var swiglu_linear_variance: f64 = 0.0;
     for (0..input_size) |i| {
         for (0..output_size) |j| {
-            const weight = swiglu_layer.linear_weights.get(i, j);
+            const weight = try swiglu_layer.linear_weights.get(i, j);
             swiglu_linear_mean += weight;
             swiglu_linear_variance += weight * weight;
         }
@@ -1071,7 +1092,7 @@ test "gated layer weight initialization statistics" {
     var swiglu_gate_variance: f64 = 0.0;
     for (0..input_size) |i| {
         for (0..output_size) |j| {
-            const weight = swiglu_layer.gate_weights.get(i, j);
+            const weight = try swiglu_layer.gate_weights.get(i, j);
             swiglu_gate_mean += weight;
             swiglu_gate_variance += weight * weight;
         }

@@ -222,7 +222,7 @@ pub const Network = struct {
                 // MSE = (1/n) * Σ(y_pred - y_true)²
                 for (0..predicted.rows) |i| {
                     for (0..predicted.cols) |j| {
-                        const diff = predicted.get(i, j) - target.get(i, j);
+                        const diff = (try predicted.get(i, j)) - (try target.get(i, j));
                         total_loss += diff * diff;
                     }
                 }
@@ -232,8 +232,8 @@ pub const Network = struct {
                 // Multi-class cross entropy = -(1/n) * Σ(y_true * log(y_pred))
                 for (0..predicted.rows) |i| {
                     for (0..predicted.cols) |j| {
-                        const y_true = target.get(i, j);
-                        var y_pred = predicted.get(i, j);
+                        const y_true = try target.get(i, j);
+                        var y_pred = try predicted.get(i, j);
 
                         // Skip if true label is 0 (contributes nothing to sum)
                         if (y_true > 0.0) {
@@ -249,8 +249,8 @@ pub const Network = struct {
                 // Binary cross entropy = -(1/n) * Σ(y_true * log(y_pred) + (1-y_true) * log(1-y_pred))
                 for (0..predicted.rows) |i| {
                     for (0..predicted.cols) |j| {
-                        const y_true = target.get(i, j);
-                        var y_pred = predicted.get(i, j);
+                        const y_true = try target.get(i, j);
+                        var y_pred = try predicted.get(i, j);
 
                         // Clip predictions to avoid log(0)
                         if (y_pred < 1e-15) y_pred = 1e-15;
@@ -282,23 +282,33 @@ pub const Network = struct {
         }
 
         var gradient = try Matrix.init(self.allocator, predicted.rows, predicted.cols);
+        const n = @as(f64, @floatFromInt(predicted.rows));
 
         switch (self.loss_function) {
             .MeanSquaredError => {
                 // dMSE/dy_pred = 2 * (y_pred - y_true) / n
-                const n = @as(f64, @floatFromInt(predicted.rows));
                 for (0..predicted.rows) |i| {
                     for (0..predicted.cols) |j| {
-                        const diff = predicted.get(i, j) - target.get(i, j);
-                        gradient.set(i, j, 2.0 * diff / n);
+                        const diff = (try predicted.get(i, j)) - (try target.get(i, j));
+                        try gradient.set(i, j, 2.0 * diff / n);
                     }
                 }
             },
             .CrossEntropy => {
-                // For softmax + cross entropy, gradient simplifies to (y_pred - y_true)
+                // dCE/dy_pred = -y_true / y_pred. Layer.backward handles the
+                // row-wise softmax Jacobian, yielding y_pred - y_true for the
+                // common softmax + cross entropy pairing.
                 for (0..predicted.rows) |i| {
                     for (0..predicted.cols) |j| {
-                        gradient.set(i, j, predicted.get(i, j) - target.get(i, j));
+                        const y_true = try target.get(i, j);
+                        if (y_true == 0.0) {
+                            try gradient.set(i, j, 0.0);
+                            continue;
+                        }
+
+                        var y_pred = try predicted.get(i, j);
+                        if (y_pred < 1e-15) y_pred = 1e-15;
+                        try gradient.set(i, j, -y_true / y_pred / n);
                     }
                 }
             },
@@ -306,14 +316,14 @@ pub const Network = struct {
                 // dBCE/dy_pred = -y_true/y_pred + (1-y_true)/(1-y_pred)
                 for (0..predicted.rows) |i| {
                     for (0..predicted.cols) |j| {
-                        const y_true = target.get(i, j);
-                        var y_pred = predicted.get(i, j);
+                        const y_true = try target.get(i, j);
+                        var y_pred = try predicted.get(i, j);
 
                         // Clip predictions to avoid division by zero
                         if (y_pred < 1e-15) y_pred = 1e-15;
                         if (y_pred > 1.0 - 1e-15) y_pred = 1.0 - 1e-15;
 
-                        gradient.set(i, j, -y_true / y_pred + (1.0 - y_true) / (1.0 - y_pred));
+                        try gradient.set(i, j, (-y_true / y_pred + (1.0 - y_true) / (1.0 - y_pred)) / n);
                     }
                 }
             },
@@ -415,10 +425,10 @@ pub const Network = struct {
                 for (0..current_batch_size) |i| {
                     const sample_idx = indices[start_idx + i];
                     for (0..inputs.cols) |j| {
-                        batch_inputs.set(i, j, inputs.get(sample_idx, j));
+                        try batch_inputs.set(i, j, try inputs.get(sample_idx, j));
                     }
                     for (0..targets.cols) |j| {
-                        batch_targets.set(i, j, targets.get(sample_idx, j));
+                        try batch_targets.set(i, j, try targets.get(sample_idx, j));
                     }
                 }
 
@@ -459,8 +469,10 @@ pub const Network = struct {
     /// Saves the network to a binary file
     /// Format:
     /// - Magic number (4 bytes): "ZNN\0"
-    /// - Version (4 bytes): 1
+    /// - Version (4 bytes): 2
     /// - Created at (8 bytes): Unix timestamp
+    /// - Learning rate (8 bytes)
+    /// - Loss function (1 byte)
     /// - Input size (4 bytes)
     /// - Output size (4 bytes)
     /// - Layer count (4 bytes)
@@ -485,10 +497,14 @@ pub const Network = struct {
         try writer.writeAll("ZNN\x00");
 
         // Write version
-        try writer.writeInt(u32, 1, .little);
+        try writer.writeInt(u32, 2, .little);
 
         // Write creation timestamp
         try writer.writeInt(i64, unixMilliTimestamp(), .little);
+
+        // Write training metadata
+        try writer.writeInt(i64, @as(i64, @bitCast(self.learning_rate)), .little);
+        try writer.writeByte(@intFromEnum(self.loss_function));
 
         // Write network metadata
         const input_size = try self.getInputSize();
@@ -515,13 +531,13 @@ pub const Network = struct {
                     // Write weights
                     for (0..standard_layer.weights.rows) |i| {
                         for (0..standard_layer.weights.cols) |j| {
-                            try writer.writeInt(i64, @as(i64, @bitCast(standard_layer.weights.get(i, j))), .little);
+                            try writer.writeInt(i64, @as(i64, @bitCast(try standard_layer.weights.get(i, j))), .little);
                         }
                     }
 
                     // Write biases
                     for (0..standard_layer.bias.cols) |j| {
-                        try writer.writeInt(i64, @as(i64, @bitCast(standard_layer.bias.get(0, j))), .little);
+                        try writer.writeInt(i64, @as(i64, @bitCast(try standard_layer.bias.get(0, j))), .little);
                     }
                 },
                 .Gated => |gated_layer| {
@@ -539,25 +555,25 @@ pub const Network = struct {
                     // Write linear weights
                     for (0..gated_layer.linear_weights.rows) |i| {
                         for (0..gated_layer.linear_weights.cols) |j| {
-                            try writer.writeInt(i64, @as(i64, @bitCast(gated_layer.linear_weights.get(i, j))), .little);
+                            try writer.writeInt(i64, @as(i64, @bitCast(try gated_layer.linear_weights.get(i, j))), .little);
                         }
                     }
 
                     // Write linear biases
                     for (0..gated_layer.linear_bias.cols) |j| {
-                        try writer.writeInt(i64, @as(i64, @bitCast(gated_layer.linear_bias.get(0, j))), .little);
+                        try writer.writeInt(i64, @as(i64, @bitCast(try gated_layer.linear_bias.get(0, j))), .little);
                     }
 
                     // Write gate weights
                     for (0..gated_layer.gate_weights.rows) |i| {
                         for (0..gated_layer.gate_weights.cols) |j| {
-                            try writer.writeInt(i64, @as(i64, @bitCast(gated_layer.gate_weights.get(i, j))), .little);
+                            try writer.writeInt(i64, @as(i64, @bitCast(try gated_layer.gate_weights.get(i, j))), .little);
                         }
                     }
 
                     // Write gate biases
                     for (0..gated_layer.gate_bias.cols) |j| {
-                        try writer.writeInt(i64, @as(i64, @bitCast(gated_layer.gate_bias.get(0, j))), .little);
+                        try writer.writeInt(i64, @as(i64, @bitCast(try gated_layer.gate_bias.get(0, j))), .little);
                     }
                 },
             }
@@ -586,20 +602,32 @@ pub const Network = struct {
 
         // Read version
         const version = try reader.takeInt(u32, .little);
-        if (version != 1) {
+        if (version != 1 and version != 2) {
             return error.UnsupportedVersion;
         }
 
         // Skip creation timestamp
         _ = try reader.takeInt(i64, .little);
 
+        var learning_rate: f64 = 0.1;
+        var loss_function: LossFunction = .MeanSquaredError;
+        if (version >= 2) {
+            learning_rate = @as(f64, @bitCast(try reader.takeInt(i64, .little)));
+            const loss_tag = try reader.takeByte();
+            loss_function = switch (loss_tag) {
+                0 => .MeanSquaredError,
+                1 => .CrossEntropy,
+                2 => .BinaryCrossEntropy,
+                else => return error.InvalidFileFormat,
+            };
+        }
+
         // Read network metadata
         _ = try reader.takeInt(u32, .little); // input_size
         _ = try reader.takeInt(u32, .little); // output_size
         const layer_count = try reader.takeInt(u32, .little);
 
-        // Create network with default learning rate and loss function
-        var network = Network.init(allocator, 0.1, .MeanSquaredError);
+        var network = Network.init(allocator, learning_rate, loss_function);
 
         // Read each layer
         for (0..layer_count) |_| {
@@ -634,14 +662,14 @@ pub const Network = struct {
                     for (0..layer.weights.rows) |i| {
                         for (0..layer.weights.cols) |j| {
                             const weight = @as(f64, @bitCast(try reader.takeInt(i64, .little)));
-                            layer.weights.set(i, j, weight);
+                            try layer.weights.set(i, j, weight);
                         }
                     }
 
                     // Read biases
                     for (0..layer.bias.cols) |j| {
                         const bias = @as(f64, @bitCast(try reader.takeInt(i64, .little)));
-                        layer.bias.set(0, j, bias);
+                        try layer.bias.set(0, j, bias);
                     }
                 },
                 1 => { // Gated layer
@@ -653,28 +681,28 @@ pub const Network = struct {
                     for (0..layer.linear_weights.rows) |i| {
                         for (0..layer.linear_weights.cols) |j| {
                             const weight = @as(f64, @bitCast(try reader.takeInt(i64, .little)));
-                            layer.linear_weights.set(i, j, weight);
+                            try layer.linear_weights.set(i, j, weight);
                         }
                     }
 
                     // Read linear biases
                     for (0..layer.linear_bias.cols) |j| {
                         const bias = @as(f64, @bitCast(try reader.takeInt(i64, .little)));
-                        layer.linear_bias.set(0, j, bias);
+                        try layer.linear_bias.set(0, j, bias);
                     }
 
                     // Read gate weights
                     for (0..layer.gate_weights.rows) |i| {
                         for (0..layer.gate_weights.cols) |j| {
                             const weight = @as(f64, @bitCast(try reader.takeInt(i64, .little)));
-                            layer.gate_weights.set(i, j, weight);
+                            try layer.gate_weights.set(i, j, weight);
                         }
                     }
 
                     // Read gate biases
                     for (0..layer.gate_bias.cols) |j| {
                         const bias = @as(f64, @bitCast(try reader.takeInt(i64, .little)));
-                        layer.gate_bias.set(0, j, bias);
+                        try layer.gate_bias.set(0, j, bias);
                     }
                 },
                 else => return error.InvalidLayerType,
@@ -726,8 +754,8 @@ test "network forward propagation" {
     // Set up input (1x2 matrix)
     var input = try Matrix.init(allocator, 1, 2);
     defer input.deinit();
-    input.set(0, 0, 1.0);
-    input.set(0, 1, 0.5);
+    try input.set(0, 0, 1.0);
+    try input.set(0, 1, 0.5);
 
     // Forward propagation
     var output = try network.forward(input);
@@ -739,7 +767,7 @@ test "network forward propagation" {
 
     // The actual output value will depend on the random weights,
     // but it should be between 0 and 1 (sigmoid output range)
-    const value = output.get(0, 0);
+    const value = try output.get(0, 0);
     try testing.expect(value >= 0.0 and value <= 1.0);
 }
 
@@ -758,8 +786,8 @@ test "network with mixed layer types" {
     // Set up input (1x2 matrix)
     var input = try Matrix.init(allocator, 1, 2);
     defer input.deinit();
-    input.set(0, 0, 1.0);
-    input.set(0, 1, 0.5);
+    try input.set(0, 0, 1.0);
+    try input.set(0, 1, 0.5);
 
     // Forward propagation
     var output = try network.forward(input);
@@ -770,7 +798,7 @@ test "network with mixed layer types" {
     try testing.expectEqual(@as(usize, 1), output.cols);
 
     // The output should be between 0 and 1 (sigmoid output range)
-    const value = output.get(0, 0);
+    const value = try output.get(0, 0);
     try testing.expect(value >= 0.0 and value <= 1.0);
 }
 
@@ -783,13 +811,13 @@ test "loss calculation" {
     // Create predictions and targets
     var predictions = try Matrix.init(allocator, 2, 1);
     defer predictions.deinit();
-    predictions.set(0, 0, 0.7);
-    predictions.set(1, 0, 0.3);
+    try predictions.set(0, 0, 0.7);
+    try predictions.set(1, 0, 0.3);
 
     var targets = try Matrix.init(allocator, 2, 1);
     defer targets.deinit();
-    targets.set(0, 0, 1.0);
-    targets.set(1, 0, 0.0);
+    try targets.set(0, 0, 1.0);
+    try targets.set(1, 0, 0.0);
 
     // Calculate MSE loss
     const mse_loss = try network.calculateLoss(predictions, targets);
@@ -816,21 +844,21 @@ test "backpropagation and training" {
     // Create XOR training data
     var inputs = try Matrix.init(allocator, 4, 2);
     defer inputs.deinit();
-    inputs.set(0, 0, 0.0);
-    inputs.set(0, 1, 0.0); // [0, 0] -> 0
-    inputs.set(1, 0, 0.0);
-    inputs.set(1, 1, 1.0); // [0, 1] -> 1
-    inputs.set(2, 0, 1.0);
-    inputs.set(2, 1, 0.0); // [1, 0] -> 1
-    inputs.set(3, 0, 1.0);
-    inputs.set(3, 1, 1.0); // [1, 1] -> 0
+    try inputs.set(0, 0, 0.0);
+    try inputs.set(0, 1, 0.0); // [0, 0] -> 0
+    try inputs.set(1, 0, 0.0);
+    try inputs.set(1, 1, 1.0); // [0, 1] -> 1
+    try inputs.set(2, 0, 1.0);
+    try inputs.set(2, 1, 0.0); // [1, 0] -> 1
+    try inputs.set(3, 0, 1.0);
+    try inputs.set(3, 1, 1.0); // [1, 1] -> 0
 
     var targets = try Matrix.init(allocator, 4, 1);
     defer targets.deinit();
-    targets.set(0, 0, 0.0);
-    targets.set(1, 0, 1.0);
-    targets.set(2, 0, 1.0);
-    targets.set(3, 0, 0.0);
+    try targets.set(0, 0, 0.0);
+    try targets.set(1, 0, 1.0);
+    try targets.set(2, 0, 1.0);
+    try targets.set(3, 0, 0.0);
 
     // Train for a few epochs
     const epochs: usize = 10;
@@ -851,9 +879,44 @@ test "backpropagation and training" {
 
     // The predictions should be between 0 and 1
     for (0..4) |i| {
-        const value = predictions.get(i, 0);
+        const value = try predictions.get(i, 0);
         try testing.expect(value >= 0.0 and value <= 1.0);
     }
+}
+
+test "softmax cross entropy training step reduces loss" {
+    const allocator = testing.allocator;
+
+    var network = Network.init(allocator, 0.1, .CrossEntropy);
+    defer network.deinit();
+
+    try network.addLayer(2, 2, Activation.softmax, Activation.softmax_derivative);
+    const layer = network.layers.items[0].Standard;
+    layer.weights.fill(0.0);
+    layer.bias.fill(0.0);
+
+    var input = try Matrix.init(allocator, 1, 2);
+    defer input.deinit();
+    try input.set(0, 0, 1.0);
+    try input.set(0, 1, 0.0);
+
+    var target = try Matrix.init(allocator, 1, 2);
+    defer target.deinit();
+    try target.set(0, 0, 1.0);
+    try target.set(0, 1, 0.0);
+
+    var before = try network.forward(input);
+    defer before.deinit();
+    const before_loss = try network.calculateLoss(before, target);
+
+    _ = try network.trainBatch(input, target);
+
+    var after = try network.forward(input);
+    defer after.deinit();
+    const after_loss = try network.calculateLoss(after, target);
+
+    try testing.expect(after_loss < before_loss);
+    try testing.expect((try after.get(0, 0)) > (try before.get(0, 0)));
 }
 
 test "model persistence" {
@@ -871,8 +934,8 @@ test "model persistence" {
     // Set up input (1x2 matrix)
     var input = try Matrix.init(allocator, 1, 2);
     defer input.deinit();
-    input.set(0, 0, 1.0);
-    input.set(0, 1, 0.5);
+    try input.set(0, 0, 1.0);
+    try input.set(0, 1, 0.5);
 
     // Get initial prediction
     var initial_output = try network.forward(input);
@@ -884,6 +947,8 @@ test "model persistence" {
     // Load network from file
     var loaded_network = try Network.loadFromFile(allocator, "test_model.bin");
     defer loaded_network.deinit();
+    try testing.expectApproxEqAbs(network.learning_rate, loaded_network.learning_rate, 1e-12);
+    try testing.expectEqual(network.loss_function, loaded_network.loss_function);
 
     // Get prediction from loaded network
     var loaded_output = try loaded_network.forward(input);
@@ -892,7 +957,7 @@ test "model persistence" {
     // Compare predictions
     try testing.expectEqual(initial_output.rows, loaded_output.rows);
     try testing.expectEqual(initial_output.cols, loaded_output.cols);
-    try testing.expectApproxEqAbs(initial_output.get(0, 0), loaded_output.get(0, 0), 1e-10);
+    try testing.expectApproxEqAbs(try initial_output.get(0, 0), try loaded_output.get(0, 0), 1e-10);
 
     // Clean up test file
     try std.Io.Dir.cwd().deleteFile(std.Options.debug_io, "test_model.bin");

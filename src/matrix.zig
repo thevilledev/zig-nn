@@ -2,6 +2,12 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const testing = std.testing;
 
+pub const MatrixError = error{
+    IndexOutOfBounds,
+    DimensionMismatch,
+    InvalidBatchIndices,
+};
+
 pub fn randomSeed() u64 {
     var seed: u64 = undefined;
     std.Options.debug_io.random(std.mem.asBytes(&seed));
@@ -62,7 +68,7 @@ pub const Matrix = struct {
 
         for (0..source.rows) |i| {
             for (0..source.cols) |j| {
-                result.set(i, j, source.get(i, j));
+                try result.set(i, j, try source.get(i, j));
             }
         }
 
@@ -83,10 +89,9 @@ pub const Matrix = struct {
     /// Parameters:
     ///   - row: Row index i (0-based)
     ///   - col: Column index j (0-based)
-    /// Panics if indices are out of bounds
-    pub fn get(self: Matrix, row: usize, col: usize) f64 {
+    pub fn get(self: Matrix, row: usize, col: usize) MatrixError!f64 {
         if (row >= self.rows or col >= self.cols) {
-            @panic("Index out of bounds");
+            return MatrixError.IndexOutOfBounds;
         }
         return self.data[row * self.cols + col];
     }
@@ -99,10 +104,9 @@ pub const Matrix = struct {
     ///   - row: Row index i (0-based)
     ///   - col: Column index j (0-based)
     ///   - value: Value to set at position (i,j)
-    /// Panics if indices are out of bounds
-    pub fn set(self: *Matrix, row: usize, col: usize, value: f64) void {
+    pub fn set(self: *Matrix, row: usize, col: usize, value: f64) MatrixError!void {
         if (row >= self.rows or col >= self.cols) {
-            @panic("Index out of bounds");
+            return MatrixError.IndexOutOfBounds;
         }
         self.data[row * self.cols + col] = value;
     }
@@ -123,7 +127,7 @@ pub const Matrix = struct {
             for (0..self.cols) |j| {
                 const rand_float = rand.float(f64);
                 const value = min + (rand_float * (max - min));
-                self.set(i, j, value);
+                self.set(i, j, value) catch unreachable;
             }
         }
     }
@@ -138,10 +142,9 @@ pub const Matrix = struct {
     ///   - other: Right-hand matrix B in A × B
     ///   - allocator: Memory allocator for result matrix
     /// Returns: Result matrix C with dimensions (self.rows × other.cols)
-    /// Panics if matrix dimensions don't match (self.cols ≠ other.rows)
     pub fn dotProduct(self: Matrix, other: Matrix, allocator: Allocator) !Matrix {
         if (self.cols != other.rows) {
-            @panic("Invalid matrix dimensions for multiplication");
+            return MatrixError.DimensionMismatch;
         }
 
         var result = try Matrix.init(allocator, self.rows, other.cols);
@@ -150,9 +153,9 @@ pub const Matrix = struct {
             for (0..other.cols) |j| {
                 var sum: f64 = 0;
                 for (0..self.cols) |k| {
-                    sum += self.get(i, k) * other.get(k, j);
+                    sum += (try self.get(i, k)) * (try other.get(k, j));
                 }
-                result.set(i, j, sum);
+                try result.set(i, j, sum);
             }
         }
 
@@ -168,18 +171,17 @@ pub const Matrix = struct {
     ///   - other: Matrix to add element-wise
     ///   - allocator: Memory allocator for result matrix
     /// Returns: Result matrix with same dimensions as inputs
-    /// Panics if matrix dimensions don't match
     pub fn add(self: Matrix, other: Matrix, allocator: Allocator) !Matrix {
         if (self.rows != other.rows or self.cols != other.cols) {
-            @panic("Matrix dimensions must match for addition");
+            return MatrixError.DimensionMismatch;
         }
 
         var result = try Matrix.init(allocator, self.rows, self.cols);
 
         for (0..self.rows) |i| {
             for (0..self.cols) |j| {
-                const sum = self.get(i, j) + other.get(i, j);
-                result.set(i, j, sum);
+                const sum = (try self.get(i, j)) + (try other.get(i, j));
+                try result.set(i, j, sum);
             }
         }
 
@@ -195,18 +197,17 @@ pub const Matrix = struct {
     ///   - other: Matrix to subtract element-wise
     ///   - allocator: Memory allocator for result matrix
     /// Returns: Result matrix with same dimensions as inputs
-    /// Panics if matrix dimensions don't match
     pub fn subtract(self: Matrix, other: Matrix, allocator: Allocator) !Matrix {
         if (self.rows != other.rows or self.cols != other.cols) {
-            @panic("Matrix dimensions must match for subtraction");
+            return MatrixError.DimensionMismatch;
         }
 
         var result = try Matrix.init(allocator, self.rows, self.cols);
 
         for (0..self.rows) |i| {
             for (0..self.cols) |j| {
-                const diff = self.get(i, j) - other.get(i, j);
-                result.set(i, j, diff);
+                const diff = (try self.get(i, j)) - (try other.get(i, j));
+                try result.set(i, j, diff);
             }
         }
 
@@ -223,18 +224,17 @@ pub const Matrix = struct {
     ///   - other: Matrix to multiply element-wise
     ///   - allocator: Memory allocator for result matrix
     /// Returns: Result matrix with same dimensions as inputs
-    /// Panics if matrix dimensions don't match
     pub fn elementWiseMultiply(self: Matrix, other: Matrix, allocator: Allocator) !Matrix {
         if (self.rows != other.rows or self.cols != other.cols) {
-            @panic("Matrix dimensions must match for element-wise multiplication");
+            return MatrixError.DimensionMismatch;
         }
 
         var result = try Matrix.init(allocator, self.rows, self.cols);
 
         for (0..self.rows) |i| {
             for (0..self.cols) |j| {
-                const product = self.get(i, j) * other.get(i, j);
-                result.set(i, j, product);
+                const product = (try self.get(i, j)) * (try other.get(i, j));
+                try result.set(i, j, product);
             }
         }
 
@@ -256,8 +256,8 @@ pub const Matrix = struct {
 
         for (0..self.rows) |i| {
             for (0..self.cols) |j| {
-                const scaled_value = self.get(i, j) * scalar;
-                result.set(i, j, scaled_value);
+                const scaled_value = (try self.get(i, j)) * scalar;
+                try result.set(i, j, scaled_value);
             }
         }
 
@@ -280,9 +280,9 @@ pub const Matrix = struct {
         for (0..self.cols) |j| {
             var sum: f64 = 0;
             for (0..self.rows) |i| {
-                sum += self.get(i, j);
+                sum += try self.get(i, j);
             }
-            result.set(0, j, sum);
+            try result.set(0, j, sum);
         }
 
         return result;
@@ -302,7 +302,7 @@ pub const Matrix = struct {
 
         for (0..self.rows) |i| {
             for (0..self.cols) |j| {
-                result.set(j, i, self.get(i, j));
+                try result.set(j, i, try self.get(i, j));
             }
         }
 
@@ -319,10 +319,9 @@ pub const Matrix = struct {
     ///   - end: Ending row index (exclusive)
     ///   - allocator: Memory allocator for result matrix
     /// Returns: New matrix containing the specified rows
-    /// Panics if indices are out of bounds
     pub fn extractBatch(self: Matrix, start: usize, end: usize, allocator: Allocator) !Matrix {
         if (start >= self.rows or end > self.rows or start >= end) {
-            @panic("Invalid batch indices");
+            return MatrixError.InvalidBatchIndices;
         }
 
         const batch_size = end - start;
@@ -332,7 +331,7 @@ pub const Matrix = struct {
         while (i < batch_size) : (i += 1) {
             var j: usize = 0;
             while (j < self.cols) : (j += 1) {
-                batch.set(i, j, self.get(start + i, j));
+                try batch.set(i, j, try self.get(start + i, j));
             }
         }
 
@@ -352,13 +351,13 @@ test "matrix basic operations" {
     try testing.expectEqual(@as(usize, 3), m.cols);
 
     // Test set and get
-    m.set(0, 0, 1.0);
-    m.set(0, 1, 2.0);
-    m.set(1, 0, 3.0);
+    try m.set(0, 0, 1.0);
+    try m.set(0, 1, 2.0);
+    try m.set(1, 0, 3.0);
 
-    try testing.expectEqual(@as(f64, 1.0), m.get(0, 0));
-    try testing.expectEqual(@as(f64, 2.0), m.get(0, 1));
-    try testing.expectEqual(@as(f64, 3.0), m.get(1, 0));
+    try testing.expectEqual(@as(f64, 1.0), try m.get(0, 0));
+    try testing.expectEqual(@as(f64, 2.0), try m.get(0, 1));
+    try testing.expectEqual(@as(f64, 3.0), try m.get(1, 0));
 }
 
 test "matrix multiplication" {
@@ -371,28 +370,28 @@ test "matrix multiplication" {
     defer m2.deinit();
 
     // Set test values
-    m1.set(0, 0, 1.0);
-    m1.set(0, 1, 2.0);
-    m1.set(0, 2, 3.0);
-    m1.set(1, 0, 4.0);
-    m1.set(1, 1, 5.0);
-    m1.set(1, 2, 6.0);
+    try m1.set(0, 0, 1.0);
+    try m1.set(0, 1, 2.0);
+    try m1.set(0, 2, 3.0);
+    try m1.set(1, 0, 4.0);
+    try m1.set(1, 1, 5.0);
+    try m1.set(1, 2, 6.0);
 
-    m2.set(0, 0, 7.0);
-    m2.set(0, 1, 8.0);
-    m2.set(1, 0, 9.0);
-    m2.set(1, 1, 10.0);
-    m2.set(2, 0, 11.0);
-    m2.set(2, 1, 12.0);
+    try m2.set(0, 0, 7.0);
+    try m2.set(0, 1, 8.0);
+    try m2.set(1, 0, 9.0);
+    try m2.set(1, 1, 10.0);
+    try m2.set(2, 0, 11.0);
+    try m2.set(2, 1, 12.0);
 
     var result = try m1.dotProduct(m2, allocator);
     defer result.deinit();
 
     // Expected results: [[58, 64], [139, 154]]
-    try testing.expectEqual(@as(f64, 58.0), result.get(0, 0));
-    try testing.expectEqual(@as(f64, 64.0), result.get(0, 1));
-    try testing.expectEqual(@as(f64, 139.0), result.get(1, 0));
-    try testing.expectEqual(@as(f64, 154.0), result.get(1, 1));
+    try testing.expectEqual(@as(f64, 58.0), try result.get(0, 0));
+    try testing.expectEqual(@as(f64, 64.0), try result.get(0, 1));
+    try testing.expectEqual(@as(f64, 139.0), try result.get(1, 0));
+    try testing.expectEqual(@as(f64, 154.0), try result.get(1, 1));
 }
 
 test "matrix copy" {
@@ -401,10 +400,10 @@ test "matrix copy" {
     var m1 = try Matrix.init(allocator, 2, 2);
     defer m1.deinit();
 
-    m1.set(0, 0, 1.0);
-    m1.set(0, 1, 2.0);
-    m1.set(1, 0, 3.0);
-    m1.set(1, 1, 4.0);
+    try m1.set(0, 0, 1.0);
+    try m1.set(0, 1, 2.0);
+    try m1.set(1, 0, 3.0);
+    try m1.set(1, 1, 4.0);
 
     var m2 = try Matrix.copy(m1, allocator);
     defer m2.deinit();
@@ -414,15 +413,15 @@ test "matrix copy" {
     try testing.expectEqual(@as(usize, 2), m2.cols);
 
     // Check values
-    try testing.expectEqual(@as(f64, 1.0), m2.get(0, 0));
-    try testing.expectEqual(@as(f64, 2.0), m2.get(0, 1));
-    try testing.expectEqual(@as(f64, 3.0), m2.get(1, 0));
-    try testing.expectEqual(@as(f64, 4.0), m2.get(1, 1));
+    try testing.expectEqual(@as(f64, 1.0), try m2.get(0, 0));
+    try testing.expectEqual(@as(f64, 2.0), try m2.get(0, 1));
+    try testing.expectEqual(@as(f64, 3.0), try m2.get(1, 0));
+    try testing.expectEqual(@as(f64, 4.0), try m2.get(1, 1));
 
     // Modify m1 and check that m2 is not affected
-    m1.set(0, 0, 5.0);
-    try testing.expectEqual(@as(f64, 5.0), m1.get(0, 0));
-    try testing.expectEqual(@as(f64, 1.0), m2.get(0, 0));
+    try m1.set(0, 0, 5.0);
+    try testing.expectEqual(@as(f64, 5.0), try m1.get(0, 0));
+    try testing.expectEqual(@as(f64, 1.0), try m2.get(0, 0));
 }
 
 test "element-wise operations" {
@@ -434,42 +433,42 @@ test "element-wise operations" {
     var m2 = try Matrix.init(allocator, 2, 2);
     defer m2.deinit();
 
-    m1.set(0, 0, 1.0);
-    m1.set(0, 1, 2.0);
-    m1.set(1, 0, 3.0);
-    m1.set(1, 1, 4.0);
+    try m1.set(0, 0, 1.0);
+    try m1.set(0, 1, 2.0);
+    try m1.set(1, 0, 3.0);
+    try m1.set(1, 1, 4.0);
 
-    m2.set(0, 0, 5.0);
-    m2.set(0, 1, 6.0);
-    m2.set(1, 0, 7.0);
-    m2.set(1, 1, 8.0);
+    try m2.set(0, 0, 5.0);
+    try m2.set(0, 1, 6.0);
+    try m2.set(1, 0, 7.0);
+    try m2.set(1, 1, 8.0);
 
     // Test addition
     var add_result = try m1.add(m2, allocator);
     defer add_result.deinit();
 
-    try testing.expectEqual(@as(f64, 6.0), add_result.get(0, 0));
-    try testing.expectEqual(@as(f64, 8.0), add_result.get(0, 1));
-    try testing.expectEqual(@as(f64, 10.0), add_result.get(1, 0));
-    try testing.expectEqual(@as(f64, 12.0), add_result.get(1, 1));
+    try testing.expectEqual(@as(f64, 6.0), try add_result.get(0, 0));
+    try testing.expectEqual(@as(f64, 8.0), try add_result.get(0, 1));
+    try testing.expectEqual(@as(f64, 10.0), try add_result.get(1, 0));
+    try testing.expectEqual(@as(f64, 12.0), try add_result.get(1, 1));
 
     // Test subtraction
     var sub_result = try m1.subtract(m2, allocator);
     defer sub_result.deinit();
 
-    try testing.expectEqual(@as(f64, -4.0), sub_result.get(0, 0));
-    try testing.expectEqual(@as(f64, -4.0), sub_result.get(0, 1));
-    try testing.expectEqual(@as(f64, -4.0), sub_result.get(1, 0));
-    try testing.expectEqual(@as(f64, -4.0), sub_result.get(1, 1));
+    try testing.expectEqual(@as(f64, -4.0), try sub_result.get(0, 0));
+    try testing.expectEqual(@as(f64, -4.0), try sub_result.get(0, 1));
+    try testing.expectEqual(@as(f64, -4.0), try sub_result.get(1, 0));
+    try testing.expectEqual(@as(f64, -4.0), try sub_result.get(1, 1));
 
     // Test element-wise multiplication
     var mul_result = try m1.elementWiseMultiply(m2, allocator);
     defer mul_result.deinit();
 
-    try testing.expectEqual(@as(f64, 5.0), mul_result.get(0, 0));
-    try testing.expectEqual(@as(f64, 12.0), mul_result.get(0, 1));
-    try testing.expectEqual(@as(f64, 21.0), mul_result.get(1, 0));
-    try testing.expectEqual(@as(f64, 32.0), mul_result.get(1, 1));
+    try testing.expectEqual(@as(f64, 5.0), try mul_result.get(0, 0));
+    try testing.expectEqual(@as(f64, 12.0), try mul_result.get(0, 1));
+    try testing.expectEqual(@as(f64, 21.0), try mul_result.get(1, 0));
+    try testing.expectEqual(@as(f64, 32.0), try mul_result.get(1, 1));
 }
 
 test "matrix scaling" {
@@ -478,18 +477,18 @@ test "matrix scaling" {
     var m = try Matrix.init(allocator, 2, 2);
     defer m.deinit();
 
-    m.set(0, 0, 1.0);
-    m.set(0, 1, 2.0);
-    m.set(1, 0, 3.0);
-    m.set(1, 1, 4.0);
+    try m.set(0, 0, 1.0);
+    try m.set(0, 1, 2.0);
+    try m.set(1, 0, 3.0);
+    try m.set(1, 1, 4.0);
 
     var scaled = try m.scale(2.0, allocator);
     defer scaled.deinit();
 
-    try testing.expectEqual(@as(f64, 2.0), scaled.get(0, 0));
-    try testing.expectEqual(@as(f64, 4.0), scaled.get(0, 1));
-    try testing.expectEqual(@as(f64, 6.0), scaled.get(1, 0));
-    try testing.expectEqual(@as(f64, 8.0), scaled.get(1, 1));
+    try testing.expectEqual(@as(f64, 2.0), try scaled.get(0, 0));
+    try testing.expectEqual(@as(f64, 4.0), try scaled.get(0, 1));
+    try testing.expectEqual(@as(f64, 6.0), try scaled.get(1, 0));
+    try testing.expectEqual(@as(f64, 8.0), try scaled.get(1, 1));
 }
 
 test "matrix sum rows" {
@@ -498,21 +497,21 @@ test "matrix sum rows" {
     var m = try Matrix.init(allocator, 2, 3);
     defer m.deinit();
 
-    m.set(0, 0, 1.0);
-    m.set(0, 1, 2.0);
-    m.set(0, 2, 3.0);
-    m.set(1, 0, 4.0);
-    m.set(1, 1, 5.0);
-    m.set(1, 2, 6.0);
+    try m.set(0, 0, 1.0);
+    try m.set(0, 1, 2.0);
+    try m.set(0, 2, 3.0);
+    try m.set(1, 0, 4.0);
+    try m.set(1, 1, 5.0);
+    try m.set(1, 2, 6.0);
 
     var sum = try m.sumRows(allocator);
     defer sum.deinit();
 
     try testing.expectEqual(@as(usize, 1), sum.rows);
     try testing.expectEqual(@as(usize, 3), sum.cols);
-    try testing.expectEqual(@as(f64, 5.0), sum.get(0, 0));
-    try testing.expectEqual(@as(f64, 7.0), sum.get(0, 1));
-    try testing.expectEqual(@as(f64, 9.0), sum.get(0, 2));
+    try testing.expectEqual(@as(f64, 5.0), try sum.get(0, 0));
+    try testing.expectEqual(@as(f64, 7.0), try sum.get(0, 1));
+    try testing.expectEqual(@as(f64, 9.0), try sum.get(0, 2));
 }
 
 test "matrix transpose" {
@@ -521,24 +520,24 @@ test "matrix transpose" {
     var m = try Matrix.init(allocator, 2, 3);
     defer m.deinit();
 
-    m.set(0, 0, 1.0);
-    m.set(0, 1, 2.0);
-    m.set(0, 2, 3.0);
-    m.set(1, 0, 4.0);
-    m.set(1, 1, 5.0);
-    m.set(1, 2, 6.0);
+    try m.set(0, 0, 1.0);
+    try m.set(0, 1, 2.0);
+    try m.set(0, 2, 3.0);
+    try m.set(1, 0, 4.0);
+    try m.set(1, 1, 5.0);
+    try m.set(1, 2, 6.0);
 
     var transposed = try m.transpose(allocator);
     defer transposed.deinit();
 
     try testing.expectEqual(@as(usize, 3), transposed.rows);
     try testing.expectEqual(@as(usize, 2), transposed.cols);
-    try testing.expectEqual(@as(f64, 1.0), transposed.get(0, 0));
-    try testing.expectEqual(@as(f64, 4.0), transposed.get(0, 1));
-    try testing.expectEqual(@as(f64, 2.0), transposed.get(1, 0));
-    try testing.expectEqual(@as(f64, 5.0), transposed.get(1, 1));
-    try testing.expectEqual(@as(f64, 3.0), transposed.get(2, 0));
-    try testing.expectEqual(@as(f64, 6.0), transposed.get(2, 1));
+    try testing.expectEqual(@as(f64, 1.0), try transposed.get(0, 0));
+    try testing.expectEqual(@as(f64, 4.0), try transposed.get(0, 1));
+    try testing.expectEqual(@as(f64, 2.0), try transposed.get(1, 0));
+    try testing.expectEqual(@as(f64, 5.0), try transposed.get(1, 1));
+    try testing.expectEqual(@as(f64, 3.0), try transposed.get(2, 0));
+    try testing.expectEqual(@as(f64, 6.0), try transposed.get(2, 1));
 }
 
 test "matrix extract batch" {
@@ -548,14 +547,14 @@ test "matrix extract batch" {
     defer m.deinit();
 
     // Set test values
-    m.set(0, 0, 1.0);
-    m.set(0, 1, 2.0);
-    m.set(1, 0, 3.0);
-    m.set(1, 1, 4.0);
-    m.set(2, 0, 5.0);
-    m.set(2, 1, 6.0);
-    m.set(3, 0, 7.0);
-    m.set(3, 1, 8.0);
+    try m.set(0, 0, 1.0);
+    try m.set(0, 1, 2.0);
+    try m.set(1, 0, 3.0);
+    try m.set(1, 1, 4.0);
+    try m.set(2, 0, 5.0);
+    try m.set(2, 1, 6.0);
+    try m.set(3, 0, 7.0);
+    try m.set(3, 1, 8.0);
 
     // Extract middle two rows
     var batch = try m.extractBatch(1, 3, allocator);
@@ -566,10 +565,10 @@ test "matrix extract batch" {
     try testing.expectEqual(@as(usize, 2), batch.cols);
 
     // Check values
-    try testing.expectEqual(@as(f64, 3.0), batch.get(0, 0));
-    try testing.expectEqual(@as(f64, 4.0), batch.get(0, 1));
-    try testing.expectEqual(@as(f64, 5.0), batch.get(1, 0));
-    try testing.expectEqual(@as(f64, 6.0), batch.get(1, 1));
+    try testing.expectEqual(@as(f64, 3.0), try batch.get(0, 0));
+    try testing.expectEqual(@as(f64, 4.0), try batch.get(0, 1));
+    try testing.expectEqual(@as(f64, 5.0), try batch.get(1, 0));
+    try testing.expectEqual(@as(f64, 6.0), try batch.get(1, 1));
 }
 
 test "matrix fill" {
@@ -584,7 +583,7 @@ test "matrix fill" {
     // Check all elements are 42.0
     for (0..m.rows) |i| {
         for (0..m.cols) |j| {
-            try testing.expectEqual(@as(f64, 42.0), m.get(i, j));
+            try testing.expectEqual(@as(f64, 42.0), try m.get(i, j));
         }
     }
 
@@ -594,7 +593,23 @@ test "matrix fill" {
     // Check all elements are -1.0
     for (0..m.rows) |i| {
         for (0..m.cols) |j| {
-            try testing.expectEqual(@as(f64, -1.0), m.get(i, j));
+            try testing.expectEqual(@as(f64, -1.0), try m.get(i, j));
         }
     }
+}
+
+test "matrix invalid inputs return errors" {
+    const allocator = testing.allocator;
+
+    var m = try Matrix.init(allocator, 2, 2);
+    defer m.deinit();
+
+    var other = try Matrix.init(allocator, 3, 1);
+    defer other.deinit();
+
+    try testing.expectError(MatrixError.IndexOutOfBounds, m.get(2, 0));
+    try testing.expectError(MatrixError.IndexOutOfBounds, m.set(0, 2, 1.0));
+    try testing.expectError(MatrixError.DimensionMismatch, m.add(other, allocator));
+    try testing.expectError(MatrixError.DimensionMismatch, m.dotProduct(other, allocator));
+    try testing.expectError(MatrixError.InvalidBatchIndices, m.extractBatch(1, 1, allocator));
 }

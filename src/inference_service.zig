@@ -39,7 +39,7 @@ pub const InferenceService = struct {
 
         // Copy input values to matrix
         for (input, 0..) |value, i| {
-            input_matrix.set(0, i, value);
+            try input_matrix.set(0, i, value);
         }
 
         // Get prediction
@@ -49,7 +49,7 @@ pub const InferenceService = struct {
         // Convert output matrix to array
         var output = try self.allocator.alloc(f64, output_matrix.cols);
         for (0..output_matrix.cols) |i| {
-            output[i] = output_matrix.get(0, i);
+            output[i] = try output_matrix.get(0, i);
         }
 
         return output;
@@ -74,7 +74,7 @@ pub const InferenceService = struct {
                 return error.InconsistentInputSizes;
             }
             for (input, 0..) |value, j| {
-                input_matrix.set(i, j, value);
+                try input_matrix.set(i, j, value);
             }
         }
 
@@ -94,7 +94,7 @@ pub const InferenceService = struct {
         for (0..output_matrix.rows) |i| {
             outputs[i] = try self.allocator.alloc(f64, output_matrix.cols);
             for (0..output_matrix.cols) |j| {
-                outputs[i][j] = output_matrix.get(i, j);
+                outputs[i][j] = try output_matrix.get(i, j);
             }
         }
 

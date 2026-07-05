@@ -58,13 +58,13 @@ pub fn main() !void {
         var input = try Matrix.init(allocator, 1, 2);
         defer input.deinit();
 
-        input.set(0, 0, sample[0]);
-        input.set(0, 1, sample[1]);
+        try input.set(0, 0, sample[0]);
+        try input.set(0, 1, sample[1]);
 
         var output = try network.forward(input);
         defer output.deinit();
 
-        try stdout.print("Input [{d:.1}, {d:.1}] -> Output: {d:.6}\n", .{ sample[0], sample[1], output.get(0, 0) });
+        try stdout.print("Input [{d:.1}, {d:.1}] -> Output: {d:.6}\n", .{ sample[0], sample[1], try output.get(0, 0) });
     }
 
     try stdout.print("\nNote: Since weights are initialized randomly, outputs will vary between runs.\n", .{});

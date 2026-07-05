@@ -63,21 +63,21 @@ pub fn main(init: std.process.Init) !void {
     // Create XOR training data
     var inputs = try Matrix.init(allocator, 4, 2);
     defer inputs.deinit();
-    inputs.set(0, 0, 0.0);
-    inputs.set(0, 1, 0.0); // [0, 0] -> 0
-    inputs.set(1, 0, 0.0);
-    inputs.set(1, 1, 1.0); // [0, 1] -> 1
-    inputs.set(2, 0, 1.0);
-    inputs.set(2, 1, 0.0); // [1, 0] -> 1
-    inputs.set(3, 0, 1.0);
-    inputs.set(3, 1, 1.0); // [1, 1] -> 0
+    try inputs.set(0, 0, 0.0);
+    try inputs.set(0, 1, 0.0); // [0, 0] -> 0
+    try inputs.set(1, 0, 0.0);
+    try inputs.set(1, 1, 1.0); // [0, 1] -> 1
+    try inputs.set(2, 0, 1.0);
+    try inputs.set(2, 1, 0.0); // [1, 0] -> 1
+    try inputs.set(3, 0, 1.0);
+    try inputs.set(3, 1, 1.0); // [1, 1] -> 0
 
     var targets = try Matrix.init(allocator, 4, 1);
     defer targets.deinit();
-    targets.set(0, 0, 0.0);
-    targets.set(1, 0, 1.0);
-    targets.set(2, 0, 1.0);
-    targets.set(3, 0, 0.0);
+    try targets.set(0, 0, 0.0);
+    try targets.set(1, 0, 1.0);
+    try targets.set(2, 0, 1.0);
+    try targets.set(3, 0, 0.0);
 
     // Initial prediction before training
     {
@@ -90,10 +90,10 @@ pub fn main(init: std.process.Init) !void {
         try writer.print("├─────────┼──────────┼──────────┤\n", .{});
 
         for (0..4) |i| {
-            const x1 = inputs.get(i, 0);
-            const x2 = inputs.get(i, 1);
-            const y_pred = initial_pred.get(i, 0);
-            const y_true = targets.get(i, 0);
+            const x1 = try inputs.get(i, 0);
+            const x2 = try inputs.get(i, 1);
+            const y_pred = try initial_pred.get(i, 0);
+            const y_true = try targets.get(i, 0);
 
             try writer.print("│ [{d}, {d}]  │ {d:.4}   │ {d}        │\n", .{ x1, x2, y_pred, y_true });
         }
@@ -139,10 +139,10 @@ pub fn main(init: std.process.Init) !void {
         for (0..batch_size) |i| {
             const sample_idx = indices[i];
             for (0..inputs.cols) |j| {
-                batch_inputs.set(i, j, inputs.get(sample_idx, j));
+                try batch_inputs.set(i, j, try inputs.get(sample_idx, j));
             }
             for (0..targets.cols) |j| {
-                batch_targets.set(i, j, targets.get(sample_idx, j));
+                try batch_targets.set(i, j, try targets.get(sample_idx, j));
             }
         }
 
@@ -178,10 +178,10 @@ pub fn main(init: std.process.Init) !void {
 
     var correct: usize = 0;
     for (0..4) |i| {
-        const x1 = inputs.get(i, 0);
-        const x2 = inputs.get(i, 1);
-        const y_pred = predictions.get(i, 0);
-        const y_true = targets.get(i, 0);
+        const x1 = try inputs.get(i, 0);
+        const x2 = try inputs.get(i, 1);
+        const y_pred = try predictions.get(i, 0);
+        const y_true = try targets.get(i, 0);
         const is_correct = @abs(y_pred - y_true) < 0.5;
         if (is_correct) correct += 1;
 

@@ -144,9 +144,6 @@ test "response formatting" {
     try response_data.writeJson(&writer);
     const json_str = writer.buffered();
 
-    // Print actual JSON for debugging
-    std.debug.print("\nActual JSON: {s}\n", .{json_str});
-
     // Parse the JSON back to verify values
     const parsed = try json.parseFromSlice(
         Response,

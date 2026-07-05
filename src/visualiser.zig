@@ -204,7 +204,6 @@ pub fn visualiseNetwork(network: *const Network, allocator: Allocator) !ArrayLis
     return buffer.toArrayList();
 }
 
-// TODO: Add tests later
 const testing = std.testing;
 const Activation = @import("activation.zig").Activation;
 

@@ -120,14 +120,14 @@ fn prepareData(allocator: std.mem.Allocator, data: MnistData, start_idx: usize, 
         while (j < image_size) : (j += 1) {
             const pixel = @as(f64, @floatFromInt(data.images[idx * image_size + j])) / 255.0;
             // Keep inputs small but not too small, matching initialization scale
-            input.set(i, j, (pixel - 0.5) * 0.3);
+            try input.set(i, j, (pixel - 0.5) * 0.3);
         }
 
         // Create one-hot encoded target
         const label = data.labels[idx];
         var k: usize = 0;
         while (k < 10) : (k += 1) {
-            target.set(i, k, if (k == label) 1.0 else 0.0);
+            try target.set(i, k, if (k == label) 1.0 else 0.0);
         }
     }
 
@@ -229,7 +229,7 @@ pub fn main() !void {
             var has_invalid = false;
             for (0..output.rows) |i| {
                 for (0..output.cols) |j| {
-                    const val = output.get(i, j);
+                    const val = try output.get(i, j);
                     if (std.math.isNan(val) or std.math.isInf(val)) {
                         has_invalid = true;
                         std.debug.print("Invalid output at batch {d}, row {d}, col {d}: {d}\n", .{ batch, i, j, val });
@@ -248,14 +248,14 @@ pub fn main() !void {
                 std.debug.print("Output values:\n", .{});
                 for (0..@min(output.rows, 3)) |i| {
                     for (0..output.cols) |j| {
-                        std.debug.print("{d:.4} ", .{output.get(i, j)});
+                        std.debug.print("{d:.4} ", .{try output.get(i, j)});
                     }
                     std.debug.print("\n", .{});
                 }
                 std.debug.print("Target values:\n", .{});
                 for (0..@min(target.rows, 3)) |i| {
                     for (0..target.cols) |j| {
-                        std.debug.print("{d:.4} ", .{target.get(i, j)});
+                        std.debug.print("{d:.4} ", .{try target.get(i, j)});
                     }
                     std.debug.print("\n", .{});
                 }
@@ -305,10 +305,10 @@ pub fn main() !void {
             var i: usize = 0;
             while (i < test_output.rows) : (i += 1) {
                 var max_idx: usize = 0;
-                var max_val: f64 = test_output.get(i, 0);
+                var max_val: f64 = try test_output.get(i, 0);
                 var j: usize = 1;
                 while (j < 10) : (j += 1) {
-                    const val = test_output.get(i, j);
+                    const val = try test_output.get(i, j);
                     if (val > max_val) {
                         max_val = val;
                         max_idx = j;

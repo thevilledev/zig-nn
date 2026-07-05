@@ -147,21 +147,21 @@ pub const Activation = struct {
             // Find max value in row for numerical stability
             var max_val: f64 = -math.inf(f64);
             for (0..matrix.cols) |j| {
-                max_val = @max(max_val, matrix.get(i, j));
+                max_val = @max(max_val, try matrix.get(i, j));
             }
 
             // Compute exp(x - max) and sum
             var sum: f64 = 0.0;
             for (0..matrix.cols) |j| {
-                const shifted = matrix.get(i, j) - max_val;
+                const shifted = (try matrix.get(i, j)) - max_val;
                 const exp_val = math.exp(shifted);
-                result.set(i, j, exp_val);
+                try result.set(i, j, exp_val);
                 sum += exp_val;
             }
 
             // Normalize by sum
             for (0..matrix.cols) |j| {
-                result.set(i, j, result.get(i, j) / sum);
+                try result.set(i, j, (try result.get(i, j)) / sum);
             }
         }
 
@@ -191,8 +191,8 @@ pub const Activation = struct {
 
         for (0..matrix.rows) |i| {
             for (0..matrix.cols) |j| {
-                const value = matrix.get(i, j);
-                result.set(i, j, func(value));
+                const value = try matrix.get(i, j);
+                try result.set(i, j, func(value));
             }
         }
 
@@ -210,7 +210,7 @@ pub const Activation = struct {
     /// Memory complexity: O(rows * cols)
     pub fn applyGLU(linear_part: Matrix, gating_part: Matrix, allocator: std.mem.Allocator) !Matrix {
         if (linear_part.rows != gating_part.rows or linear_part.cols != gating_part.cols) {
-            @panic("Matrix dimensions must match for GLU");
+            return error.DimensionMismatch;
         }
 
         var sigmoid_gate = try apply(gating_part, sigmoid, allocator);
@@ -220,9 +220,9 @@ pub const Activation = struct {
 
         for (0..linear_part.rows) |i| {
             for (0..linear_part.cols) |j| {
-                const linear_value = linear_part.get(i, j);
-                const gate_value = sigmoid_gate.get(i, j);
-                result.set(i, j, linear_value * gate_value);
+                const linear_value = try linear_part.get(i, j);
+                const gate_value = try sigmoid_gate.get(i, j);
+                try result.set(i, j, linear_value * gate_value);
             }
         }
 
@@ -240,7 +240,7 @@ pub const Activation = struct {
     /// Memory complexity: O(rows * cols)
     pub fn applySwiGLU(linear_part: Matrix, gating_part: Matrix, allocator: std.mem.Allocator) !Matrix {
         if (linear_part.rows != gating_part.rows or linear_part.cols != gating_part.cols) {
-            @panic("Matrix dimensions must match for SwiGLU");
+            return error.DimensionMismatch;
         }
 
         var swish_gate = try apply(gating_part, swish, allocator);
@@ -250,9 +250,9 @@ pub const Activation = struct {
 
         for (0..linear_part.rows) |i| {
             for (0..linear_part.cols) |j| {
-                const linear_value = linear_part.get(i, j);
-                const gate_value = swish_gate.get(i, j);
-                result.set(i, j, linear_value * gate_value);
+                const linear_value = try linear_part.get(i, j);
+                const gate_value = try swish_gate.get(i, j);
+                try result.set(i, j, linear_value * gate_value);
             }
         }
 
@@ -300,18 +300,18 @@ test "activation function application to matrix" {
     var m = try Matrix.init(allocator, 2, 2);
     defer m.deinit();
 
-    m.set(0, 0, -1.0);
-    m.set(0, 1, 0.0);
-    m.set(1, 0, 1.0);
-    m.set(1, 1, 2.0);
+    try m.set(0, 0, -1.0);
+    try m.set(0, 1, 0.0);
+    try m.set(1, 0, 1.0);
+    try m.set(1, 1, 2.0);
 
     var result = try Activation.apply(m, Activation.relu, allocator);
     defer result.deinit();
 
-    try testing.expectEqual(@as(f64, 0.0), result.get(0, 0));
-    try testing.expectEqual(@as(f64, 0.0), result.get(0, 1));
-    try testing.expectEqual(@as(f64, 1.0), result.get(1, 0));
-    try testing.expectEqual(@as(f64, 2.0), result.get(1, 1));
+    try testing.expectEqual(@as(f64, 0.0), try result.get(0, 0));
+    try testing.expectEqual(@as(f64, 0.0), try result.get(0, 1));
+    try testing.expectEqual(@as(f64, 1.0), try result.get(1, 0));
+    try testing.expectEqual(@as(f64, 2.0), try result.get(1, 1));
 }
 
 test "GLU function" {
@@ -325,24 +325,24 @@ test "GLU function" {
     defer gating.deinit();
 
     // Set test values
-    linear.set(0, 0, 1.0);
-    linear.set(0, 1, 2.0);
-    linear.set(1, 0, 3.0);
-    linear.set(1, 1, 4.0);
+    try linear.set(0, 0, 1.0);
+    try linear.set(0, 1, 2.0);
+    try linear.set(1, 0, 3.0);
+    try linear.set(1, 1, 4.0);
 
-    gating.set(0, 0, 0.0); // sigmoid(0.0) = 0.5
-    gating.set(0, 1, 1.0); // sigmoid(1.0) ≈ 0.731
-    gating.set(1, 0, -1.0); // sigmoid(-1.0) ≈ 0.269
-    gating.set(1, 1, 2.0); // sigmoid(2.0) ≈ 0.881
+    try gating.set(0, 0, 0.0); // sigmoid(0.0) = 0.5
+    try gating.set(0, 1, 1.0); // sigmoid(1.0) ≈ 0.731
+    try gating.set(1, 0, -1.0); // sigmoid(-1.0) ≈ 0.269
+    try gating.set(1, 1, 2.0); // sigmoid(2.0) ≈ 0.881
 
     var result = try Activation.applyGLU(linear, gating, allocator);
     defer result.deinit();
 
     // Expected: linear * sigmoid(gating)
-    try testing.expectApproxEqAbs(@as(f64, 0.5), result.get(0, 0), 0.0001);
-    try testing.expectApproxEqAbs(@as(f64, 1.462), result.get(0, 1), 0.001);
-    try testing.expectApproxEqAbs(@as(f64, 0.807), result.get(1, 0), 0.001);
-    try testing.expectApproxEqAbs(@as(f64, 3.524), result.get(1, 1), 0.001);
+    try testing.expectApproxEqAbs(@as(f64, 0.5), try result.get(0, 0), 0.0001);
+    try testing.expectApproxEqAbs(@as(f64, 1.462), try result.get(0, 1), 0.001);
+    try testing.expectApproxEqAbs(@as(f64, 0.807), try result.get(1, 0), 0.001);
+    try testing.expectApproxEqAbs(@as(f64, 3.524), try result.get(1, 1), 0.001);
 }
 
 test "SwiGLU function" {
@@ -356,24 +356,37 @@ test "SwiGLU function" {
     defer gating.deinit();
 
     // Set test values
-    linear.set(0, 0, 1.0);
-    linear.set(0, 1, 2.0);
-    linear.set(1, 0, 3.0);
-    linear.set(1, 1, 4.0);
+    try linear.set(0, 0, 1.0);
+    try linear.set(0, 1, 2.0);
+    try linear.set(1, 0, 3.0);
+    try linear.set(1, 1, 4.0);
 
-    gating.set(0, 0, 0.0); // swish(0.0) = 0.0
-    gating.set(0, 1, 1.0); // swish(1.0) ≈ 0.731
-    gating.set(1, 0, -1.0); // swish(-1.0) ≈ -0.269
-    gating.set(1, 1, 2.0); // swish(2.0) ≈ 1.762
+    try gating.set(0, 0, 0.0); // swish(0.0) = 0.0
+    try gating.set(0, 1, 1.0); // swish(1.0) ≈ 0.731
+    try gating.set(1, 0, -1.0); // swish(-1.0) ≈ -0.269
+    try gating.set(1, 1, 2.0); // swish(2.0) ≈ 1.762
 
     var result = try Activation.applySwiGLU(linear, gating, allocator);
     defer result.deinit();
 
     // Expected: linear * swish(gating)
-    try testing.expectApproxEqAbs(@as(f64, 0.0), result.get(0, 0), 0.0001);
-    try testing.expectApproxEqAbs(@as(f64, 1.462), result.get(0, 1), 0.001);
-    try testing.expectApproxEqAbs(@as(f64, -0.807), result.get(1, 0), 0.001);
-    try testing.expectApproxEqAbs(@as(f64, 7.046), result.get(1, 1), 0.001);
+    try testing.expectApproxEqAbs(@as(f64, 0.0), try result.get(0, 0), 0.0001);
+    try testing.expectApproxEqAbs(@as(f64, 1.462), try result.get(0, 1), 0.001);
+    try testing.expectApproxEqAbs(@as(f64, -0.807), try result.get(1, 0), 0.001);
+    try testing.expectApproxEqAbs(@as(f64, 7.046), try result.get(1, 1), 0.001);
+}
+
+test "gated activations reject dimension mismatches" {
+    const allocator = testing.allocator;
+
+    var linear = try Matrix.init(allocator, 1, 2);
+    defer linear.deinit();
+
+    var gating = try Matrix.init(allocator, 2, 1);
+    defer gating.deinit();
+
+    try testing.expectError(error.DimensionMismatch, Activation.applyGLU(linear, gating, allocator));
+    try testing.expectError(error.DimensionMismatch, Activation.applySwiGLU(linear, gating, allocator));
 }
 
 test "softmax and applySoftmax" {
@@ -384,32 +397,32 @@ test "softmax and applySoftmax" {
     defer m.deinit();
 
     // Set test values
-    m.set(0, 0, 1.0);
-    m.set(0, 1, 2.0);
-    m.set(0, 2, 3.0);
-    m.set(1, 0, 0.0);
-    m.set(1, 1, 1.0);
-    m.set(1, 2, 2.0);
+    try m.set(0, 0, 1.0);
+    try m.set(0, 1, 2.0);
+    try m.set(0, 2, 3.0);
+    try m.set(1, 0, 0.0);
+    try m.set(1, 1, 1.0);
+    try m.set(1, 2, 2.0);
 
     var result = try Activation.applySoftmax(m, allocator);
     defer result.deinit();
 
     // Test first row [1.0, 2.0, 3.0]
-    try testing.expectApproxEqAbs(@as(f64, 0.0900305733), result.get(0, 0), 0.0001);
-    try testing.expectApproxEqAbs(@as(f64, 0.2447284714), result.get(0, 1), 0.0001);
-    try testing.expectApproxEqAbs(@as(f64, 0.6652409553), result.get(0, 2), 0.0001);
+    try testing.expectApproxEqAbs(@as(f64, 0.0900305733), try result.get(0, 0), 0.0001);
+    try testing.expectApproxEqAbs(@as(f64, 0.2447284714), try result.get(0, 1), 0.0001);
+    try testing.expectApproxEqAbs(@as(f64, 0.6652409553), try result.get(0, 2), 0.0001);
 
     // Test second row [0.0, 1.0, 2.0]
-    try testing.expectApproxEqAbs(@as(f64, 0.0900305733), result.get(1, 0), 0.0001);
-    try testing.expectApproxEqAbs(@as(f64, 0.2447284714), result.get(1, 1), 0.0001);
-    try testing.expectApproxEqAbs(@as(f64, 0.6652409553), result.get(1, 2), 0.0001);
+    try testing.expectApproxEqAbs(@as(f64, 0.0900305733), try result.get(1, 0), 0.0001);
+    try testing.expectApproxEqAbs(@as(f64, 0.2447284714), try result.get(1, 1), 0.0001);
+    try testing.expectApproxEqAbs(@as(f64, 0.6652409553), try result.get(1, 2), 0.0001);
 
     // Verify rows sum to 1
     var sum1: f64 = 0.0;
     var sum2: f64 = 0.0;
     for (0..3) |j| {
-        sum1 += result.get(0, j);
-        sum2 += result.get(1, j);
+        sum1 += try result.get(0, j);
+        sum2 += try result.get(1, j);
     }
     try testing.expectApproxEqAbs(@as(f64, 1.0), sum1, 0.0001);
     try testing.expectApproxEqAbs(@as(f64, 1.0), sum2, 0.0001);

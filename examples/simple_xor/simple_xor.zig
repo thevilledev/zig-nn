@@ -52,16 +52,15 @@ pub fn main() !void {
         var input = try Matrix.init(allocator, 1, 2);
         defer input.deinit();
 
-        input.set(0, 0, input_values[0]);
-        input.set(0, 1, input_values[1]);
+        try input.set(0, 0, input_values[0]);
+        try input.set(0, 1, input_values[1]);
 
         var output = try network.forward(input);
         defer output.deinit();
 
-        try stdout.print("Input [{d:.1}, {d:.1}] -> Output: {d:.6}\n", .{ input_values[0], input_values[1], output.get(0, 0) });
+        try stdout.print("Input [{d:.1}, {d:.1}] -> Output: {d:.6}\n", .{ input_values[0], input_values[1], try output.get(0, 0) });
     }
 
     try stdout.print("\nNote: Since weights are initialized randomly, outputs will not match XOR truth table.\n", .{});
-    try stdout.print("This example demonstrates the structure of a neural network that could learn the XOR function.\n", .{});
-    try stdout.print("Training capabilities will be added in a future update.\n", .{});
+    try stdout.print("This example demonstrates a forward pass; run `zig build run_xor_training` for training.\n", .{});
 }

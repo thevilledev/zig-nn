@@ -56,8 +56,8 @@ pub fn main() !void {
                 2.5 + rng.random().float(f64) * 1.5 // [2.5, 4]
         else
             -2.5 + rng.random().float(f64) * 5.0; // [-2.5, 2.5]
-        x_data.set(i, 0, x);
-        y_data.set(i, 0, x * x * @sin(x));
+        try x_data.set(i, 0, x);
+        try y_data.set(i, 0, x * x * @sin(x));
     }
 
     // Initialize neural network
@@ -126,7 +126,7 @@ pub fn main() !void {
         // Create input matrix with single test point
         var input = try Matrix.init(allocator, 1, 1);
         defer input.deinit();
-        input.set(0, 0, x);
+        try input.set(0, 0, x);
 
         // Get network's prediction
         var prediction = try network.forward(input);
@@ -134,7 +134,8 @@ pub fn main() !void {
 
         // Calculate actual value and display comparison
         const true_value = x * x * @sin(x);
-        const err = @abs(prediction.get(0, 0) - true_value);
-        try stdout.print("x = {d:6.3}: Predicted = {d:8.3}, Actual = {d:8.3}, Error = {d:8.3}\n", .{ x, prediction.get(0, 0), true_value, err });
+        const predicted = try prediction.get(0, 0);
+        const err = @abs(predicted - true_value);
+        try stdout.print("x = {d:6.3}: Predicted = {d:8.3}, Actual = {d:8.3}, Error = {d:8.3}\n", .{ x, predicted, true_value, err });
     }
 }
