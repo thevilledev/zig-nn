@@ -60,9 +60,15 @@ const CliOptions = struct {
     seed: u64 = 42,
     corpus: CorpusPreset = .auto,
     corpus_path: ?[]const u8 = null,
+    checkpoint_in: ?[]const u8 = null,
+    checkpoint_out: ?[]const u8 = null,
     train_demo_head: bool = true,
+    train_full: bool = false,
     train_epochs: usize = 350,
     learning_rate: f64 = 0.5,
+    full_train_steps: usize = 120,
+    full_learning_rate: f64 = 0.03,
+    full_train_stride: usize = 1,
     train_chars: usize = 512,
     prior_chars: usize = 32768,
     corpus_prior: bool = true,
@@ -587,6 +593,83 @@ pub const TinyGPT = struct {
         return count;
     }
 
+    pub fn saveToFile(self: *const TinyGPT, path: []const u8) !void {
+        const io = std.Options.debug_io;
+        const file = try std.Io.Dir.cwd().createFile(io, path, .{});
+        defer file.close(io);
+
+        var buffer: [4096]u8 = undefined;
+        var file_writer = file.writerStreaming(io, &buffer);
+        const writer = &file_writer.interface;
+
+        try writer.writeAll("TGPT");
+        try writer.writeInt(u32, 1, .little);
+        try writer.writeInt(u32, @intCast(self.config.block_size), .little);
+        try writer.writeInt(u32, @intCast(self.config.n_layer), .little);
+        try writer.writeInt(u32, @intCast(self.config.n_head), .little);
+        try writer.writeInt(u32, @intCast(self.config.n_embd), .little);
+        try writer.writeInt(u32, @intCast(self.config.vocab_size), .little);
+
+        try writeMatrix(writer, self.token_embedding);
+        try writeMatrix(writer, self.position_embedding);
+        for (self.blocks) |*block| {
+            try writeLayerNorm(writer, block.ln_1);
+            try writeLinear(writer, block.attn.c_attn);
+            try writeLinear(writer, block.attn.c_proj);
+            try writeLayerNorm(writer, block.ln_2);
+            try writeLinear(writer, block.mlp.c_fc);
+            try writeLinear(writer, block.mlp.c_proj);
+        }
+        try writeLayerNorm(writer, self.ln_f);
+        try writeLinear(writer, self.lm_head);
+
+        try writer.flush();
+    }
+
+    pub fn loadFromFile(allocator: std.mem.Allocator, path: []const u8) !TinyGPT {
+        const io = std.Options.debug_io;
+        const file = try std.Io.Dir.cwd().openFile(io, path, .{});
+        defer file.close(io);
+
+        var buffer: [4096]u8 = undefined;
+        var file_reader = file.readerStreaming(io, &buffer);
+        const reader = &file_reader.interface;
+
+        var magic: [4]u8 = undefined;
+        @memcpy(&magic, try reader.take(4));
+        if (!std.mem.eql(u8, &magic, "TGPT")) return error.InvalidFileFormat;
+
+        const version = try reader.takeInt(u32, .little);
+        if (version != 1) return error.UnsupportedVersion;
+
+        const config: Config = .{
+            .block_size = @intCast(try reader.takeInt(u32, .little)),
+            .n_layer = @intCast(try reader.takeInt(u32, .little)),
+            .n_head = @intCast(try reader.takeInt(u32, .little)),
+            .n_embd = @intCast(try reader.takeInt(u32, .little)),
+            .vocab_size = @intCast(try reader.takeInt(u32, .little)),
+        };
+        if (config.vocab_size != Tokenizer.vocabSize()) return error.UnsupportedVocabulary;
+
+        var model = try TinyGPT.init(allocator, config, 0);
+        errdefer model.deinit();
+
+        try readMatrixInto(reader, &model.token_embedding);
+        try readMatrixInto(reader, &model.position_embedding);
+        for (model.blocks) |*block| {
+            try readLayerNormInto(reader, &block.ln_1);
+            try readLinearInto(reader, &block.attn.c_attn);
+            try readLinearInto(reader, &block.attn.c_proj);
+            try readLayerNormInto(reader, &block.ln_2);
+            try readLinearInto(reader, &block.mlp.c_fc);
+            try readLinearInto(reader, &block.mlp.c_proj);
+        }
+        try readLayerNormInto(reader, &model.ln_f);
+        try readLinearInto(reader, &model.lm_head);
+
+        return model;
+    }
+
     fn embed(self: *TinyGPT, tokens: []const usize) !Matrix {
         var output = try Matrix.init(self.allocator, tokens.len, self.config.n_embd);
         errdefer output.deinit();
@@ -711,6 +794,43 @@ pub fn crossEntropyLoss(logits: Matrix, targets: []const usize) !f64 {
     }
 
     return total_loss / @as(f64, @floatFromInt(targets.len));
+}
+
+fn writeMatrix(writer: anytype, matrix: Matrix) !void {
+    try writer.writeInt(u32, @intCast(matrix.rows), .little);
+    try writer.writeInt(u32, @intCast(matrix.cols), .little);
+    for (matrix.data) |value| {
+        try writer.writeInt(i64, @as(i64, @bitCast(value)), .little);
+    }
+}
+
+fn readMatrixInto(reader: anytype, matrix: *Matrix) !void {
+    const rows: usize = @intCast(try reader.takeInt(u32, .little));
+    const cols: usize = @intCast(try reader.takeInt(u32, .little));
+    if (rows != matrix.rows or cols != matrix.cols) return error.DimensionMismatch;
+    for (matrix.data) |*value| {
+        value.* = @as(f64, @bitCast(try reader.takeInt(i64, .little)));
+    }
+}
+
+fn writeLinear(writer: anytype, linear: Linear) !void {
+    try writeMatrix(writer, linear.weights);
+    try writeMatrix(writer, linear.bias);
+}
+
+fn readLinearInto(reader: anytype, linear: *Linear) !void {
+    try readMatrixInto(reader, &linear.weights);
+    try readMatrixInto(reader, &linear.bias);
+}
+
+fn writeLayerNorm(writer: anytype, layer_norm: LayerNorm) !void {
+    try writeMatrix(writer, layer_norm.weight);
+    try writeMatrix(writer, layer_norm.bias);
+}
+
+fn readLayerNormInto(reader: anytype, layer_norm: *LayerNorm) !void {
+    try readMatrixInto(reader, &layer_norm.weight);
+    try readMatrixInto(reader, &layer_norm.bias);
 }
 
 fn loadCorpus(allocator: std.mem.Allocator, options: CliOptions) !Corpus {
@@ -891,6 +1011,667 @@ fn trainOutputHeadStep(
     }
 }
 
+pub const FullTrainingOptions = struct {
+    steps: usize = 120,
+    learning_rate: f64 = 0.03,
+    context_len: usize = 16,
+    stride: usize = 1,
+};
+
+pub const FullTrainingStats = struct {
+    steps: usize,
+    tokens_seen: usize,
+    initial_loss: f64,
+    final_loss: f64,
+};
+
+const AttentionForwardCache = struct {
+    qkv: Matrix,
+    context: Matrix,
+    probs: []f64,
+    output: Matrix,
+    allocator: std.mem.Allocator,
+
+    fn deinit(self: *AttentionForwardCache) void {
+        self.qkv.deinit();
+        self.context.deinit();
+        self.allocator.free(self.probs);
+        self.output.deinit();
+    }
+};
+
+const BlockTrainCache = struct {
+    input: Matrix,
+    ln1: Matrix,
+    qkv: Matrix,
+    attn_context: Matrix,
+    attn_probs: []f64,
+    attn_output: Matrix,
+    with_attention: Matrix,
+    ln2: Matrix,
+    mlp_preact: Matrix,
+    mlp_activated: Matrix,
+    mlp_output: Matrix,
+    output: Matrix,
+    allocator: std.mem.Allocator,
+
+    fn deinit(self: *BlockTrainCache) void {
+        self.ln1.deinit();
+        self.qkv.deinit();
+        self.attn_context.deinit();
+        self.allocator.free(self.attn_probs);
+        self.attn_output.deinit();
+        self.with_attention.deinit();
+        self.ln2.deinit();
+        self.mlp_preact.deinit();
+        self.mlp_activated.deinit();
+        self.mlp_output.deinit();
+        self.output.deinit();
+    }
+};
+
+const SequenceTrainCache = struct {
+    embedding: Matrix,
+    blocks: []BlockTrainCache,
+    final_input: Matrix,
+    final_norm: Matrix,
+    logits: Matrix,
+    allocator: std.mem.Allocator,
+
+    fn deinit(self: *SequenceTrainCache) void {
+        self.logits.deinit();
+        self.final_norm.deinit();
+        var i = self.blocks.len;
+        while (i > 0) {
+            i -= 1;
+            self.blocks[i].deinit();
+        }
+        self.allocator.free(self.blocks);
+        self.embedding.deinit();
+    }
+};
+
+pub fn trainFullOnCorpus(
+    model: *TinyGPT,
+    corpus: []const u8,
+    options: FullTrainingOptions,
+) !FullTrainingStats {
+    const allocator = model.allocator;
+    const tokens = try Tokenizer.encode(allocator, corpus);
+    defer allocator.free(tokens);
+    if (tokens.len < 2) return error.SequenceTooShort;
+
+    const context_len = @min(@max(options.context_len, @as(usize, 1)), @min(model.config.block_size, tokens.len - 1));
+    const stride = @max(options.stride, @as(usize, 1));
+    const window_count = tokens.len - context_len;
+    if (window_count == 0) return error.SequenceTooShort;
+
+    const initial_loss = try averageCorpusLoss(model, tokens, context_len, 12);
+    for (0..options.steps) |step| {
+        const start = (step * stride) % window_count;
+        const inputs = tokens[start .. start + context_len];
+        const targets = tokens[start + 1 .. start + context_len + 1];
+        _ = try trainFullStep(model, inputs, targets, options.learning_rate);
+    }
+    const final_loss = try averageCorpusLoss(model, tokens, context_len, 12);
+
+    return .{
+        .steps = options.steps,
+        .tokens_seen = options.steps * context_len,
+        .initial_loss = initial_loss,
+        .final_loss = final_loss,
+    };
+}
+
+fn averageCorpusLoss(
+    model: *TinyGPT,
+    tokens: []const usize,
+    context_len: usize,
+    max_windows: usize,
+) !f64 {
+    if (tokens.len <= context_len) return error.SequenceTooShort;
+
+    const window_count = tokens.len - context_len;
+    const samples = @max(@min(max_windows, window_count), @as(usize, 1));
+    const stride = @max(window_count / samples, @as(usize, 1));
+
+    var total: f64 = 0.0;
+    var count: usize = 0;
+    var start: usize = 0;
+    while (start < window_count and count < samples) : ({
+        start += stride;
+        count += 1;
+    }) {
+        var logits = try model.forward(tokens[start .. start + context_len]);
+        defer logits.deinit();
+        total += try crossEntropyLoss(logits, tokens[start + 1 .. start + context_len + 1]);
+    }
+
+    return total / @as(f64, @floatFromInt(count));
+}
+
+fn trainFullStep(
+    model: *TinyGPT,
+    inputs: []const usize,
+    targets: []const usize,
+    learning_rate: f64,
+) !f64 {
+    if (inputs.len != targets.len) return error.DimensionMismatch;
+
+    var cache = try forwardForTraining(model, inputs);
+    defer cache.deinit();
+
+    const loss = try crossEntropyLoss(cache.logits, targets);
+    var grad_logits = try crossEntropyGradient(model.allocator, cache.logits, targets);
+    defer grad_logits.deinit();
+
+    var grad_final_norm = try linearBackward(
+        &model.lm_head,
+        cache.final_norm,
+        grad_logits,
+        model.allocator,
+        learning_rate,
+    );
+    defer grad_final_norm.deinit();
+
+    var grad_current = try layerNormBackward(
+        &model.ln_f,
+        cache.final_input,
+        grad_final_norm,
+        model.allocator,
+        learning_rate,
+    );
+    errdefer grad_current.deinit();
+
+    var i = model.blocks.len;
+    while (i > 0) {
+        i -= 1;
+        const next_grad = try blockBackward(
+            &model.blocks[i],
+            &cache.blocks[i],
+            grad_current,
+            model.allocator,
+            learning_rate,
+        );
+        grad_current.deinit();
+        grad_current = next_grad;
+    }
+
+    try applyEmbeddingGradient(model, inputs, grad_current, learning_rate);
+    grad_current.deinit();
+
+    return loss;
+}
+
+fn forwardForTraining(model: *TinyGPT, tokens: []const usize) !SequenceTrainCache {
+    var embedding = try model.embed(tokens);
+    errdefer embedding.deinit();
+
+    const blocks = try model.allocator.alloc(BlockTrainCache, model.blocks.len);
+    var initialized_blocks: usize = 0;
+    errdefer {
+        var i = initialized_blocks;
+        while (i > 0) {
+            i -= 1;
+            blocks[i].deinit();
+        }
+        model.allocator.free(blocks);
+    }
+
+    var current = embedding;
+    for (model.blocks, 0..) |*block, i| {
+        blocks[i] = try blockForwardForTraining(block, current, model.allocator);
+        initialized_blocks += 1;
+        current = blocks[i].output;
+    }
+
+    var final_norm = try model.ln_f.forward(current, model.allocator);
+    errdefer final_norm.deinit();
+    var logits = try model.lm_head.forward(final_norm, model.allocator);
+    errdefer logits.deinit();
+
+    return .{
+        .embedding = embedding,
+        .blocks = blocks,
+        .final_input = current,
+        .final_norm = final_norm,
+        .logits = logits,
+        .allocator = model.allocator,
+    };
+}
+
+fn blockForwardForTraining(
+    block: *Block,
+    input: Matrix,
+    allocator: std.mem.Allocator,
+) !BlockTrainCache {
+    var ln1 = try block.ln_1.forward(input, allocator);
+    errdefer ln1.deinit();
+
+    var attn = try attentionForwardForTraining(&block.attn, ln1, allocator);
+    errdefer attn.deinit();
+
+    var with_attention = try input.add(attn.output, allocator);
+    errdefer with_attention.deinit();
+
+    var ln2 = try block.ln_2.forward(with_attention, allocator);
+    errdefer ln2.deinit();
+
+    var mlp_preact = try block.mlp.c_fc.forward(ln2, allocator);
+    errdefer mlp_preact.deinit();
+
+    var mlp_activated = try Matrix.init(allocator, mlp_preact.rows, mlp_preact.cols);
+    errdefer mlp_activated.deinit();
+    for (mlp_preact.data, 0..) |value, idx| {
+        mlp_activated.data[idx] = gelu(value);
+    }
+
+    var mlp_output = try block.mlp.c_proj.forward(mlp_activated, allocator);
+    errdefer mlp_output.deinit();
+
+    var output = try with_attention.add(mlp_output, allocator);
+    errdefer output.deinit();
+
+    return .{
+        .input = input,
+        .ln1 = ln1,
+        .qkv = attn.qkv,
+        .attn_context = attn.context,
+        .attn_probs = attn.probs,
+        .attn_output = attn.output,
+        .with_attention = with_attention,
+        .ln2 = ln2,
+        .mlp_preact = mlp_preact,
+        .mlp_activated = mlp_activated,
+        .mlp_output = mlp_output,
+        .output = output,
+        .allocator = allocator,
+    };
+}
+
+fn attentionForwardForTraining(
+    attn: *CausalSelfAttention,
+    input: Matrix,
+    allocator: std.mem.Allocator,
+) !AttentionForwardCache {
+    const seq_len = input.rows;
+    const head_dim = attn.n_embd / attn.n_head;
+    const scale = 1.0 / @sqrt(@as(f64, @floatFromInt(head_dim)));
+
+    var qkv = try attn.c_attn.forward(input, allocator);
+    errdefer qkv.deinit();
+
+    var context = try Matrix.init(allocator, seq_len, attn.n_embd);
+    errdefer context.deinit();
+    context.fill(0.0);
+
+    const probs = try allocator.alloc(f64, attn.n_head * seq_len * seq_len);
+    errdefer allocator.free(probs);
+    @memset(probs, 0.0);
+
+    var scores = try allocator.alloc(f64, seq_len);
+    defer allocator.free(scores);
+
+    for (0..attn.n_head) |head| {
+        const head_offset = head * head_dim;
+        for (0..seq_len) |query_pos| {
+            var max_score = -math.inf(f64);
+            for (0..query_pos + 1) |key_pos| {
+                var score: f64 = 0.0;
+                for (0..head_dim) |d| {
+                    const q = qkv.data[query_pos * qkv.cols + head_offset + d];
+                    const k = qkv.data[key_pos * qkv.cols + attn.n_embd + head_offset + d];
+                    score += q * k;
+                }
+                score *= scale;
+                scores[key_pos] = score;
+                max_score = @max(max_score, score);
+            }
+
+            var exp_sum: f64 = 0.0;
+            for (0..query_pos + 1) |key_pos| {
+                const value = math.exp(scores[key_pos] - max_score);
+                probs[attentionProbIndex(seq_len, head, query_pos, key_pos)] = value;
+                exp_sum += value;
+            }
+
+            for (0..query_pos + 1) |key_pos| {
+                probs[attentionProbIndex(seq_len, head, query_pos, key_pos)] /= exp_sum;
+            }
+
+            for (0..head_dim) |d| {
+                var value: f64 = 0.0;
+                for (0..query_pos + 1) |key_pos| {
+                    const prob = probs[attentionProbIndex(seq_len, head, query_pos, key_pos)];
+                    const v = qkv.data[key_pos * qkv.cols + 2 * attn.n_embd + head_offset + d];
+                    value += prob * v;
+                }
+                context.data[query_pos * context.cols + head_offset + d] = value;
+            }
+        }
+    }
+
+    var output = try attn.c_proj.forward(context, allocator);
+    errdefer output.deinit();
+
+    return .{
+        .qkv = qkv,
+        .context = context,
+        .probs = probs,
+        .output = output,
+        .allocator = allocator,
+    };
+}
+
+fn blockBackward(
+    block: *Block,
+    cache: *const BlockTrainCache,
+    grad_output: Matrix,
+    allocator: std.mem.Allocator,
+    learning_rate: f64,
+) !Matrix {
+    var grad_ln2_out = try mlpBackward(
+        &block.mlp,
+        cache.ln2,
+        cache.mlp_preact,
+        cache.mlp_activated,
+        grad_output,
+        allocator,
+        learning_rate,
+    );
+    defer grad_ln2_out.deinit();
+
+    var grad_with_from_ln2 = try layerNormBackward(
+        &block.ln_2,
+        cache.with_attention,
+        grad_ln2_out,
+        allocator,
+        learning_rate,
+    );
+    defer grad_with_from_ln2.deinit();
+
+    var grad_with_attention = try grad_output.add(grad_with_from_ln2, allocator);
+    defer grad_with_attention.deinit();
+
+    var grad_ln1_out = try attentionBackward(
+        &block.attn,
+        cache.ln1,
+        cache.qkv,
+        cache.attn_context,
+        cache.attn_probs,
+        grad_with_attention,
+        allocator,
+        learning_rate,
+    );
+    defer grad_ln1_out.deinit();
+
+    var grad_input_from_ln1 = try layerNormBackward(
+        &block.ln_1,
+        cache.input,
+        grad_ln1_out,
+        allocator,
+        learning_rate,
+    );
+    defer grad_input_from_ln1.deinit();
+
+    return grad_with_attention.add(grad_input_from_ln1, allocator);
+}
+
+fn mlpBackward(
+    mlp: *MLP,
+    input: Matrix,
+    preact: Matrix,
+    activated: Matrix,
+    grad_output: Matrix,
+    allocator: std.mem.Allocator,
+    learning_rate: f64,
+) !Matrix {
+    var grad_activated = try linearBackward(&mlp.c_proj, activated, grad_output, allocator, learning_rate);
+    defer grad_activated.deinit();
+
+    var grad_preact = try Matrix.init(allocator, preact.rows, preact.cols);
+    defer grad_preact.deinit();
+    for (preact.data, 0..) |value, idx| {
+        grad_preact.data[idx] = grad_activated.data[idx] * geluDerivative(value);
+    }
+
+    return linearBackward(&mlp.c_fc, input, grad_preact, allocator, learning_rate);
+}
+
+fn attentionBackward(
+    attn: *CausalSelfAttention,
+    input: Matrix,
+    qkv: Matrix,
+    context: Matrix,
+    probs: []const f64,
+    grad_output: Matrix,
+    allocator: std.mem.Allocator,
+    learning_rate: f64,
+) !Matrix {
+    const seq_len = input.rows;
+    const head_dim = attn.n_embd / attn.n_head;
+    const scale = 1.0 / @sqrt(@as(f64, @floatFromInt(head_dim)));
+
+    var grad_context = try linearBackward(&attn.c_proj, context, grad_output, allocator, learning_rate);
+    defer grad_context.deinit();
+
+    var grad_qkv = try Matrix.init(allocator, qkv.rows, qkv.cols);
+    defer grad_qkv.deinit();
+    grad_qkv.fill(0.0);
+
+    var grad_probs = try allocator.alloc(f64, seq_len);
+    defer allocator.free(grad_probs);
+
+    for (0..attn.n_head) |head| {
+        const head_offset = head * head_dim;
+        for (0..seq_len) |query_pos| {
+            var prob_grad_dot: f64 = 0.0;
+            for (0..query_pos + 1) |key_pos| {
+                var grad_prob: f64 = 0.0;
+                for (0..head_dim) |d| {
+                    const grad = grad_context.data[query_pos * grad_context.cols + head_offset + d];
+                    const value = qkv.data[key_pos * qkv.cols + 2 * attn.n_embd + head_offset + d];
+                    grad_prob += grad * value;
+                }
+                grad_probs[key_pos] = grad_prob;
+                prob_grad_dot += grad_prob * probs[attentionProbIndex(seq_len, head, query_pos, key_pos)];
+            }
+
+            for (0..query_pos + 1) |key_pos| {
+                const prob = probs[attentionProbIndex(seq_len, head, query_pos, key_pos)];
+                const grad_score = prob * (grad_probs[key_pos] - prob_grad_dot);
+                for (0..head_dim) |d| {
+                    const q_index = query_pos * qkv.cols + head_offset + d;
+                    const k_index = key_pos * qkv.cols + attn.n_embd + head_offset + d;
+                    const v_index = key_pos * qkv.cols + 2 * attn.n_embd + head_offset + d;
+                    const grad_context_value = grad_context.data[query_pos * grad_context.cols + head_offset + d];
+
+                    grad_qkv.data[q_index] += grad_score * qkv.data[k_index] * scale;
+                    grad_qkv.data[k_index] += grad_score * qkv.data[q_index] * scale;
+                    grad_qkv.data[v_index] += grad_context_value * prob;
+                }
+            }
+        }
+    }
+
+    return linearBackward(&attn.c_attn, input, grad_qkv, allocator, learning_rate);
+}
+
+fn linearBackward(
+    linear: *Linear,
+    input: Matrix,
+    grad_output: Matrix,
+    allocator: std.mem.Allocator,
+    learning_rate: f64,
+) !Matrix {
+    if (input.rows != grad_output.rows or input.cols != linear.weights.rows or grad_output.cols != linear.weights.cols) {
+        return error.DimensionMismatch;
+    }
+
+    var grad_input = try Matrix.init(allocator, input.rows, input.cols);
+    errdefer grad_input.deinit();
+
+    for (0..input.rows) |row| {
+        for (0..input.cols) |in_col| {
+            var sum: f64 = 0.0;
+            for (0..grad_output.cols) |out_col| {
+                sum += grad_output.data[row * grad_output.cols + out_col] *
+                    linear.weights.data[in_col * linear.weights.cols + out_col];
+            }
+            grad_input.data[row * grad_input.cols + in_col] = sum;
+        }
+    }
+
+    for (0..linear.weights.rows) |in_col| {
+        for (0..linear.weights.cols) |out_col| {
+            var grad_sum: f64 = 0.0;
+            for (0..input.rows) |row| {
+                grad_sum += input.data[row * input.cols + in_col] *
+                    grad_output.data[row * grad_output.cols + out_col];
+            }
+            linear.weights.data[in_col * linear.weights.cols + out_col] -= learning_rate * grad_sum;
+        }
+    }
+
+    for (0..linear.bias.cols) |out_col| {
+        var grad_sum: f64 = 0.0;
+        for (0..grad_output.rows) |row| {
+            grad_sum += grad_output.data[row * grad_output.cols + out_col];
+        }
+        linear.bias.data[out_col] -= learning_rate * grad_sum;
+    }
+
+    return grad_input;
+}
+
+fn layerNormBackward(
+    layer_norm: *LayerNorm,
+    input: Matrix,
+    grad_output: Matrix,
+    allocator: std.mem.Allocator,
+    learning_rate: f64,
+) !Matrix {
+    if (input.rows != grad_output.rows or input.cols != grad_output.cols or input.cols != layer_norm.weight.cols) {
+        return error.DimensionMismatch;
+    }
+
+    var grad_input = try Matrix.init(allocator, input.rows, input.cols);
+    errdefer grad_input.deinit();
+
+    const grad_weight = try allocator.alloc(f64, input.cols);
+    defer allocator.free(grad_weight);
+    const grad_bias = try allocator.alloc(f64, input.cols);
+    defer allocator.free(grad_bias);
+    const xhat = try allocator.alloc(f64, input.cols);
+    defer allocator.free(xhat);
+    const dy_gamma = try allocator.alloc(f64, input.cols);
+    defer allocator.free(dy_gamma);
+
+    @memset(grad_weight, 0.0);
+    @memset(grad_bias, 0.0);
+
+    const width = @as(f64, @floatFromInt(input.cols));
+    for (0..input.rows) |row| {
+        var mean: f64 = 0.0;
+        for (0..input.cols) |col| {
+            mean += input.data[row * input.cols + col];
+        }
+        mean /= width;
+
+        var variance: f64 = 0.0;
+        for (0..input.cols) |col| {
+            const centered = input.data[row * input.cols + col] - mean;
+            variance += centered * centered;
+        }
+        variance /= width;
+
+        const inv_std = 1.0 / @sqrt(variance + layer_norm.eps);
+        var sum_dy_gamma: f64 = 0.0;
+        var sum_dy_gamma_xhat: f64 = 0.0;
+
+        for (0..input.cols) |col| {
+            const idx = row * input.cols + col;
+            xhat[col] = (input.data[idx] - mean) * inv_std;
+            const grad = grad_output.data[idx];
+            grad_weight[col] += grad * xhat[col];
+            grad_bias[col] += grad;
+            dy_gamma[col] = grad * layer_norm.weight.data[col];
+            sum_dy_gamma += dy_gamma[col];
+            sum_dy_gamma_xhat += dy_gamma[col] * xhat[col];
+        }
+
+        for (0..input.cols) |col| {
+            const value = (inv_std / width) *
+                (width * dy_gamma[col] - sum_dy_gamma - xhat[col] * sum_dy_gamma_xhat);
+            grad_input.data[row * grad_input.cols + col] = value;
+        }
+    }
+
+    for (0..input.cols) |col| {
+        layer_norm.weight.data[col] -= learning_rate * grad_weight[col];
+        layer_norm.bias.data[col] -= learning_rate * grad_bias[col];
+    }
+
+    return grad_input;
+}
+
+fn crossEntropyGradient(
+    allocator: std.mem.Allocator,
+    logits: Matrix,
+    targets: []const usize,
+) !Matrix {
+    if (logits.rows != targets.len) return error.DimensionMismatch;
+    var gradient = try Matrix.init(allocator, logits.rows, logits.cols);
+    errdefer gradient.deinit();
+
+    const scale = 1.0 / @as(f64, @floatFromInt(targets.len));
+    for (targets, 0..) |target, row| {
+        if (target >= logits.cols) return error.TokenOutOfVocabulary;
+
+        var max_logit = -math.inf(f64);
+        for (0..logits.cols) |col| {
+            max_logit = @max(max_logit, logits.data[row * logits.cols + col]);
+        }
+
+        var exp_sum: f64 = 0.0;
+        for (0..logits.cols) |col| {
+            exp_sum += math.exp(logits.data[row * logits.cols + col] - max_logit);
+        }
+
+        for (0..logits.cols) |col| {
+            var value = math.exp(logits.data[row * logits.cols + col] - max_logit) / exp_sum;
+            if (col == target) value -= 1.0;
+            gradient.data[row * gradient.cols + col] = value * scale;
+        }
+    }
+
+    return gradient;
+}
+
+fn applyEmbeddingGradient(
+    model: *TinyGPT,
+    tokens: []const usize,
+    grad_embedding: Matrix,
+    learning_rate: f64,
+) !void {
+    if (tokens.len != grad_embedding.rows or grad_embedding.cols != model.config.n_embd) {
+        return error.DimensionMismatch;
+    }
+
+    for (tokens, 0..) |token, pos| {
+        if (token >= model.config.vocab_size) return error.TokenOutOfVocabulary;
+        for (0..model.config.n_embd) |dim| {
+            const grad = grad_embedding.data[pos * grad_embedding.cols + dim];
+            model.token_embedding.data[token * model.token_embedding.cols + dim] -= learning_rate * grad;
+            model.position_embedding.data[pos * model.position_embedding.cols + dim] -= learning_rate * grad;
+        }
+    }
+}
+
+fn attentionProbIndex(seq_len: usize, head: usize, query_pos: usize, key_pos: usize) usize {
+    return (head * seq_len + query_pos) * seq_len + key_pos;
+}
+
 fn parseArgs(args: []const [:0]const u8) !CliOptions {
     var options: CliOptions = .{};
     var i: usize = 0;
@@ -925,7 +1706,19 @@ fn parseArgs(args: []const [:0]const u8) !CliOptions {
             i += 1;
             if (i >= args.len) return error.MissingArgument;
             options.corpus_path = args[i];
+        } else if (std.mem.eql(u8, arg, "--load-checkpoint")) {
+            i += 1;
+            if (i >= args.len) return error.MissingArgument;
+            options.checkpoint_in = args[i];
+        } else if (std.mem.eql(u8, arg, "--save-checkpoint")) {
+            i += 1;
+            if (i >= args.len) return error.MissingArgument;
+            options.checkpoint_out = args[i];
         } else if (std.mem.eql(u8, arg, "--no-train")) {
+            options.train_demo_head = false;
+            options.train_full = false;
+        } else if (std.mem.eql(u8, arg, "--train-full")) {
+            options.train_full = true;
             options.train_demo_head = false;
         } else if (std.mem.eql(u8, arg, "--train-epochs")) {
             i += 1;
@@ -935,6 +1728,18 @@ fn parseArgs(args: []const [:0]const u8) !CliOptions {
             i += 1;
             if (i >= args.len) return error.MissingArgument;
             options.learning_rate = try std.fmt.parseFloat(f64, args[i]);
+        } else if (std.mem.eql(u8, arg, "--full-train-steps")) {
+            i += 1;
+            if (i >= args.len) return error.MissingArgument;
+            options.full_train_steps = try std.fmt.parseInt(usize, args[i], 10);
+        } else if (std.mem.eql(u8, arg, "--full-learning-rate")) {
+            i += 1;
+            if (i >= args.len) return error.MissingArgument;
+            options.full_learning_rate = try std.fmt.parseFloat(f64, args[i]);
+        } else if (std.mem.eql(u8, arg, "--full-train-stride")) {
+            i += 1;
+            if (i >= args.len) return error.MissingArgument;
+            options.full_train_stride = try std.fmt.parseInt(usize, args[i], 10);
         } else if (std.mem.eql(u8, arg, "--train-chars")) {
             i += 1;
             if (i >= args.len) return error.MissingArgument;
@@ -974,9 +1779,15 @@ fn printUsage(writer: anytype) !void {
         \\  --seed <n>               Deterministic seed (default: 42)
         \\  --corpus <name>          auto, toy, shakespeare, or tinystories
         \\  --corpus-path <path>     Use a custom UTF-8 text corpus
+        \\  --load-checkpoint <path> Load a TinyGPT checkpoint before generation/training
+        \\  --save-checkpoint <path> Save the model checkpoint after optional training
         \\  --no-train               Skip the tiny demo-corpus output-head training
+        \\  --train-full             Train all Transformer weights instead of only the head
         \\  --train-epochs <n>       Output-head training epochs (default: 350)
         \\  --learning-rate <float>  Output-head learning rate (default: 0.5)
+        \\  --full-train-steps <n>   Full-model context-window updates (default: 120)
+        \\  --full-learning-rate <f> Full-model learning rate (default: 0.03)
+        \\  --full-train-stride <n>  Full-model corpus window stride (default: 1)
         \\  --train-chars <n>        Corpus prefix for output-head training (default: 512)
         \\  --prior-chars <n>        Corpus prefix for readable sampling prior (default: 32768)
         \\  --no-corpus-prior        Skip the tiny backoff corpus prior used for readable sampling
@@ -1006,9 +1817,12 @@ pub fn main(init: std.process.Init) !void {
         return err;
     };
 
-    const config: Config = .{};
-    var model = try TinyGPT.init(allocator, config, options.seed);
+    var model = if (options.checkpoint_in) |path|
+        try TinyGPT.loadFromFile(allocator, path)
+    else
+        try TinyGPT.init(allocator, .{}, options.seed);
     defer model.deinit();
+    const config = model.config;
 
     var corpus = loadCorpus(allocator, options) catch |err| {
         if (err == error.MissingCorpusFile) {
@@ -1024,10 +1838,23 @@ pub fn main(init: std.process.Init) !void {
     const training_corpus = limitedCorpus(corpus.text, options.train_chars);
     const prior_corpus = limitedCorpus(corpus.text, options.prior_chars);
 
-    const training_stats: ?TrainingStats = if (options.train_demo_head)
+    const training_stats: ?TrainingStats = if (options.train_demo_head and !options.train_full)
         try trainOutputHeadOnCorpus(&model, training_corpus, options.train_epochs, options.learning_rate)
     else
         null;
+    const full_training_stats: ?FullTrainingStats = if (options.train_full)
+        try trainFullOnCorpus(&model, training_corpus, .{
+            .steps = options.full_train_steps,
+            .learning_rate = options.full_learning_rate,
+            .context_len = config.block_size,
+            .stride = options.full_train_stride,
+        })
+    else
+        null;
+
+    if (options.checkpoint_out) |path| {
+        try model.saveToFile(path);
+    }
 
     const generated_tokens = if (options.corpus_prior)
         try model.generateTokensWithCorpusPrior(
@@ -1061,12 +1888,22 @@ pub fn main(init: std.process.Init) !void {
     });
     try stdout.print("Parameters: {}\n", .{model.parameterCount()});
     try stdout.print("Seed: {}\n", .{options.seed});
+    if (options.checkpoint_in) |path| {
+        try stdout.print("Checkpoint loaded: {s}\n", .{path});
+    }
     try stdout.print("Corpus: {s}", .{corpus.label});
     if (corpus.path) |path| {
         try stdout.print(" ({s})", .{path});
     }
     try stdout.print(", {} chars loaded\n", .{corpus.text.len});
-    if (training_stats) |stats| {
+    if (full_training_stats) |stats| {
+        try stdout.print("Full training: {} window updates, {} tokens seen, {} chars\n", .{
+            stats.steps,
+            stats.tokens_seen,
+            training_corpus.len,
+        });
+        try stdout.print("Full training loss: {d:.4} -> {d:.4}\n", .{ stats.initial_loss, stats.final_loss });
+    } else if (training_stats) |stats| {
         try stdout.print("Demo training: {} frozen-context samples, {} output-head epochs, {} chars\n", .{
             stats.samples,
             options.train_epochs,
@@ -1075,6 +1912,9 @@ pub fn main(init: std.process.Init) !void {
         try stdout.print("Demo training loss: {d:.4} -> {d:.4}\n", .{ stats.initial_loss, stats.final_loss });
     } else {
         try stdout.print("Demo training: skipped, output head remains random\n", .{});
+    }
+    if (options.checkpoint_out) |path| {
+        try stdout.print("Checkpoint saved: {s}\n", .{path});
     }
     try stdout.print("Readable sampling: {s}", .{if (options.corpus_prior) "corpus prior enabled" else "corpus prior disabled"});
     if (options.corpus_prior) {
@@ -1097,7 +1937,9 @@ pub fn main(init: std.process.Init) !void {
         try stdout.print("\nPrompt next-token loss: {d:.4}\n", .{loss});
     }
 
-    if (training_stats != null and options.corpus_prior) {
+    if (full_training_stats != null) {
+        try stdout.print("\nThe Transformer body, embeddings, layer norms, and output head were updated with manual next-token backpropagation.\n", .{});
+    } else if (training_stats != null and options.corpus_prior) {
         try stdout.print("\nThe Transformer body is frozen; the output head and tiny corpus prior make this a readable miniature language demo.\n", .{});
     } else if (training_stats != null) {
         try stdout.print("\nThe Transformer body is frozen; the output head is trained on the tiny built-in corpus for a readable demo.\n", .{});
@@ -1123,6 +1965,15 @@ fn randomNormal(rand: anytype) f64 {
 fn gelu(x: f64) f64 {
     const inner = @sqrt(2.0 / math.pi) * (x + 0.044715 * x * x * x);
     return 0.5 * x * (1.0 + math.tanh(inner));
+}
+
+fn geluDerivative(x: f64) f64 {
+    const sqrt_2_over_pi = @sqrt(2.0 / math.pi);
+    const inner = sqrt_2_over_pi * (x + 0.044715 * x * x * x);
+    const tanh_inner = math.tanh(inner);
+    const inner_derivative = sqrt_2_over_pi * (1.0 + 3.0 * 0.044715 * x * x);
+    return 0.5 * (1.0 + tanh_inner) +
+        0.5 * x * (1.0 - tanh_inner * tanh_inner) * inner_derivative;
 }
 
 fn causalSoftmax(scores: []const f64, query_pos: usize, output: []f64) void {
@@ -1310,5 +2161,63 @@ test "demo output head training lowers corpus loss" {
     const stats = try trainOutputHeadOnCorpus(&model, "to be or to learn.\n", 20, 0.5);
 
     try testing.expect(stats.samples > 0);
+    try testing.expect(stats.final_loss < stats.initial_loss);
+}
+
+test "tiny gpt checkpoint round trip preserves logits" {
+    const allocator = testing.allocator;
+    const config: Config = .{
+        .block_size = 8,
+        .n_layer = 1,
+        .n_head = 2,
+        .n_embd = 16,
+    };
+    var model = try TinyGPT.init(allocator, config, 11);
+    defer model.deinit();
+
+    const path = "test_tiny_gpt_checkpoint.bin";
+    try model.saveToFile(path);
+    defer std.Io.Dir.cwd().deleteFile(std.Options.debug_io, path) catch {};
+
+    var loaded = try TinyGPT.loadFromFile(allocator, path);
+    defer loaded.deinit();
+
+    const tokens = [_]usize{
+        Tokenizer.encodeChar('t'),
+        Tokenizer.encodeChar('o'),
+        Tokenizer.encodeChar(' '),
+    };
+
+    var original_logits = try model.forward(&tokens);
+    defer original_logits.deinit();
+    var loaded_logits = try loaded.forward(&tokens);
+    defer loaded_logits.deinit();
+
+    try testing.expectEqual(original_logits.rows, loaded_logits.rows);
+    try testing.expectEqual(original_logits.cols, loaded_logits.cols);
+    for (original_logits.data, 0..) |value, idx| {
+        try testing.expectApproxEqAbs(value, loaded_logits.data[idx], 1e-12);
+    }
+}
+
+test "full transformer training lowers corpus loss" {
+    const allocator = testing.allocator;
+    const config: Config = .{
+        .block_size = 4,
+        .n_layer = 1,
+        .n_head = 2,
+        .n_embd = 8,
+    };
+    var model = try TinyGPT.init(allocator, config, 21);
+    defer model.deinit();
+
+    const stats = try trainFullOnCorpus(&model, "abababababababab\n", .{
+        .steps = 40,
+        .learning_rate = 0.05,
+        .context_len = config.block_size,
+        .stride = 1,
+    });
+
+    try testing.expect(stats.tokens_seen > 0);
     try testing.expect(stats.final_loss < stats.initial_loss);
 }

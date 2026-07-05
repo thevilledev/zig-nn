@@ -18,6 +18,36 @@ small character backoff prior. This keeps the demo fast while making the output
 readable enough to inspect. To see the raw untrained architecture sample, pass
 `--no-train --no-corpus-prior`.
 
+For an end-to-end training pass over all Transformer weights, embeddings, layer
+norms, and the output head, use `--train-full`. This trains one next-token
+context window per step and can save a reusable checkpoint:
+
+```bash
+zig build run_tiny_gpt -- --corpus toy --train-full --full-train-steps 200 \
+  --full-learning-rate 0.03 --save-checkpoint tiny-gpt.bin
+```
+
+Reload a checkpoint for generation:
+
+```bash
+zig build run_tiny_gpt -- --load-checkpoint tiny-gpt.bin --no-train \
+  --prompt "to be" --tokens 120
+```
+
+Run the OpenAI-compatible inference service:
+
+```bash
+zig build run_tiny_gpt_openai -- --model tiny-gpt.bin --port 8080
+```
+
+Then call it with an OpenAI-style non-streaming request:
+
+```bash
+curl http://127.0.0.1:8080/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"tiny-gpt-zig","messages":[{"role":"user","content":"to be"}],"max_tokens":80}'
+```
+
 Prepare the sourced corpora with:
 
 ```bash
@@ -49,16 +79,18 @@ Implemented pieces:
 - GPT-style MLP with GELU
 - residual connections and final layernorm
 - trainable output projection head
+- manual next-token backpropagation for the full tiny Transformer
+- binary checkpoints for trained model weights
 - temperature and top-k autoregressive sampling
 - data presets for toy, Tiny Shakespeare, TinyStories, and custom text files
 - fast demo-corpus output-head training
+- OpenAI-compatible non-streaming `/v1/chat/completions`, `/v1/completions`,
+  and `/v1/models` serving example
 - readable sampling with a tiny character backoff prior
 
-Full Transformer training is not implemented yet. The file includes
-`crossEntropyLoss`, next-token target helpers, and an output-head-only training
-path so a future version has a clear place to start, but training the whole
-model still needs backward passes for embeddings, layernorm, masked attention,
-and the Transformer MLP, or a future autograd path in the library.
+The full-training path is intentionally educational rather than high-throughput:
+it uses explicit backward passes in the example file, trains single context
+windows, and keeps the model character-level and small enough to inspect.
 
 See [data/README.md](data/README.md) for source links, dataset notes, and the
 intended story arc for improving the model over time.
