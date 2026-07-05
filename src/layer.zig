@@ -1,9 +1,28 @@
 const std = @import("std");
 const matrix_mod = @import("matrix.zig");
 const Matrix = matrix_mod.Matrix;
+const backend_mod = @import("backend.zig");
+const BackendMatrix = backend_mod.Matrix;
 const Activation = @import("activation.zig").Activation;
 const Network = @import("network.zig").Network;
 const testing = std.testing;
+
+fn addBackendBias(weighted_sum: *const BackendMatrix, bias: *const BackendMatrix, allocator: std.mem.Allocator) !*BackendMatrix {
+    if (bias.rows != 1 or bias.cols != weighted_sum.cols) {
+        return error.DimensionMismatch;
+    }
+
+    const broadcast_bias = try BackendMatrix.init(weighted_sum.backend, allocator, weighted_sum.rows, weighted_sum.cols);
+    defer broadcast_bias.deinit();
+
+    for (0..weighted_sum.rows) |row| {
+        for (0..weighted_sum.cols) |col| {
+            broadcast_bias.set(row, col, bias.get(0, col));
+        }
+    }
+
+    return weighted_sum.add(broadcast_bias, allocator);
+}
 
 /// Neural network layer implementation supporting both standard and gated architectures
 /// This module provides two types of layers:
@@ -183,6 +202,31 @@ pub const Layer = struct {
         errdefer if (self.last_output) |last_output| last_output.deinit();
 
         return output;
+    }
+
+    /// Performs backend-aware inference without updating training caches.
+    pub fn forwardBackend(self: *Layer, input: *const BackendMatrix) !*BackendMatrix {
+        if (input.cols != self.getInputSize()) {
+            return error.InvalidInputDimensions;
+        }
+
+        const backend_instance = input.backend;
+        const weights = try BackendMatrix.fromMatrix(backend_instance, self.weights, self.allocator);
+        defer weights.deinit();
+        const bias = try BackendMatrix.fromMatrix(backend_instance, self.bias, self.allocator);
+        defer bias.deinit();
+
+        const weighted_sum = try input.dotProduct(weights, self.allocator);
+        defer weighted_sum.deinit();
+
+        const biased = try addBackendBias(weighted_sum, bias, self.allocator);
+        defer biased.deinit();
+
+        if (self.activation_fn == Activation.softmax) {
+            return biased.applySoftmax(self.allocator);
+        }
+
+        return biased.applyActivation(self.activation_fn, self.allocator);
     }
 
     /// Performs backpropagation through the layer
@@ -486,6 +530,39 @@ pub const GatedLayer = struct {
         errdefer if (self.last_output) |last_output| last_output.deinit();
 
         return output;
+    }
+
+    /// Performs backend-aware gated inference without updating training caches.
+    pub fn forwardBackend(self: *GatedLayer, input: *const BackendMatrix) !*BackendMatrix {
+        if (input.cols != self.getInputSize()) {
+            return error.InvalidInputDimensions;
+        }
+
+        const backend_instance = input.backend;
+        const linear_weights = try BackendMatrix.fromMatrix(backend_instance, self.linear_weights, self.allocator);
+        defer linear_weights.deinit();
+        const linear_bias = try BackendMatrix.fromMatrix(backend_instance, self.linear_bias, self.allocator);
+        defer linear_bias.deinit();
+        const gate_weights = try BackendMatrix.fromMatrix(backend_instance, self.gate_weights, self.allocator);
+        defer gate_weights.deinit();
+        const gate_bias = try BackendMatrix.fromMatrix(backend_instance, self.gate_bias, self.allocator);
+        defer gate_bias.deinit();
+
+        const linear_weighted_sum = try input.dotProduct(linear_weights, self.allocator);
+        defer linear_weighted_sum.deinit();
+        const linear_biased = try addBackendBias(linear_weighted_sum, linear_bias, self.allocator);
+        defer linear_biased.deinit();
+
+        const gate_weighted_sum = try input.dotProduct(gate_weights, self.allocator);
+        defer gate_weighted_sum.deinit();
+        const gate_biased = try addBackendBias(gate_weighted_sum, gate_bias, self.allocator);
+        defer gate_biased.deinit();
+
+        if (self.use_swiglu) {
+            return linear_biased.applySwiGLU(gate_biased, self.allocator);
+        }
+
+        return linear_biased.applyGLU(gate_biased, self.allocator);
     }
 
     /// Backpropagation through the gated layer

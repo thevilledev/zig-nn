@@ -1096,7 +1096,7 @@ pub const MetalBackend = struct {
         metal_matrix.markHostModified();
     }
 
-    pub fn applyActivation(ptr: *anyopaque, matrix: *const Matrix, activation: fn (f64) f64, allocator: Allocator) error{OutOfMemory}!*Matrix {
+    pub fn applyActivation(ptr: *anyopaque, matrix: *const Matrix, activation: *const fn (f64) f64, allocator: Allocator) error{OutOfMemory}!*Matrix {
         const self = @as(*MetalBackend, @ptrCast(@alignCast(ptr)));
 
         // Create result matrix

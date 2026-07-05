@@ -6,6 +6,8 @@ const Layer = @import("layer.zig").Layer;
 const GatedLayer = @import("layer.zig").GatedLayer;
 const matrix_mod = @import("matrix.zig");
 const Matrix = matrix_mod.Matrix;
+const backend_mod = @import("backend.zig");
+const BackendMatrix = backend_mod.Matrix;
 const Activation = @import("activation.zig").Activation;
 
 fn unixMilliTimestamp() i64 {
@@ -63,6 +65,14 @@ pub const LayerVariant = union(LayerType) {
         return switch (self) {
             .Standard => |layer| layer.forward(input),
             .Gated => |layer| layer.forward(input),
+        };
+    }
+
+    /// Performs backend-aware inference through the layer.
+    pub fn forwardBackend(self: LayerVariant, input: *const BackendMatrix) !*BackendMatrix {
+        return switch (self) {
+            .Standard => |layer| layer.forwardBackend(input),
+            .Gated => |layer| layer.forwardBackend(input),
         };
     }
 
@@ -194,6 +204,44 @@ pub const Network = struct {
         }
 
         return current;
+    }
+
+    /// Performs inference through the backend-aware matrix path.
+    ///
+    /// The input matrix determines the backend used for all layer operations.
+    /// Unlike `forward`, this path does not populate backpropagation caches and
+    /// is intended for prediction/inference only.
+    pub fn forwardBackend(self: Network, input: *const BackendMatrix) !*BackendMatrix {
+        if (self.layers.items.len == 0) {
+            return error.EmptyNetwork;
+        }
+
+        var current: *const BackendMatrix = input;
+        var owned_current: ?*BackendMatrix = null;
+
+        for (self.layers.items) |layer| {
+            if (current.cols != layer.getInputSize()) {
+                if (owned_current) |owned| {
+                    owned.deinit();
+                }
+                return error.InvalidInputDimensions;
+            }
+
+            const next = layer.forwardBackend(current) catch |err| {
+                if (owned_current) |owned| {
+                    owned.deinit();
+                }
+                return err;
+            };
+
+            if (owned_current) |owned| {
+                owned.deinit();
+            }
+            current = next;
+            owned_current = next;
+        }
+
+        return owned_current.?;
     }
 
     /// Calculates loss between predicted and target values
@@ -448,6 +496,11 @@ pub const Network = struct {
     /// Predict outputs for given inputs
     pub fn predict(self: Network, inputs: Matrix) !Matrix {
         return self.forward(inputs);
+    }
+
+    /// Predict outputs for backend-aware inputs.
+    pub fn predictBackend(self: Network, inputs: *const BackendMatrix) !*BackendMatrix {
+        return self.forwardBackend(inputs);
     }
 
     /// Get the input size required by the network
@@ -800,6 +853,105 @@ test "network with mixed layer types" {
     // The output should be between 0 and 1 (sigmoid output range)
     const value = try output.get(0, 0);
     try testing.expect(value >= 0.0 and value <= 1.0);
+}
+
+test "network backend inference matches cpu forward for mixed layers" {
+    const allocator = testing.allocator;
+
+    var network = Network.init(allocator, 0.1, .MeanSquaredError);
+    defer network.deinit();
+
+    try network.addLayer(2, 2, Activation.relu, Activation.relu_derivative);
+    try network.addGatedLayer(2, 2, false);
+    try network.addLayer(2, 1, Activation.sigmoid, Activation.sigmoid_derivative);
+
+    const hidden = network.layers.items[0].Standard;
+    try hidden.weights.set(0, 0, 0.5);
+    try hidden.weights.set(0, 1, -0.2);
+    try hidden.weights.set(1, 0, 0.25);
+    try hidden.weights.set(1, 1, 0.75);
+    try hidden.bias.set(0, 0, 0.1);
+    try hidden.bias.set(0, 1, -0.3);
+
+    const gated = network.layers.items[1].Gated;
+    try gated.linear_weights.set(0, 0, 0.4);
+    try gated.linear_weights.set(0, 1, -0.1);
+    try gated.linear_weights.set(1, 0, 0.2);
+    try gated.linear_weights.set(1, 1, 0.3);
+    try gated.linear_bias.set(0, 0, 0.05);
+    try gated.linear_bias.set(0, 1, -0.15);
+    try gated.gate_weights.set(0, 0, -0.3);
+    try gated.gate_weights.set(0, 1, 0.6);
+    try gated.gate_weights.set(1, 0, 0.8);
+    try gated.gate_weights.set(1, 1, -0.4);
+    try gated.gate_bias.set(0, 0, 0.2);
+    try gated.gate_bias.set(0, 1, -0.05);
+
+    const output_layer = network.layers.items[2].Standard;
+    try output_layer.weights.set(0, 0, 0.7);
+    try output_layer.weights.set(1, 0, -0.45);
+    try output_layer.bias.set(0, 0, 0.12);
+
+    var input = try Matrix.init(allocator, 2, 2);
+    defer input.deinit();
+    try input.set(0, 0, 1.0);
+    try input.set(0, 1, 0.5);
+    try input.set(1, 0, -0.25);
+    try input.set(1, 1, 0.75);
+
+    var cpu_output = try network.forward(input);
+    defer cpu_output.deinit();
+
+    try testing.expect(hidden.last_input != null);
+    const cached_first_input = try hidden.last_input.?.get(0, 0);
+
+    var backend_instance = try backend_mod.createBackend(allocator, .CPU);
+    defer backend_instance.deinit();
+
+    const backend_input = try BackendMatrix.fromMatrix(backend_instance, input, allocator);
+    defer backend_input.deinit();
+
+    const backend_output = try network.predictBackend(backend_input);
+    defer backend_output.deinit();
+
+    var backend_cpu_output = try backend_output.toMatrix(allocator);
+    defer backend_cpu_output.deinit();
+
+    try testing.expectEqual(cpu_output.rows, backend_cpu_output.rows);
+    try testing.expectEqual(cpu_output.cols, backend_cpu_output.cols);
+    for (0..cpu_output.rows) |row| {
+        for (0..cpu_output.cols) |col| {
+            try testing.expectApproxEqAbs(try cpu_output.get(row, col), try backend_cpu_output.get(row, col), 1e-12);
+        }
+    }
+
+    const build_options = @import("build_options");
+    if (@import("builtin").os.tag == .macos and build_options.enable_metal) {
+        var metal_backend = try backend_mod.createBackend(allocator, .Metal);
+        defer metal_backend.deinit();
+
+        if (metal_backend.getBackendType() == .Metal) {
+            const metal_input = try BackendMatrix.fromMatrix(metal_backend, input, allocator);
+            defer metal_input.deinit();
+
+            const metal_output = try network.predictBackend(metal_input);
+            defer metal_output.deinit();
+
+            var metal_cpu_output = try metal_output.toMatrix(allocator);
+            defer metal_cpu_output.deinit();
+
+            try testing.expectEqual(cpu_output.rows, metal_cpu_output.rows);
+            try testing.expectEqual(cpu_output.cols, metal_cpu_output.cols);
+            for (0..cpu_output.rows) |row| {
+                for (0..cpu_output.cols) |col| {
+                    try testing.expectApproxEqAbs(try cpu_output.get(row, col), try metal_cpu_output.get(row, col), 1e-4);
+                }
+            }
+        }
+    }
+
+    try testing.expect(hidden.last_input != null);
+    try testing.expectApproxEqAbs(cached_first_input, try hidden.last_input.?.get(0, 0), 1e-12);
 }
 
 test "loss calculation" {

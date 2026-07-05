@@ -20,15 +20,16 @@ boundaries, and small experiments that can be checked against real output.
 
 The repo has two matrix paths:
 
-- `Matrix` is the learning-oriented path used by `Network`, `Layer`, examples,
-  and training code.
+- `Matrix` is the learning-oriented path used by the default `Network`,
+  `Layer`, examples, and training code.
 - `BackendMatrix` is the backend-aware path that can run operations through CPU
   or Metal implementations.
 
-Metal support currently applies to backend matrix operations and GPU examples.
-The higher-level `Network` training and inference path is still CPU-only. CUDA
-is present as an enum/build option, but the library backend currently falls
-back to CPU for CUDA-tagged work.
+Metal support currently applies to backend matrix operations, GPU examples, and
+backend-aware `Network.forwardBackend` / `Network.predictBackend` inference.
+The higher-level training path is still CPU-only. CUDA is present as an
+enum/build option, but the library backend currently falls back to CPU for
+CUDA-tagged work.
 
 ## Start Here
 

@@ -3,8 +3,10 @@ const Allocator = std.mem.Allocator;
 const testing = std.testing;
 const cpu_backend_mod = @import("cpu_backend.zig");
 const metal_backend_mod = @import("metal_backend.zig"); // Ensure this import exists
+const matrix_mod = @import("matrix.zig");
 const root = @import("root.zig");
 const BackendInstance = root.BackendInstance;
+const CpuMatrix = matrix_mod.Matrix;
 
 /// BackendType enum represents the available computation backends
 pub const BackendType = enum {
@@ -51,7 +53,7 @@ pub const ComputeBackend = struct {
     randomizeFn: *const fn (ptr: *anyopaque, matrix: *Matrix, min: f64, max: f64) void,
 
     // Activation functions
-    applyActivationFn: *const fn (ptr: *anyopaque, matrix: *const Matrix, activation: fn (f64) f64, allocator: Allocator) error{OutOfMemory}!*Matrix,
+    applyActivationFn: *const fn (ptr: *anyopaque, matrix: *const Matrix, activation: *const fn (f64) f64, allocator: Allocator) error{OutOfMemory}!*Matrix,
 
     applySoftmaxFn: *const fn (ptr: *anyopaque, matrix: *const Matrix, allocator: Allocator) error{OutOfMemory}!*Matrix,
 
@@ -123,7 +125,7 @@ pub const ComputeBackend = struct {
         self.randomizeFn(self.ptr, matrix, min, max);
     }
 
-    pub fn applyActivation(self: *const ComputeBackend, matrix: *const Matrix, activation: fn (f64) f64, allocator: Allocator) error{OutOfMemory}!*Matrix {
+    pub fn applyActivation(self: *const ComputeBackend, matrix: *const Matrix, activation: *const fn (f64) f64, allocator: Allocator) error{OutOfMemory}!*Matrix {
         return self.applyActivationFn(self.ptr, matrix, activation, allocator);
     }
 
@@ -161,6 +163,34 @@ pub const Matrix = struct {
         // the Matrix struct and set impl_data. We just need to store the backend instance.
         matrix.backend = backend_instance;
         return matrix;
+    }
+
+    /// Creates a backend-aware matrix by copying values from the CPU Matrix path.
+    pub fn fromMatrix(backend_instance: BackendInstance, source: CpuMatrix, allocator: Allocator) !*Matrix {
+        const result = try Matrix.init(backend_instance, allocator, source.rows, source.cols);
+        errdefer result.deinit();
+
+        for (0..source.rows) |row| {
+            for (0..source.cols) |col| {
+                result.set(row, col, try source.get(row, col));
+            }
+        }
+
+        return result;
+    }
+
+    /// Copies this backend-aware matrix into the CPU Matrix representation.
+    pub fn toMatrix(self: *const Matrix, allocator: Allocator) !CpuMatrix {
+        var result = try CpuMatrix.init(allocator, self.rows, self.cols);
+        errdefer result.deinit();
+
+        for (0..self.rows) |row| {
+            for (0..self.cols) |col| {
+                try result.set(row, col, self.get(row, col));
+            }
+        }
+
+        return result;
     }
 
     /// Frees the matrix memory
@@ -237,7 +267,7 @@ pub const Matrix = struct {
     // --- Activation Functions directly on Matrix ---
     // These now use the backend instance stored in the matrix
 
-    pub fn applyActivation(self: *const Matrix, activation_fn: fn (f64) f64, allocator: Allocator) !*Matrix {
+    pub fn applyActivation(self: *const Matrix, activation_fn: *const fn (f64) f64, allocator: Allocator) !*Matrix {
         return self.backend.applyActivation(self, activation_fn, allocator);
     }
 

@@ -42,10 +42,13 @@ Two main layer types:
 - `BackendMatrix` provides a separate backend-aware matrix API
 - CPU backend implements all backend matrix operations
 - Metal backend accelerates backend matrix operations on macOS
+- `Network.forwardBackend` and `Network.predictBackend` provide
+  backend-aware inference without updating training caches
 - CUDA currently falls back to CPU and is not implemented yet
 
-The high-level `Network` type still uses the CPU `Matrix` implementation.
-Metal support should be verified through backend tests and GPU examples.
+The default high-level `Network.forward`, training, and backpropagation paths
+still use the CPU `Matrix` implementation. Metal support should be verified
+through backend tests and GPU examples.
 
 ### Quantization (`quantization.zig`)
 - Uniform scalar quantization baseline
@@ -102,7 +105,8 @@ Using Zig's error union types for handling:
 
 Areas for potential improvement:
 1. SIMD optimizations
-2. Wiring `Network` and `Layer` to the backend matrix API
+2. Extending backend-aware inference toward persistent backend parameters and
+   backend-aware training
 3. Distributed training support
 4. Additional layer types:
    - Convolutional layers

@@ -294,7 +294,7 @@ pub const CPUBackend = struct {
         }
     }
 
-    pub fn applyActivation(ptr: *anyopaque, matrix: *const Matrix, activation: fn (f64) f64, allocator: Allocator) error{OutOfMemory}!*Matrix {
+    pub fn applyActivation(ptr: *anyopaque, matrix: *const Matrix, activation: *const fn (f64) f64, allocator: Allocator) error{OutOfMemory}!*Matrix {
         _ = @as(*CPUBackend, @ptrCast(@alignCast(ptr)));
 
         const result = try initMatrix(undefined, allocator, matrix.rows, matrix.cols);

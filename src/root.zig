@@ -205,7 +205,7 @@ pub const BackendInstance = union(BackendType) {
         }
     }
 
-    pub fn applyActivation(self: BackendInstance, matrix: *const BackendMatrix, activation_fn: fn (f64) f64, allocator: std.mem.Allocator) !*BackendMatrix {
+    pub fn applyActivation(self: BackendInstance, matrix: *const BackendMatrix, activation_fn: *const fn (f64) f64, allocator: std.mem.Allocator) !*BackendMatrix {
         const result = try switch (self) {
             .CPU => |ptr| CPUBackend.applyActivation(ptr, matrix, activation_fn, allocator),
             .Metal => |ptr| MetalBackend.applyActivation(ptr, matrix, activation_fn, allocator),
