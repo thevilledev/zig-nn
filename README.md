@@ -62,6 +62,9 @@ make example-turboquant
 make example-tiny-gpt
 make example-gpu-benchmark
 
+# Prepare sourced Tiny GPT corpora
+make prepare-tiny-gpt-data
+
 # Build with different optimization modes
 make BUILD_MODE=ReleaseFast
 make release  # Build with ReleaseSafe mode
@@ -125,6 +128,14 @@ Run the tiny GPT architecture demo with:
 
 ```bash
 zig build run_tiny_gpt -- --prompt "to be" --tokens 80 --seed 42
+```
+
+To move the Tiny GPT example from the checked-in toy corpus to sourced corpora,
+run:
+
+```bash
+make prepare-tiny-gpt-data
+zig build run_tiny_gpt -- --corpus tinystories --prompt "Once upon a time"
 ```
 
 ## Learning Goals

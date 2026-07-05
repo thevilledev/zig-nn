@@ -106,6 +106,11 @@ example-tiny-gpt:
 	@echo "Running Tiny GPT example..."
 	$(ZIG) build run_tiny_gpt -Doptimize=$(BUILD_MODE)
 
+.PHONY: prepare-tiny-gpt-data
+prepare-tiny-gpt-data:
+	@echo "Preparing Tiny GPT corpora..."
+	examples/tiny_gpt/scripts/prepare_data.sh
+
 # Build release version
 .PHONY: release
 release:
@@ -134,6 +139,8 @@ help:
 	@printf "  release                     Build with RELEASE_MODE\n"
 	@printf "  format                      Format Zig source\n"
 	@printf "  clean                       Remove build artifacts\n\n"
+	@printf "Data targets:\n"
+	@printf "  prepare-tiny-gpt-data       Download Tiny GPT demo corpora\n\n"
 	@printf "Example targets:\n"
 	@printf "  example-simple-xor          Run simple XOR\n"
 	@printf "  example-gated-network       Run gated network\n"

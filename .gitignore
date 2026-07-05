@@ -3,4 +3,9 @@ zig-out
 plan.md
 .cursor
 data
+!examples/tiny_gpt/data/
+!examples/tiny_gpt/data/README.md
+!examples/tiny_gpt/data/toy.txt
+examples/tiny_gpt/data/shakespeare/
+examples/tiny_gpt/data/tinystories/
 *.bin

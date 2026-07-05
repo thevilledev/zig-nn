@@ -58,13 +58,38 @@ const CliOptions = struct {
     temperature: f64 = 1.0,
     top_k: usize = 8,
     seed: u64 = 42,
+    corpus: CorpusPreset = .auto,
+    corpus_path: ?[]const u8 = null,
     train_demo_head: bool = true,
     train_epochs: usize = 350,
     learning_rate: f64 = 0.5,
+    train_chars: usize = 512,
+    prior_chars: usize = 32768,
     corpus_prior: bool = true,
 };
 
-const demo_corpus =
+const CorpusPreset = enum {
+    auto,
+    toy,
+    shakespeare,
+    tinystories,
+};
+
+const Corpus = struct {
+    text: []const u8,
+    label: []const u8,
+    path: ?[]const u8,
+    owned: bool,
+    allocator: std.mem.Allocator,
+
+    fn deinit(self: *Corpus) void {
+        if (self.owned) {
+            self.allocator.free(self.text);
+        }
+    }
+};
+
+const fallback_toy_corpus =
     \\to be, or not to be, that is the question.
     \\the tiny model learns from a little play.
     \\to be a small machine is still to speak.
@@ -74,6 +99,11 @@ const demo_corpus =
     \\to be clear, the demo repeats simple words.
     \\
 ;
+
+const toy_corpus_path = "examples/tiny_gpt/data/toy.txt";
+const shakespeare_corpus_path = "examples/tiny_gpt/data/shakespeare/input.txt";
+const tinystories_corpus_path = "examples/tiny_gpt/data/tinystories/tinystories_1mb.txt";
+const max_corpus_bytes = 8 * 1024 * 1024;
 
 const Linear = struct {
     weights: Matrix,
@@ -683,6 +713,70 @@ pub fn crossEntropyLoss(logits: Matrix, targets: []const usize) !f64 {
     return total_loss / @as(f64, @floatFromInt(targets.len));
 }
 
+fn loadCorpus(allocator: std.mem.Allocator, options: CliOptions) !Corpus {
+    if (options.corpus_path) |path| {
+        return (try readCorpusFile(allocator, path, "custom corpus")) orelse error.MissingCorpusFile;
+    }
+
+    switch (options.corpus) {
+        .auto => {
+            if (try readCorpusFile(allocator, tinystories_corpus_path, "TinyStories 1MB")) |corpus| return corpus;
+            if (try readCorpusFile(allocator, shakespeare_corpus_path, "Tiny Shakespeare")) |corpus| return corpus;
+            if (try readCorpusFile(allocator, toy_corpus_path, "toy corpus")) |corpus| return corpus;
+            return fallbackToyCorpus(allocator);
+        },
+        .toy => {
+            if (try readCorpusFile(allocator, toy_corpus_path, "toy corpus")) |corpus| return corpus;
+            return fallbackToyCorpus(allocator);
+        },
+        .shakespeare => {
+            return (try readCorpusFile(allocator, shakespeare_corpus_path, "Tiny Shakespeare")) orelse error.MissingCorpusFile;
+        },
+        .tinystories => {
+            return (try readCorpusFile(allocator, tinystories_corpus_path, "TinyStories 1MB")) orelse error.MissingCorpusFile;
+        },
+    }
+}
+
+fn readCorpusFile(
+    allocator: std.mem.Allocator,
+    path: []const u8,
+    label: []const u8,
+) !?Corpus {
+    const text = std.Io.Dir.cwd().readFileAlloc(
+        std.Options.debug_io,
+        path,
+        allocator,
+        .limited(max_corpus_bytes),
+    ) catch |err| switch (err) {
+        error.FileNotFound => return null,
+        else => return err,
+    };
+
+    return .{
+        .text = text,
+        .label = label,
+        .path = path,
+        .owned = true,
+        .allocator = allocator,
+    };
+}
+
+fn fallbackToyCorpus(allocator: std.mem.Allocator) Corpus {
+    return .{
+        .text = fallback_toy_corpus,
+        .label = "built-in toy corpus",
+        .path = null,
+        .owned = false,
+        .allocator = allocator,
+    };
+}
+
+fn limitedCorpus(text: []const u8, limit: usize) []const u8 {
+    if (limit == 0 or limit >= text.len) return text;
+    return text[0..limit];
+}
+
 const TrainingStats = struct {
     samples: usize,
     initial_loss: f64,
@@ -822,6 +916,15 @@ fn parseArgs(args: []const [:0]const u8) !CliOptions {
             i += 1;
             if (i >= args.len) return error.MissingArgument;
             options.seed = try std.fmt.parseInt(u64, args[i], 10);
+        } else if (std.mem.eql(u8, arg, "--corpus")) {
+            i += 1;
+            if (i >= args.len) return error.MissingArgument;
+            options.corpus = try parseCorpusPreset(args[i]);
+            options.corpus_path = null;
+        } else if (std.mem.eql(u8, arg, "--corpus-path")) {
+            i += 1;
+            if (i >= args.len) return error.MissingArgument;
+            options.corpus_path = args[i];
         } else if (std.mem.eql(u8, arg, "--no-train")) {
             options.train_demo_head = false;
         } else if (std.mem.eql(u8, arg, "--train-epochs")) {
@@ -832,6 +935,14 @@ fn parseArgs(args: []const [:0]const u8) !CliOptions {
             i += 1;
             if (i >= args.len) return error.MissingArgument;
             options.learning_rate = try std.fmt.parseFloat(f64, args[i]);
+        } else if (std.mem.eql(u8, arg, "--train-chars")) {
+            i += 1;
+            if (i >= args.len) return error.MissingArgument;
+            options.train_chars = try std.fmt.parseInt(usize, args[i], 10);
+        } else if (std.mem.eql(u8, arg, "--prior-chars")) {
+            i += 1;
+            if (i >= args.len) return error.MissingArgument;
+            options.prior_chars = try std.fmt.parseInt(usize, args[i], 10);
         } else if (std.mem.eql(u8, arg, "--no-corpus-prior")) {
             options.corpus_prior = false;
         } else if (std.mem.eql(u8, arg, "--help")) {
@@ -841,6 +952,14 @@ fn parseArgs(args: []const [:0]const u8) !CliOptions {
         }
     }
     return options;
+}
+
+fn parseCorpusPreset(value: []const u8) !CorpusPreset {
+    if (std.mem.eql(u8, value, "auto")) return .auto;
+    if (std.mem.eql(u8, value, "toy")) return .toy;
+    if (std.mem.eql(u8, value, "shakespeare")) return .shakespeare;
+    if (std.mem.eql(u8, value, "tinystories")) return .tinystories;
+    return error.UnknownCorpusPreset;
 }
 
 fn printUsage(writer: anytype) !void {
@@ -853,10 +972,18 @@ fn printUsage(writer: anytype) !void {
         \\  --temperature <float>    Sampling temperature (default: 1.0)
         \\  --top-k <n>              Restrict sampling to top k tokens (default: 8)
         \\  --seed <n>               Deterministic seed (default: 42)
+        \\  --corpus <name>          auto, toy, shakespeare, or tinystories
+        \\  --corpus-path <path>     Use a custom UTF-8 text corpus
         \\  --no-train               Skip the tiny demo-corpus output-head training
         \\  --train-epochs <n>       Output-head training epochs (default: 350)
         \\  --learning-rate <float>  Output-head learning rate (default: 0.5)
+        \\  --train-chars <n>        Corpus prefix for output-head training (default: 512)
+        \\  --prior-chars <n>        Corpus prefix for readable sampling prior (default: 32768)
         \\  --no-corpus-prior        Skip the tiny backoff corpus prior used for readable sampling
+        \\
+        \\Data:
+        \\  `--corpus auto` uses prepared TinyStories, then Tiny Shakespeare, then toy.
+        \\  Run `make prepare-tiny-gpt-data` to download the sourced corpora.
         \\
     );
 }
@@ -883,8 +1010,22 @@ pub fn main(init: std.process.Init) !void {
     var model = try TinyGPT.init(allocator, config, options.seed);
     defer model.deinit();
 
+    var corpus = loadCorpus(allocator, options) catch |err| {
+        if (err == error.MissingCorpusFile) {
+            try stdout.print(
+                "Missing corpus file. Run `make prepare-tiny-gpt-data`, use `--corpus toy`, or pass `--corpus-path <path>`.\n",
+                .{},
+            );
+        }
+        return err;
+    };
+    defer corpus.deinit();
+
+    const training_corpus = limitedCorpus(corpus.text, options.train_chars);
+    const prior_corpus = limitedCorpus(corpus.text, options.prior_chars);
+
     const training_stats: ?TrainingStats = if (options.train_demo_head)
-        try trainOutputHeadOnCorpus(&model, demo_corpus, options.train_epochs, options.learning_rate)
+        try trainOutputHeadOnCorpus(&model, training_corpus, options.train_epochs, options.learning_rate)
     else
         null;
 
@@ -895,7 +1036,7 @@ pub fn main(init: std.process.Init) !void {
             options.tokens,
             options.temperature,
             options.top_k,
-            demo_corpus,
+            prior_corpus,
         )
     else
         try model.generateTokens(
@@ -920,13 +1061,27 @@ pub fn main(init: std.process.Init) !void {
     });
     try stdout.print("Parameters: {}\n", .{model.parameterCount()});
     try stdout.print("Seed: {}\n", .{options.seed});
+    try stdout.print("Corpus: {s}", .{corpus.label});
+    if (corpus.path) |path| {
+        try stdout.print(" ({s})", .{path});
+    }
+    try stdout.print(", {} chars loaded\n", .{corpus.text.len});
     if (training_stats) |stats| {
-        try stdout.print("Demo training: {} frozen-context samples, {} output-head epochs\n", .{ stats.samples, options.train_epochs });
+        try stdout.print("Demo training: {} frozen-context samples, {} output-head epochs, {} chars\n", .{
+            stats.samples,
+            options.train_epochs,
+            training_corpus.len,
+        });
         try stdout.print("Demo training loss: {d:.4} -> {d:.4}\n", .{ stats.initial_loss, stats.final_loss });
     } else {
         try stdout.print("Demo training: skipped, output head remains random\n", .{});
     }
-    try stdout.print("Readable sampling: {s}\n", .{if (options.corpus_prior) "tiny corpus prior enabled" else "corpus prior disabled"});
+    try stdout.print("Readable sampling: {s}", .{if (options.corpus_prior) "corpus prior enabled" else "corpus prior disabled"});
+    if (options.corpus_prior) {
+        try stdout.print(", {} chars\n", .{prior_corpus.len});
+    } else {
+        try stdout.print("\n", .{});
+    }
     try stdout.print("\nPrompt: \"{s}\"\n\n{s}\n", .{ options.prompt, generated_text });
 
     const prompt_tokens = try Tokenizer.encode(allocator, options.prompt);
