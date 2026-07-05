@@ -2,151 +2,77 @@
 
 [![Work in Progress](https://img.shields.io/badge/Status-Work%20in%20Progress-yellow)](https://github.com/thevilledev/zig-nn)
 
-A minimalistic neural network implementation in Zig for learning purposes.
-This project focuses on implementing the pieces directly enough to inspect
-the math, run examples, and compare small experiments against actual output.
+A small neural-network playground written in Zig.
 
-## Features
+This is not trying to be a production ML framework. The point is to make the
+mechanics visible: matrix operations, layers, training loops, backend
+boundaries, and small experiments that can be checked against real output.
 
-- Matrix operations from scratch
-- Common activation functions (Sigmoid, Linear, ReLU, Tanh)
-- Advanced activation functions (Swish, GLU, SwiGLU)
-- Basic feed-forward neural network architecture
-- Support for gated architectures used in modern transformer models
-- Mean squared error, cross entropy, and binary cross entropy losses
-- Mini-batch training, model save/load, and inference service helpers
-- CPU backend plus a Metal backend for backend matrix operations
-- Reproducible experiments for testing research ideas in this repo
+## What This Repo Is For
 
-See [examples](examples/).
+- Learning neural-network fundamentals by implementing the pieces directly
+- Practicing Zig memory management, error handling, and build tooling
+- Running small examples that expose the math instead of hiding it
+- Trying focused research ideas and comparing them with measured results
+- Exploring a CPU-first implementation with a separate backend-aware matrix path
 
-## Current Architecture
+## Current Shape
 
-There are two matrix paths:
+The repo has two matrix paths:
 
-- `Matrix` powers the learning-oriented `Network`, `Layer`, examples, and
-  training code.
-- `BackendMatrix` powers the backend abstraction and can run operations on
-  CPU or Metal.
+- `Matrix` is the learning-oriented path used by `Network`, `Layer`, examples,
+  and training code.
+- `BackendMatrix` is the backend-aware path that can run operations through CPU
+  or Metal implementations.
 
-Metal support is available for backend matrix operations and GPU examples.
-The higher-level `Network` training and inference path is still CPU-only.
-CUDA is present as an enum/build option, but currently falls back to CPU.
+Metal support currently applies to backend matrix operations and GPU examples.
+The higher-level `Network` training and inference path is still CPU-only. CUDA
+is present as an enum/build option, but the library backend currently falls
+back to CPU for CUDA-tagged work.
 
-## Documentation
-
-Detailed documentation is available in the `docs` directory:
-- [Neural Network Architecture](docs/architecture.md) - Design principles and implementation details
-- [Advanced Activation Functions](docs/activation_functions.md) - Detailed information about activation functions
-
-Research experiments live beside the examples they run. The first one is:
-
-- [TurboQuant](examples/quantization/README.md) - vector quantization metrics
-  and a rotated scalar quantization experiment
-- [Tiny GPT](examples/tiny_gpt/README.md) - a small decoder-only Transformer
-  with causal attention and autoregressive sampling
-
-## Building
-
-Make sure you have Zig `0.16.0` installed on your system. This project is developed with the latest stable version of Zig.
-
-For convenience, a Makefile is provided with common operations:
+## Start Here
 
 ```bash
 # Build, test, and build examples
 make
 
-# Run specific examples, for example:
-make example-simple-xor
-make example-turboquant
-make example-tiny-gpt
-make example-gpu-benchmark
+# Run quick examples
+make run-examples
 
-# Prepare sourced Tiny GPT corpora
+# Prepare optional Tiny GPT corpora
 make prepare-tiny-gpt-data
 
-# Build with different optimization modes
-make BUILD_MODE=ReleaseFast
-make release  # Build with ReleaseSafe mode
-
-# See all available commands
+# See available Make targets
 make help
 ```
 
-## Testing
+For setup details and direct `zig build` commands, see
+[Getting Started](docs/getting-started.md).
 
-The project includes a comprehensive test suite to verify the functionality of all components. The build system is configured to run tests for each module sequentially, making it easy to identify which component has issues.
+## Guide
 
-```bash
-# Run all tests
-make test
+- [Getting Started](docs/getting-started.md) - prerequisites, build commands,
+  tests, and common development tasks
+- [Examples](docs/examples.md) - runnable demos and what each one is meant to
+  show
+- [Experiments](docs/experiments.md) - research-style probes, metrics, and
+  current experiment notes
+- [GPU and Backend Notes](docs/gpu.md) - current backend boundaries, Metal
+  verification, and CUDA status
+- [Neural Network Architecture](docs/architecture.md) - design principles and
+  component overview
+- [Advanced Activation Functions](docs/activation_functions.md) - Swish, GLU,
+  SwiGLU, and implementation notes
 
-# Run tests for specific components, for example:
-zig build test-matrix     # Run matrix operation tests
-zig build test-activation # Run activation function tests
-zig build test-layer      # Run neural network layer tests
-zig build test-network    # Run full network tests
-zig build test-quantization # Run quantization tests
-```
+## Repository Map
 
-## GPU / Metal Verification
-
-On macOS, run:
-
-```bash
-zig build -Dgpu=metal test-metal_backend --summary all
-zig build -Dgpu=metal run_gpu
-```
-
-To compare Metal against the CPU backend on larger matrix multiplications:
-
-```bash
-zig build run_gpu_benchmark -Dgpu=metal -Doptimize=ReleaseFast
-```
-
-On non-macOS targets, Metal tests are skipped or unavailable. The default
-test suite still verifies CPU behavior:
-
-```bash
-zig build test --summary all
-zig build test-acceptance --summary all
-```
-
-## Experiments
-
-Experiments are small, reproducible programs that turn an idea into code and
-metrics. Notes live with the runnable example, and reusable code belongs in
-`src/`.
-
-Run the TurboQuant lab with:
-
-```bash
-zig build run_turboquant
-```
-
-Run the tiny GPT architecture demo with:
-
-```bash
-zig build run_tiny_gpt -- --prompt "to be" --tokens 80 --seed 42
-```
-
-To move the Tiny GPT example from the checked-in toy corpus to sourced corpora,
-run:
-
-```bash
-make prepare-tiny-gpt-data
-zig build run_tiny_gpt -- --corpus tinystories --prompt "Once upon a time"
-```
-
-## Learning Goals
-
-This project serves as a learning exercise for:
-
-- Understanding neural network fundamentals
-- Implementing mathematical operations in Zig
-- Working with Zig's memory management and error handling
-- Reading papers and checking ideas against measured results
+- `src/` - reusable library code
+- `examples/` - runnable programs and acceptance-style example tests
+- `docs/` - guides and architecture notes
+- `scripts/` - helper scripts for external data
+- `build.zig` - Zig build graph, test steps, examples, and backend options
+- `Makefile` - convenience wrapper for common development commands
 
 ## License
 
-MIT License 
+MIT License
