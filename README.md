@@ -73,6 +73,8 @@ For setup details and direct `zig build` commands, see
   component overview
 - [Advanced Activation Functions](docs/activation_functions.md) - Swish, GLU,
   SwiGLU, and implementation notes
+- [Research Resources](docs/research.md) - papers, official docs, datasets,
+  and implementation references for topics covered by the repo
 
 ## Repository Map
 
