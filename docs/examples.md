@@ -42,8 +42,8 @@ toolchain, prefer the individual CPU examples below.
 MNIST needs downloaded data:
 
 ```bash
-scripts/download_mnist.sh
-zig build run_mnist
+./bin/nnctl data mnist
+./bin/nnctl run mnist
 ```
 
 The serving example needs a saved model:

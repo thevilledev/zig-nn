@@ -78,8 +78,8 @@ zig build test-metal_backend
 Most examples are self-contained. Two examples need local files, and one has
 optional sourced corpora:
 
-- MNIST expects the dataset files. Use `scripts/download_mnist.sh`, then run
-  `zig build run_mnist`.
+- MNIST expects the dataset files. Use `./bin/nnctl data mnist`, then run
+  `./bin/nnctl run mnist`.
 - Serving expects a saved model named `xor_model.bin` by default. Create one
   with `zig build run_xor_training -- --output=xor_model.bin`, then run
   `zig build run_serving`.

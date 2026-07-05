@@ -79,7 +79,6 @@ For setup details and direct `zig build` commands, see
 - `src/` - reusable library code
 - `examples/` - runnable programs and acceptance-style example tests
 - `docs/` - guides and architecture notes
-- `scripts/` - helper scripts for external data
 - `nnctl/` - Go CLI for repository tasks
 - `build.zig` - Zig build graph, test steps, examples, and backend options
 - `Makefile` - bootstrap wrapper for building `nnctl`
