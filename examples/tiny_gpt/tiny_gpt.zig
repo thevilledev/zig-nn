@@ -58,7 +58,22 @@ const CliOptions = struct {
     temperature: f64 = 1.0,
     top_k: usize = 8,
     seed: u64 = 42,
+    train_demo_head: bool = true,
+    train_epochs: usize = 350,
+    learning_rate: f64 = 0.5,
+    corpus_prior: bool = true,
 };
+
+const demo_corpus =
+    \\to be, or not to be, that is the question.
+    \\the tiny model learns from a little play.
+    \\to be a small machine is still to speak.
+    \\we train the head on clear short lines.
+    \\the model says: to be, to learn, to make.
+    \\a small transformer can follow a prompt.
+    \\to be clear, the demo repeats simple words.
+    \\
+;
 
 const Linear = struct {
     weights: Matrix,
@@ -351,6 +366,7 @@ pub const TinyGPT = struct {
     position_embedding: Matrix,
     blocks: []Block,
     ln_f: LayerNorm,
+    lm_head: Linear,
     prng: std.Random.DefaultPrng,
 
     pub fn init(allocator: std.mem.Allocator, config: Config, seed: u64) !TinyGPT {
@@ -389,6 +405,9 @@ pub const TinyGPT = struct {
         var ln_f = try LayerNorm.init(allocator, config.n_embd);
         errdefer ln_f.deinit();
 
+        var lm_head = try Linear.init(allocator, config.n_embd, config.vocab_size, rand, 0.02);
+        errdefer lm_head.deinit();
+
         return .{
             .allocator = allocator,
             .config = config,
@@ -396,6 +415,7 @@ pub const TinyGPT = struct {
             .position_embedding = position_embedding,
             .blocks = blocks,
             .ln_f = ln_f,
+            .lm_head = lm_head,
             .prng = prng,
         };
     }
@@ -408,9 +428,17 @@ pub const TinyGPT = struct {
         }
         self.allocator.free(self.blocks);
         self.ln_f.deinit();
+        self.lm_head.deinit();
     }
 
     pub fn forward(self: *TinyGPT, tokens: []const usize) !Matrix {
+        var activations = try self.hidden(tokens);
+        defer activations.deinit();
+
+        return self.logitsFromHidden(activations);
+    }
+
+    fn hidden(self: *TinyGPT, tokens: []const usize) !Matrix {
         if (tokens.len == 0) return error.EmptySequence;
         if (tokens.len > self.config.block_size) return error.ContextTooLong;
 
@@ -425,19 +453,13 @@ pub const TinyGPT = struct {
             current = next;
         }
 
-        var normed = self.ln_f.forward(current, self.allocator) catch |err| {
+        const normed = self.ln_f.forward(current, self.allocator) catch |err| {
             current.deinit();
             return err;
         };
         current.deinit();
 
-        const logits = self.logitsFromHidden(normed) catch |err| {
-            normed.deinit();
-            return err;
-        };
-        normed.deinit();
-
-        return logits;
+        return normed;
     }
 
     pub fn generateTokens(
@@ -476,10 +498,57 @@ pub const TinyGPT = struct {
         return tokens;
     }
 
+    pub fn generateTokensWithCorpusPrior(
+        self: *TinyGPT,
+        allocator: std.mem.Allocator,
+        prompt: []const u8,
+        max_new_tokens: usize,
+        temperature: f64,
+        top_k: usize,
+        corpus: []const u8,
+    ) ![]usize {
+        const corpus_tokens = try Tokenizer.encode(allocator, corpus);
+        defer allocator.free(corpus_tokens);
+
+        const prompt_len = if (prompt.len == 0) 1 else prompt.len;
+        var tokens = try allocator.alloc(usize, prompt_len + max_new_tokens);
+        errdefer allocator.free(tokens);
+
+        if (prompt.len == 0) {
+            tokens[0] = Tokenizer.encodeChar(' ');
+        } else {
+            for (prompt, 0..) |ch, i| {
+                tokens[i] = Tokenizer.encodeChar(ch);
+            }
+        }
+
+        var token_count = prompt_len;
+        for (0..max_new_tokens) |_| {
+            const context_start = if (token_count > self.config.block_size)
+                token_count - self.config.block_size
+            else
+                0;
+            var logits = try self.forward(tokens[context_start..token_count]);
+            defer logits.deinit();
+
+            tokens[token_count] = try self.sampleNextTokenWithCorpusPrior(
+                logits,
+                tokens[0..token_count],
+                corpus_tokens,
+                temperature,
+                top_k,
+            );
+            token_count += 1;
+        }
+
+        return tokens;
+    }
+
     pub fn parameterCount(self: *const TinyGPT) usize {
         var count = self.token_embedding.rows * self.token_embedding.cols +
             self.position_embedding.rows * self.position_embedding.cols +
-            self.ln_f.parameterCount();
+            self.ln_f.parameterCount() +
+            self.lm_head.parameterCount();
 
         for (self.blocks) |*block| {
             count += block.parameterCount();
@@ -504,11 +573,8 @@ pub const TinyGPT = struct {
         return output;
     }
 
-    fn logitsFromHidden(self: *TinyGPT, hidden: Matrix) !Matrix {
-        var token_embedding_t = try self.token_embedding.transpose(self.allocator);
-        defer token_embedding_t.deinit();
-
-        return hidden.dotProduct(token_embedding_t, self.allocator);
+    fn logitsFromHidden(self: *TinyGPT, activations: Matrix) !Matrix {
+        return self.lm_head.forward(activations, self.allocator);
     }
 
     fn sampleNextToken(self: *TinyGPT, logits: Matrix, temperature: f64, top_k: usize) !usize {
@@ -522,6 +588,39 @@ pub const TinyGPT = struct {
             scores[token] = (try logits.get(row, token)) / safe_temperature;
         }
 
+        return self.sampleFromScores(scores, top_k);
+    }
+
+    fn sampleNextTokenWithCorpusPrior(
+        self: *TinyGPT,
+        logits: Matrix,
+        context: []const usize,
+        corpus_tokens: []const usize,
+        temperature: f64,
+        top_k: usize,
+    ) !usize {
+        const row = logits.rows - 1;
+        const vocab_size = logits.cols;
+        const safe_temperature = if (temperature <= 0.0) 1.0 else temperature;
+
+        var scores = try self.allocator.alloc(f64, vocab_size);
+        defer self.allocator.free(scores);
+        for (0..vocab_size) |token| {
+            scores[token] = 0.05 * (try logits.get(row, token)) / safe_temperature;
+        }
+
+        const matched = try addCorpusPrior(self.allocator, scores, context, corpus_tokens, 3.5);
+        if (!matched) {
+            for (0..vocab_size) |token| {
+                scores[token] = (try logits.get(row, token)) / safe_temperature;
+            }
+        }
+
+        return self.sampleFromScores(scores, top_k);
+    }
+
+    fn sampleFromScores(self: *TinyGPT, scores: []const f64, top_k: usize) !usize {
+        const vocab_size = scores.len;
         const allowed = try self.allocator.alloc(bool, vocab_size);
         defer self.allocator.free(allowed);
         try chooseTopK(scores, top_k, allowed);
@@ -584,6 +683,120 @@ pub fn crossEntropyLoss(logits: Matrix, targets: []const usize) !f64 {
     return total_loss / @as(f64, @floatFromInt(targets.len));
 }
 
+const TrainingStats = struct {
+    samples: usize,
+    initial_loss: f64,
+    final_loss: f64,
+};
+
+fn trainOutputHeadOnCorpus(
+    model: *TinyGPT,
+    corpus: []const u8,
+    epochs: usize,
+    learning_rate: f64,
+) !TrainingStats {
+    const allocator = model.allocator;
+    const tokens = try Tokenizer.encode(allocator, corpus);
+    defer allocator.free(tokens);
+    if (tokens.len < 2) return error.SequenceTooShort;
+
+    var features = try Matrix.init(allocator, tokens.len - 1, model.config.n_embd);
+    defer features.deinit();
+
+    const targets = try allocator.alloc(usize, tokens.len - 1);
+    defer allocator.free(targets);
+
+    for (targets, 0..) |*target, sample| {
+        const next_pos = sample + 1;
+        const context_start = if (next_pos > model.config.block_size)
+            next_pos - model.config.block_size
+        else
+            0;
+
+        var hidden = try model.hidden(tokens[context_start..next_pos]);
+        defer hidden.deinit();
+
+        target.* = tokens[next_pos];
+        const last_row = hidden.rows - 1;
+        for (0..model.config.n_embd) |dim| {
+            try features.set(sample, dim, try hidden.get(last_row, dim));
+        }
+    }
+
+    const initial_loss = try outputHeadLoss(model, features, targets);
+    for (0..epochs) |_| {
+        var logits = try model.lm_head.forward(features, allocator);
+        defer logits.deinit();
+        try trainOutputHeadStep(model, features, logits, targets, learning_rate);
+    }
+    const final_loss = try outputHeadLoss(model, features, targets);
+
+    return .{
+        .samples = targets.len,
+        .initial_loss = initial_loss,
+        .final_loss = final_loss,
+    };
+}
+
+fn outputHeadLoss(model: *TinyGPT, features: Matrix, targets: []const usize) !f64 {
+    var logits = try model.lm_head.forward(features, model.allocator);
+    defer logits.deinit();
+    return crossEntropyLoss(logits, targets);
+}
+
+fn trainOutputHeadStep(
+    model: *TinyGPT,
+    features: Matrix,
+    logits: Matrix,
+    targets: []const usize,
+    learning_rate: f64,
+) !void {
+    const allocator = model.allocator;
+    var gradient = try Matrix.init(allocator, logits.rows, logits.cols);
+    defer gradient.deinit();
+
+    for (targets, 0..) |target, row| {
+        var max_logit = -math.inf(f64);
+        for (0..logits.cols) |col| {
+            max_logit = @max(max_logit, try logits.get(row, col));
+        }
+
+        var exp_sum: f64 = 0.0;
+        for (0..logits.cols) |col| {
+            exp_sum += math.exp((try logits.get(row, col)) - max_logit);
+        }
+
+        for (0..logits.cols) |col| {
+            var value = math.exp((try logits.get(row, col)) - max_logit) / exp_sum;
+            if (col == target) value -= 1.0;
+            try gradient.set(row, col, value);
+        }
+    }
+
+    const scale = learning_rate / @as(f64, @floatFromInt(targets.len));
+    for (0..model.lm_head.weights.rows) |feature_col| {
+        for (0..model.lm_head.weights.cols) |token_col| {
+            var grad_sum: f64 = 0.0;
+            for (0..features.rows) |row| {
+                grad_sum += (try features.get(row, feature_col)) * (try gradient.get(row, token_col));
+            }
+
+            const updated = (try model.lm_head.weights.get(feature_col, token_col)) - scale * grad_sum;
+            try model.lm_head.weights.set(feature_col, token_col, updated);
+        }
+    }
+
+    for (0..model.lm_head.bias.cols) |token_col| {
+        var grad_sum: f64 = 0.0;
+        for (0..gradient.rows) |row| {
+            grad_sum += try gradient.get(row, token_col);
+        }
+
+        const updated = (try model.lm_head.bias.get(0, token_col)) - scale * grad_sum;
+        try model.lm_head.bias.set(0, token_col, updated);
+    }
+}
+
 fn parseArgs(args: []const [:0]const u8) !CliOptions {
     var options: CliOptions = .{};
     var i: usize = 0;
@@ -609,6 +822,18 @@ fn parseArgs(args: []const [:0]const u8) !CliOptions {
             i += 1;
             if (i >= args.len) return error.MissingArgument;
             options.seed = try std.fmt.parseInt(u64, args[i], 10);
+        } else if (std.mem.eql(u8, arg, "--no-train")) {
+            options.train_demo_head = false;
+        } else if (std.mem.eql(u8, arg, "--train-epochs")) {
+            i += 1;
+            if (i >= args.len) return error.MissingArgument;
+            options.train_epochs = try std.fmt.parseInt(usize, args[i], 10);
+        } else if (std.mem.eql(u8, arg, "--learning-rate")) {
+            i += 1;
+            if (i >= args.len) return error.MissingArgument;
+            options.learning_rate = try std.fmt.parseFloat(f64, args[i]);
+        } else if (std.mem.eql(u8, arg, "--no-corpus-prior")) {
+            options.corpus_prior = false;
         } else if (std.mem.eql(u8, arg, "--help")) {
             return error.HelpRequested;
         } else {
@@ -628,6 +853,10 @@ fn printUsage(writer: anytype) !void {
         \\  --temperature <float>    Sampling temperature (default: 1.0)
         \\  --top-k <n>              Restrict sampling to top k tokens (default: 8)
         \\  --seed <n>               Deterministic seed (default: 42)
+        \\  --no-train               Skip the tiny demo-corpus output-head training
+        \\  --train-epochs <n>       Output-head training epochs (default: 350)
+        \\  --learning-rate <float>  Output-head learning rate (default: 0.5)
+        \\  --no-corpus-prior        Skip the tiny backoff corpus prior used for readable sampling
         \\
     );
 }
@@ -654,13 +883,28 @@ pub fn main(init: std.process.Init) !void {
     var model = try TinyGPT.init(allocator, config, options.seed);
     defer model.deinit();
 
-    const generated_tokens = try model.generateTokens(
-        allocator,
-        options.prompt,
-        options.tokens,
-        options.temperature,
-        options.top_k,
-    );
+    const training_stats: ?TrainingStats = if (options.train_demo_head)
+        try trainOutputHeadOnCorpus(&model, demo_corpus, options.train_epochs, options.learning_rate)
+    else
+        null;
+
+    const generated_tokens = if (options.corpus_prior)
+        try model.generateTokensWithCorpusPrior(
+            allocator,
+            options.prompt,
+            options.tokens,
+            options.temperature,
+            options.top_k,
+            demo_corpus,
+        )
+    else
+        try model.generateTokens(
+            allocator,
+            options.prompt,
+            options.tokens,
+            options.temperature,
+            options.top_k,
+        );
     defer allocator.free(generated_tokens);
 
     const generated_text = try Tokenizer.decode(allocator, generated_tokens);
@@ -676,6 +920,13 @@ pub fn main(init: std.process.Init) !void {
     });
     try stdout.print("Parameters: {}\n", .{model.parameterCount()});
     try stdout.print("Seed: {}\n", .{options.seed});
+    if (training_stats) |stats| {
+        try stdout.print("Demo training: {} frozen-context samples, {} output-head epochs\n", .{ stats.samples, options.train_epochs });
+        try stdout.print("Demo training loss: {d:.4} -> {d:.4}\n", .{ stats.initial_loss, stats.final_loss });
+    } else {
+        try stdout.print("Demo training: skipped, output head remains random\n", .{});
+    }
+    try stdout.print("Readable sampling: {s}\n", .{if (options.corpus_prior) "tiny corpus prior enabled" else "corpus prior disabled"});
     try stdout.print("\nPrompt: \"{s}\"\n\n{s}\n", .{ options.prompt, generated_text });
 
     const prompt_tokens = try Tokenizer.encode(allocator, options.prompt);
@@ -688,10 +939,16 @@ pub fn main(init: std.process.Init) !void {
         defer logits.deinit();
 
         const loss = try crossEntropyLoss(logits, targets);
-        try stdout.print("\nUntrained next-token loss on prompt: {d:.4}\n", .{loss});
+        try stdout.print("\nPrompt next-token loss: {d:.4}\n", .{loss});
     }
 
-    try stdout.print("\nThis is an untrained decoder-only Transformer. It demonstrates the architecture and sampling path.\n", .{});
+    if (training_stats != null and options.corpus_prior) {
+        try stdout.print("\nThe Transformer body is frozen; the output head and tiny corpus prior make this a readable miniature language demo.\n", .{});
+    } else if (training_stats != null) {
+        try stdout.print("\nThe Transformer body is frozen; the output head is trained on the tiny built-in corpus for a readable demo.\n", .{});
+    } else {
+        try stdout.print("\nThis is an untrained decoder-only Transformer. It demonstrates the architecture and sampling path.\n", .{});
+    }
 }
 
 fn fillNormal(matrix: *Matrix, rand: anytype, stddev: f64) !void {
@@ -733,6 +990,46 @@ fn causalSoftmax(scores: []const f64, query_pos: usize, output: []f64) void {
     for (0..query_pos + 1) |i| {
         output[i] /= sum;
     }
+}
+
+fn addCorpusPrior(
+    allocator: std.mem.Allocator,
+    scores: []f64,
+    context: []const usize,
+    corpus_tokens: []const usize,
+    weight: f64,
+) !bool {
+    if (context.len == 0 or corpus_tokens.len < 2) return false;
+
+    const max_order = @min(@min(context.len, 12), corpus_tokens.len - 1);
+    var counts = try allocator.alloc(usize, scores.len);
+    defer allocator.free(counts);
+
+    var order = max_order;
+    while (order > 0) : (order -= 1) {
+        @memset(counts, 0);
+        var total: usize = 0;
+        const suffix = context[context.len - order ..];
+
+        for (order..corpus_tokens.len) |pos| {
+            if (std.mem.eql(usize, corpus_tokens[pos - order .. pos], suffix)) {
+                counts[corpus_tokens[pos]] += 1;
+                total += 1;
+            }
+        }
+
+        if (total == 0) continue;
+
+        const smoothing = 0.001;
+        const denom = @as(f64, @floatFromInt(total)) + smoothing * @as(f64, @floatFromInt(scores.len));
+        for (scores, 0..) |*score, token| {
+            const count = @as(f64, @floatFromInt(counts[token]));
+            score.* += weight * @log((count + smoothing) / denom);
+        }
+        return true;
+    }
+
+    return false;
 }
 
 fn chooseTopK(scores: []const f64, top_k: usize, allowed: []bool) !void {
@@ -842,4 +1139,21 @@ test "cross entropy returns finite positive loss" {
     try testing.expect(loss > 0.0);
     try testing.expect(!math.isNan(loss));
     try testing.expect(loss != math.inf(f64));
+}
+
+test "demo output head training lowers corpus loss" {
+    const allocator = testing.allocator;
+    const config: Config = .{
+        .block_size = 8,
+        .n_layer = 1,
+        .n_head = 2,
+        .n_embd = 16,
+    };
+    var model = try TinyGPT.init(allocator, config, 99);
+    defer model.deinit();
+
+    const stats = try trainOutputHeadOnCorpus(&model, "to be or to learn.\n", 20, 0.5);
+
+    try testing.expect(stats.samples > 0);
+    try testing.expect(stats.final_loss < stats.initial_loss);
 }
