@@ -2,12 +2,9 @@ package cli
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"strconv"
 
-	"nnctl/internal/catalog"
-	"nnctl/internal/flagx"
 	"nnctl/internal/zig"
 )
 
@@ -36,21 +33,8 @@ type tinyGPTTrainOptions struct {
 	corpusPrior     bool
 }
 
-func (a *App) cmdTrain(ctx context.Context, args []string) error {
-	if len(args) == 0 {
-		return fmt.Errorf("usage: nnctl train tiny-gpt [flags]")
-	}
-	name := catalog.NormalizeName(args[0])
-	switch name {
-	case "tiny-gpt", "tinygpt":
-		return a.cmdTrainTinyGPT(ctx, args[1:])
-	default:
-		return fmt.Errorf("unknown train target %q", args[0])
-	}
-}
-
-func (a *App) cmdTrainTinyGPT(ctx context.Context, args []string) error {
-	opts := tinyGPTTrainOptions{
+func defaultTinyGPTTrainOptions() tinyGPTTrainOptions {
+	return tinyGPTTrainOptions{
 		mode:            getenvDefault("NNCTL_OPTIMIZE", "ReleaseFast"),
 		output:          "tiny-gpt.bin",
 		corpus:          "auto",
@@ -71,74 +55,23 @@ func (a *App) cmdTrainTinyGPT(ctx context.Context, args []string) error {
 		topK:            16,
 		seed:            42,
 	}
+}
 
-	fs := newFlagSet(a.stderr(), "train tiny-gpt")
-	fs.StringVar(&opts.mode, "mode", opts.mode, "Zig optimization mode")
-	fs.StringVar(&opts.mode, "optimize", opts.mode, "Zig optimization mode")
-	fs.StringVar(&opts.output, "output", opts.output, "checkpoint path to write")
-	fs.StringVar(&opts.resume, "resume", opts.resume, "checkpoint path to resume from")
-	fs.StringVar(&opts.corpus, "corpus", opts.corpus, "auto, toy, shakespeare, or tinystories")
-	fs.StringVar(&opts.corpusPath, "corpus-path", opts.corpusPath, "custom UTF-8 text corpus path")
-	fs.IntVar(&opts.steps, "steps", opts.steps, "full-model training steps")
-	fs.StringVar(&opts.learningRate, "learning-rate", opts.learningRate, "full-model learning rate")
-	fs.IntVar(&opts.batchSize, "batch-size", opts.batchSize, "corpus windows per training step")
-	fs.IntVar(&opts.trainChars, "train-chars", opts.trainChars, "training corpus characters")
-	fs.IntVar(&opts.validationChars, "validation-chars", opts.validationChars, "validation holdout characters")
-	fs.IntVar(&opts.blockSize, "block-size", opts.blockSize, "context length for new checkpoints")
-	fs.IntVar(&opts.layers, "layers", opts.layers, "Transformer block count for new checkpoints")
-	fs.IntVar(&opts.heads, "heads", opts.heads, "attention head count for new checkpoints")
-	fs.IntVar(&opts.embd, "embd", opts.embd, "embedding/channel size for new checkpoints")
-	fs.StringVar(&opts.optimizer, "optimizer", opts.optimizer, "sgd or adamw")
-	fs.StringVar(&opts.weightDecay, "weight-decay", opts.weightDecay, "full-training weight decay")
-	fs.StringVar(&opts.prompt, "prompt", opts.prompt, "prompt used for the post-training sample")
-	fs.IntVar(&opts.tokens, "tokens", opts.tokens, "sample tokens after training")
-	fs.StringVar(&opts.temperature, "temperature", opts.temperature, "sampling temperature")
-	fs.IntVar(&opts.topK, "top-k", opts.topK, "top-k sampler cutoff")
-	fs.IntVar(&opts.seed, "seed", opts.seed, "deterministic seed")
-	fs.BoolVar(&opts.corpusPrior, "corpus-prior", opts.corpusPrior, "enable readable corpus-prior sampling in the post-training sample")
-	if err := flagx.ParseInterspersed(fs, args, map[string]bool{
-		"mode":             true,
-		"optimize":         true,
-		"output":           true,
-		"resume":           true,
-		"corpus":           true,
-		"corpus-path":      true,
-		"steps":            true,
-		"learning-rate":    true,
-		"batch-size":       true,
-		"train-chars":      true,
-		"validation-chars": true,
-		"block-size":       true,
-		"layers":           true,
-		"heads":            true,
-		"embd":             true,
-		"optimizer":        true,
-		"weight-decay":     true,
-		"prompt":           true,
-		"tokens":           true,
-		"temperature":      true,
-		"top-k":            true,
-		"seed":             true,
-		"corpus-prior":     false,
-	}); err != nil {
-		return err
-	}
-	if fs.NArg() != 0 {
-		return fmt.Errorf("train tiny-gpt does not accept positional arguments")
-	}
-
-	visited := visitedFlags(fs)
+func prepareTinyGPTResumeOptions(opts *tinyGPTTrainOptions, changed func(string) bool) error {
 	if opts.resume != "" {
-		if !visited["output"] {
+		if !changed("output") {
 			opts.output = opts.resume
 		}
 		for _, shapeFlag := range []string{"block-size", "layers", "heads", "embd"} {
-			if visited[shapeFlag] {
+			if changed(shapeFlag) {
 				return fmt.Errorf("--%s cannot be used with --resume; the checkpoint already defines model shape", shapeFlag)
 			}
 		}
 	}
+	return nil
+}
 
+func (a *App) runTrainTinyGPT(ctx context.Context, opts tinyGPTTrainOptions) error {
 	trainArgs, err := tinyGPTTrainArgs(opts)
 	if err != nil {
 		return err
@@ -195,12 +128,4 @@ func tinyGPTTrainArgs(opts tinyGPTTrainOptions) ([]string, error) {
 		args = append(args, "--no-corpus-prior")
 	}
 	return args, nil
-}
-
-func visitedFlags(fs interface{ Visit(func(*flag.Flag)) }) map[string]bool {
-	visited := map[string]bool{}
-	fs.Visit(func(f *flag.Flag) {
-		visited[f.Name] = true
-	})
-	return visited
 }

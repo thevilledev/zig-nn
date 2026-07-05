@@ -25,36 +25,7 @@ var mnistFiles = []mnistFile{
 	{Name: "t10k-labels-idx1-ubyte", URL: "https://storage.googleapis.com/cvdf-datasets/mnist/t10k-labels-idx1-ubyte.gz"},
 }
 
-func (a *App) cmdData(ctx context.Context, args []string) error {
-	if len(args) == 0 {
-		printDataHelp(a.stdout())
-		return nil
-	}
-	switch args[0] {
-	case "mnist":
-		return a.cmdDataMNIST(ctx, args[1:])
-	case "tiny-gpt", "tinygpt":
-		return a.cmdDataTinyGPT(ctx, args[1:])
-	case "help", "-h", "--help":
-		printDataHelp(a.stdout())
-		return nil
-	default:
-		return fmt.Errorf("unknown data command %q", args[0])
-	}
-}
-
-func (a *App) cmdDataMNIST(ctx context.Context, args []string) error {
-	fs := newFlagSet(a.stderr(), "data mnist")
-	dir := "data"
-	force := false
-	fs.StringVar(&dir, "dir", dir, "data directory")
-	fs.BoolVar(&force, "force", false, "overwrite existing files")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	if fs.NArg() != 0 {
-		return fmt.Errorf("data mnist does not accept positional arguments")
-	}
+func (a *App) runDataMNIST(ctx context.Context, dir string, force bool) error {
 	if !filepath.IsAbs(dir) {
 		dir = filepath.Join(a.repoRoot, dir)
 	}
@@ -69,14 +40,7 @@ func (a *App) cmdDataMNIST(ctx context.Context, args []string) error {
 	return nil
 }
 
-func (a *App) cmdDataTinyGPT(ctx context.Context, args []string) error {
-	fs := newFlagSet(a.stderr(), "data tiny-gpt")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	if fs.NArg() != 0 {
-		return fmt.Errorf("data tiny-gpt does not accept positional arguments")
-	}
+func (a *App) runDataTinyGPT(ctx context.Context) error {
 	script := filepath.Join(a.repoRoot, "examples", "tiny_gpt", "scripts", "prepare_data.sh")
 	if !repo.FileExists(script) {
 		return fmt.Errorf("missing Tiny GPT data script at %s", script)

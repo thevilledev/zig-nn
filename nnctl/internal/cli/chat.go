@@ -13,96 +13,77 @@ import (
 	"strconv"
 	"time"
 
-	"nnctl/internal/flagx"
 	"nnctl/internal/zig"
 )
 
-func (a *App) cmdChat(ctx context.Context, args []string) error {
-	fs := newFlagSet(a.stderr(), "chat")
-	mode := getenvDefault("NNCTL_OPTIMIZE", getenvDefault("BUILD_MODE", defaultBuildMode))
-	host := "127.0.0.1"
-	port := 8090
-	apiHost := "127.0.0.1"
-	apiPort := 8080
-	modelPath := ""
-	modelName := "tiny-gpt-zig"
-	maxTokens := 120
-	temperature := 1.0
-	topK := 8
-	allowUntrained := false
-	readyTimeoutText := "2m"
+type chatOptions struct {
+	mode             string
+	host             string
+	port             int
+	apiHost          string
+	apiPort          int
+	modelPath        string
+	modelName        string
+	maxTokens        int
+	temperature      float64
+	topK             int
+	allowUntrained   bool
+	readyTimeoutText string
+}
 
-	fs.StringVar(&mode, "mode", mode, "Zig optimization mode")
-	fs.StringVar(&mode, "optimize", mode, "Zig optimization mode")
-	fs.StringVar(&host, "host", host, "chat app bind host")
-	fs.IntVar(&port, "port", port, "chat app bind port")
-	fs.StringVar(&apiHost, "api-host", apiHost, "TinyGPT inference bind host")
-	fs.IntVar(&apiPort, "api-port", apiPort, "TinyGPT inference bind port")
-	fs.StringVar(&modelPath, "model", modelPath, "TinyGPT checkpoint to serve")
-	fs.StringVar(&modelName, "model-name", modelName, "OpenAI-compatible model id")
-	fs.IntVar(&maxTokens, "max-tokens", maxTokens, "default generated tokens per reply")
-	fs.Float64Var(&temperature, "temperature", temperature, "default sampling temperature")
-	fs.IntVar(&topK, "top-k", topK, "default TinyGPT top-k sampler cutoff")
-	fs.BoolVar(&allowUntrained, "allow-untrained", allowUntrained, "serve a seeded untrained model when --model is omitted")
-	fs.StringVar(&readyTimeoutText, "ready-timeout", readyTimeoutText, "time to wait for inference server readiness")
+func defaultChatOptions() chatOptions {
+	return chatOptions{
+		mode:             getenvDefault("NNCTL_OPTIMIZE", getenvDefault("BUILD_MODE", defaultBuildMode)),
+		host:             "127.0.0.1",
+		port:             8090,
+		apiHost:          "127.0.0.1",
+		apiPort:          8080,
+		modelName:        "tiny-gpt-zig",
+		maxTokens:        120,
+		temperature:      1.0,
+		topK:             8,
+		readyTimeoutText: "2m",
+	}
+}
 
-	if err := flagx.ParseInterspersed(fs, args, map[string]bool{
-		"mode":            true,
-		"optimize":        true,
-		"host":            true,
-		"port":            true,
-		"api-host":        true,
-		"api-port":        true,
-		"model":           true,
-		"model-name":      true,
-		"max-tokens":      true,
-		"temperature":     true,
-		"top-k":           true,
-		"allow-untrained": false,
-		"ready-timeout":   true,
-	}); err != nil {
-		return err
-	}
-	if fs.NArg() != 0 {
-		return fmt.Errorf("chat does not accept positional arguments")
-	}
-	if modelPath == "" && !allowUntrained {
+func (a *App) runChat(ctx context.Context, opts chatOptions) error {
+	if opts.modelPath == "" && !opts.allowUntrained {
 		return fmt.Errorf("chat requires --model <checkpoint> or --allow-untrained")
 	}
-	if port <= 0 || port > 65535 {
+	if opts.port <= 0 || opts.port > 65535 {
 		return fmt.Errorf("--port must be between 1 and 65535")
 	}
-	if apiPort <= 0 || apiPort > 65535 {
+	if opts.apiPort <= 0 || opts.apiPort > 65535 {
 		return fmt.Errorf("--api-port must be between 1 and 65535")
 	}
-	if maxTokens < 0 {
+	if opts.maxTokens < 0 {
 		return fmt.Errorf("--max-tokens must be non-negative")
 	}
-	if topK < 0 {
+	if opts.topK < 0 {
 		return fmt.Errorf("--top-k must be non-negative")
 	}
 
-	readyTimeout, err := time.ParseDuration(readyTimeoutText)
+	readyTimeout, err := time.ParseDuration(opts.readyTimeoutText)
 	if err != nil {
 		return fmt.Errorf("parse --ready-timeout: %w", err)
 	}
 
-	apiBaseURL := "http://" + net.JoinHostPort(apiHost, strconv.Itoa(apiPort))
+	apiBaseURL := "http://" + net.JoinHostPort(opts.apiHost, strconv.Itoa(opts.apiPort))
 	serverArgs := []string{
-		"--host", apiHost,
-		"--port", strconv.Itoa(apiPort),
-		"--model-name", modelName,
-		"--max-tokens", strconv.Itoa(maxTokens),
-		"--temperature", strconv.FormatFloat(temperature, 'f', -1, 64),
-		"--top-k", strconv.Itoa(topK),
+		"--host", opts.apiHost,
+		"--port", strconv.Itoa(opts.apiPort),
+		"--model-name", opts.modelName,
+		"--max-tokens", strconv.Itoa(opts.maxTokens),
+		"--temperature", strconv.FormatFloat(opts.temperature, 'f', -1, 64),
+		"--top-k", strconv.Itoa(opts.topK),
 	}
-	if modelPath != "" {
-		serverArgs = append(serverArgs, "--model", modelPath)
+	if opts.modelPath != "" {
+		serverArgs = append(serverArgs, "--model", opts.modelPath)
 	} else {
 		serverArgs = append(serverArgs, "--allow-untrained")
 	}
 
-	runArgs := zig.RunArgs("run_tiny_gpt_openai", zig.Options{Optimize: mode}, serverArgs)
+	runArgs := zig.RunArgs("run_tiny_gpt_openai", zig.Options{Optimize: opts.mode}, serverArgs)
 	fmt.Fprintf(a.stderr(), "==> %s\n", zig.CommandString(a.zig, runArgs))
 	serverCmd := exec.CommandContext(ctx, a.zig, runArgs...)
 	serverCmd.Dir = a.repoRoot
@@ -131,13 +112,13 @@ func (a *App) cmdChat(ctx context.Context, args []string) error {
 	mux.HandleFunc("/", serveChatApp)
 	mux.Handle("/api/chat", chatProxy{
 		apiBaseURL:  apiBaseURL,
-		modelName:   modelName,
-		maxTokens:   maxTokens,
-		temperature: temperature,
+		modelName:   opts.modelName,
+		maxTokens:   opts.maxTokens,
+		temperature: opts.temperature,
 		client:      &http.Client{Timeout: 2 * time.Minute},
 	})
 
-	chatAddr := net.JoinHostPort(host, strconv.Itoa(port))
+	chatAddr := net.JoinHostPort(opts.host, strconv.Itoa(opts.port))
 	chatServer := &http.Server{
 		Addr:              chatAddr,
 		Handler:           mux,
