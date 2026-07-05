@@ -6,7 +6,7 @@ This project targets Zig `0.16.0`. The package records that requirement in
 ## Prerequisites
 
 - Zig `0.16.0`
-- `make`, if you want the convenience commands
+- Go `1.26` or newer, for `nnctl`
 - macOS, only if you want to run the Metal backend checks
 
 The core build has no third-party package dependencies.
@@ -17,36 +17,38 @@ From the repository root:
 
 ```bash
 zig version
-make
-make run-examples
+mkdir -p bin
+go build -C nnctl -o ../bin/nnctl ./cmd/nnctl
+./bin/nnctl all
+./bin/nnctl run quick
 ```
 
-`make` builds the library, runs the unit and acceptance tests, and builds all
-examples. `make run-examples` runs the quick examples that do not require an
+`nnctl all` builds the library, runs the unit and acceptance tests, and builds
+all examples. `nnctl run quick` runs the quick examples that do not require an
 external data file or a saved model.
 
 If a GPU toolchain is unavailable on your machine, run individual CPU examples
 from [Examples](examples.md) instead of the full `run-examples` target.
 
-## Common Make Targets
+## Common nnctl Commands
 
 ```bash
-make build
-make test
-make examples
-make run-examples
-make prepare-tiny-gpt-data
-make release
-make format
-make clean
-make help
+./bin/nnctl build
+./bin/nnctl test
+./bin/nnctl examples
+./bin/nnctl run quick
+./bin/nnctl data tiny-gpt
+./bin/nnctl release
+./bin/nnctl fmt
+./bin/nnctl clean
+./bin/nnctl help
 ```
 
-You can change the optimization mode used by the Makefile:
+You can change the optimization mode used by `nnctl`:
 
 ```bash
-make BUILD_MODE=ReleaseFast
-make release
+./bin/nnctl build --mode ReleaseFast
+./bin/nnctl release --mode ReleaseFast
 ```
 
 ## Direct Zig Commands
@@ -81,9 +83,9 @@ optional sourced corpora:
 - MNIST expects the dataset files. Use `./bin/nnctl data mnist`, then run
   `./bin/nnctl run mnist`.
 - Serving expects a saved model named `xor_model.bin` by default. Create one
-  with `zig build run_xor_training -- --output=xor_model.bin`, then run
-  `zig build run_serving`.
+  with `./bin/nnctl run xor-training -- --output=xor_model.bin`, then run
+  `./bin/nnctl run serving`.
 - Tiny GPT falls back to the checked-in toy corpus by default. To use sourced
-  Tiny Shakespeare or TinyStories corpora, run `make prepare-tiny-gpt-data`.
+  Tiny Shakespeare or TinyStories corpora, run `./bin/nnctl data tiny-gpt`.
 
 See [Examples](examples.md) for the full example list.

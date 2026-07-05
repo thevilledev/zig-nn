@@ -22,7 +22,7 @@ prepared TinyStories slice exists, then `shakespeare` if prepared, then `toy`.
 Run:
 
 ```bash
-make prepare-tiny-gpt-data
+bin/nnctl data tiny-gpt
 ```
 
 This creates:

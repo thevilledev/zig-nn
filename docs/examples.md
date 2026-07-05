@@ -7,29 +7,29 @@ with the example.
 ## Quick Runs
 
 ```bash
-make run-examples
+./bin/nnctl run quick
 ```
 
-This target runs the quick examples. On machines without the relevant GPU
+This command runs the quick examples. On machines without the relevant GPU
 toolchain, prefer the individual CPU examples below.
 
 ## Catalog
 
-| Example | Zig step | Make target | Purpose |
+| Example | Zig step | nnctl command | Purpose |
 | --- | --- | --- | --- |
-| Simple XOR | `zig build run_simple_xor` | `make example-simple-xor` | Minimal forward pass through an XOR-shaped network |
-| XOR training | `zig build run_xor_training` | `make example-xor-training` | Backpropagation on XOR and optional model output |
-| Binary classification | `zig build run_binary_classification` | `make example-binary-classification` | Circular decision-boundary classification |
-| Regression | `zig build run_regression` | `make example-regression` | Nonlinear function approximation |
-| Gated network | `zig build run_gated_network` | `make example-gated-network` | GLU/SwiGLU-style gated layer behavior |
-| Network visualisation | `zig build run_network_visualisation` | `make example-network-visualisation` | Text visualization of a network shape |
-| Backend demo | `zig build run_backend_demo` | `make example-backend-demo` | Basic matrix operations through the public API |
-| GPU demo | `zig build run_gpu -Dgpu=metal` | `make example-gpu-metal` | Metal-backed matrix operations on macOS |
-| GPU benchmark | `zig build run_gpu_benchmark -Dgpu=metal -Doptimize=ReleaseFast` | `make example-gpu-benchmark` | CPU vs Metal matrix multiplication timing |
-| TurboQuant | `zig build run_turboquant` | `make example-turboquant` | Quantization experiment with comparable metrics |
-| Tiny GPT | `zig build run_tiny_gpt` | `make example-tiny-gpt` | Tiny decoder-only Transformer demo with corpus presets |
-| Serving | `zig build run_serving` | `make example-serving` | HTTP prediction server for a saved XOR model |
-| MNIST | `zig build run_mnist` | `make example-mnist` | Digit recognition with external MNIST data |
+| Simple XOR | `zig build run_simple_xor` | `./bin/nnctl run simple-xor` | Minimal forward pass through an XOR-shaped network |
+| XOR training | `zig build run_xor_training` | `./bin/nnctl run xor-training` | Backpropagation on XOR and optional model output |
+| Binary classification | `zig build run_binary_classification` | `./bin/nnctl run binary-classification` | Circular decision-boundary classification |
+| Regression | `zig build run_regression` | `./bin/nnctl run regression` | Nonlinear function approximation |
+| Gated network | `zig build run_gated_network` | `./bin/nnctl run gated-network` | GLU/SwiGLU-style gated layer behavior |
+| Network visualisation | `zig build run_network_visualisation` | `./bin/nnctl run network-visualisation` | Text visualization of a network shape |
+| Backend demo | `zig build run_backend_demo` | `./bin/nnctl run backend-demo` | Basic matrix operations through the public API |
+| GPU demo | `zig build run_gpu -Dgpu=metal` | `./bin/nnctl run gpu --gpu metal` | Metal-backed matrix operations on macOS |
+| GPU benchmark | `zig build run_gpu_benchmark -Dgpu=metal -Doptimize=ReleaseFast` | `./bin/nnctl run gpu-benchmark` | CPU vs Metal matrix multiplication timing |
+| TurboQuant | `zig build run_turboquant` | `./bin/nnctl run turboquant` | Quantization experiment with comparable metrics |
+| Tiny GPT | `zig build run_tiny_gpt` | `./bin/nnctl run tiny-gpt` | Tiny decoder-only Transformer demo with corpus presets |
+| Serving | `zig build run_serving` | `./bin/nnctl run serving` | HTTP prediction server for a saved XOR model |
+| MNIST | `zig build run_mnist` | `./bin/nnctl run mnist` | Digit recognition with external MNIST data |
 
 ## Examples With Extra Notes
 
@@ -49,8 +49,8 @@ MNIST needs downloaded data:
 The serving example needs a saved model:
 
 ```bash
-zig build run_xor_training -- --output=xor_model.bin
-zig build run_serving
+./bin/nnctl run xor-training -- --output=xor_model.bin
+./bin/nnctl run serving
 ```
 
 Then send a request:
@@ -64,6 +64,7 @@ curl -X POST http://localhost:8080/predict \
 Tiny GPT can run with the checked-in toy corpus, or with sourced corpora:
 
 ```bash
-make prepare-tiny-gpt-data
-zig build run_tiny_gpt -- --corpus tinystories --prompt "Once upon a time"
+./bin/nnctl data tiny-gpt
+./bin/nnctl train tiny-gpt --corpus tinystories --output tiny-gpt.bin
+./bin/nnctl chat --model tiny-gpt.bin
 ```

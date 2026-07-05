@@ -32,13 +32,13 @@ back to CPU for CUDA-tagged work.
 
 ## Start Here
 
-Make sure Zig `0.16.0` and Go `1.26` or newer are installed. The root
-Makefile only bootstraps `nnctl`; after that, use `./bin/nnctl` for repo
-tasks.
+Make sure Zig `0.16.0` and Go `1.26` or newer are installed. Build `nnctl`
+once, then use it for repo tasks.
 
 ```bash
 # Build nnctl
-make
+mkdir -p bin
+go build -C nnctl -o ../bin/nnctl ./cmd/nnctl
 ./bin/nnctl help
 
 # Build, test, and build examples
@@ -51,6 +51,10 @@ make
 # Download data for examples
 ./bin/nnctl data mnist
 ./bin/nnctl data tiny-gpt
+
+# Train and serve a TinyGPT checkpoint
+./bin/nnctl train tiny-gpt --output tiny-gpt.bin
+./bin/nnctl chat --model tiny-gpt.bin
 
 # Build with a different optimization mode
 ./bin/nnctl build --mode ReleaseFast
@@ -83,7 +87,6 @@ For setup details and direct `zig build` commands, see
 - `docs/` - guides and architecture notes
 - `nnctl/` - Go CLI for repository tasks
 - `build.zig` - Zig build graph, test steps, examples, and backend options
-- `Makefile` - bootstrap wrapper for building `nnctl`
 
 ## License
 

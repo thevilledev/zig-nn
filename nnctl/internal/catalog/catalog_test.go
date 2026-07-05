@@ -11,3 +11,13 @@ func TestResolveExampleAliases(t *testing.T) {
 		t.Fatalf("unexpected step: %s", example.Step)
 	}
 }
+
+func TestResolveTinyGPTOpenAIExample(t *testing.T) {
+	example, ok := ResolveExample("tiny_gpt_openai")
+	if !ok {
+		t.Fatal("expected tiny_gpt_openai to resolve")
+	}
+	if example.Step != "run_tiny_gpt_openai" {
+		t.Fatalf("unexpected step: %s", example.Step)
+	}
+}

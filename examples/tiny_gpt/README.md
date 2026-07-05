@@ -8,7 +8,7 @@ Transformer-specific code local to the example.
 Run it with:
 
 ```bash
-zig build run_tiny_gpt -- --prompt "to be" --tokens 80 --seed 42
+bin/nnctl run tiny-gpt -- --prompt "to be" --tokens 80 --seed 42
 ```
 
 By default the example uses `--corpus auto`: a prepared TinyStories slice if it
@@ -19,29 +19,42 @@ readable enough to inspect. To see the raw untrained architecture sample, pass
 `--no-train --no-corpus-prior`.
 
 For an end-to-end training pass over all Transformer weights, embeddings, layer
-norms, and the output head, use `--train-full`. This trains one next-token
-context window per step and can save a reusable checkpoint:
+norms, and the output head, use `nnctl train tiny-gpt`. This trains multiple
+next-token context windows per step, uses AdamW by default, prints validation
+loss when a holdout is available, and saves a reusable checkpoint:
 
 ```bash
-zig build run_tiny_gpt -- --corpus toy --train-full --full-train-steps 200 \
-  --full-learning-rate 0.03 --save-checkpoint tiny-gpt.bin
+bin/nnctl train tiny-gpt --corpus tinystories --output tiny-gpt.bin \
+  --steps 5000 --block-size 32 --layers 4 --heads 4 --embd 64
+```
+
+Resume a checkpoint for more training:
+
+```bash
+bin/nnctl train tiny-gpt --resume tiny-gpt.bin --steps 2000
 ```
 
 Reload a checkpoint for generation:
 
 ```bash
-zig build run_tiny_gpt -- --load-checkpoint tiny-gpt.bin --no-train \
-  --prompt "to be" --tokens 120
+bin/nnctl run tiny-gpt -- --load-checkpoint tiny-gpt.bin --no-train \
+  --prompt "to be" --tokens 120 --no-corpus-prior
 ```
 
 Run the OpenAI-compatible inference service:
 
 ```bash
-zig build run_tiny_gpt_openai -- --model tiny-gpt.bin --port 8080
+bin/nnctl run tiny-gpt-openai -- --model tiny-gpt.bin --port 8080
 ```
 
 The server requires `--model` by default. For quick protocol testing with a
 seeded untrained model, pass `--allow-untrained`.
+
+Or run the inference server and a small local browser chat app together:
+
+```bash
+bin/nnctl chat --model tiny-gpt.bin
+```
 
 Then call it with an OpenAI-style non-streaming request:
 
@@ -54,15 +67,15 @@ curl http://127.0.0.1:8080/v1/chat/completions \
 Prepare the sourced corpora with:
 
 ```bash
-make prepare-tiny-gpt-data
+bin/nnctl data tiny-gpt
 ```
 
 Then try the progression:
 
 ```bash
-zig build run_tiny_gpt -- --corpus toy --prompt "to be"
-zig build run_tiny_gpt -- --corpus shakespeare --prompt "ROMEO:"
-zig build run_tiny_gpt -- --corpus tinystories --prompt "Once upon a time"
+bin/nnctl run tiny-gpt -- --corpus toy --prompt "to be"
+bin/nnctl train tiny-gpt --corpus shakespeare --output shakespeare-gpt.bin
+bin/nnctl train tiny-gpt --corpus tinystories --output tinystories-gpt.bin
 ```
 
 The default model is intentionally small:
@@ -72,7 +85,16 @@ The default model is intentionally small:
 - heads: 2
 - embedding size: 32
 - MLP hidden size: 128
-- tokenizer: a tiny built-in character vocabulary
+- tokenizer: a printable-ASCII character vocabulary plus newline
+
+Better checkpoints come from matching capacity, data, and training time:
+
+- increase `--block-size` so the model sees longer context
+- increase `--layers`, `--heads`, and `--embd` for more parameters
+- increase `--train-chars` and use `bin/nnctl data tiny-gpt` for real corpora
+- increase `--steps` and watch both training and validation loss
+- resume with `--resume` instead of starting from scratch
+- use `--optimizer adamw --weight-decay 0.01` unless you are comparing SGD
 
 Implemented pieces:
 
@@ -92,8 +114,8 @@ Implemented pieces:
 - readable sampling with a tiny character backoff prior
 
 The full-training path is intentionally educational rather than high-throughput:
-it uses explicit backward passes in the example file, trains single context
-windows, and keeps the model character-level and small enough to inspect.
+it uses explicit backward passes in the example file, trains small batches of
+context windows, and keeps the model character-level and small enough to inspect.
 The serving path accepts common OpenAI request fields and returns explicit JSON
 errors for unsupported streaming, `n > 1`, token-array prompts, and multimodal
 message content.

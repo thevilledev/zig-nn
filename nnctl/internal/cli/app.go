@@ -95,6 +95,10 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.cmdExamples(ctx, commandArgs)
 	case "run":
 		return a.cmdRun(ctx, commandArgs)
+	case "train":
+		return a.cmdTrain(ctx, commandArgs)
+	case "chat":
+		return a.cmdChat(ctx, commandArgs)
 	case "list":
 		return a.cmdList(commandArgs)
 	case "fmt", "format":

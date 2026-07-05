@@ -800,7 +800,7 @@ fn printUsage(writer: anytype) !void {
         \\Options:
         \\  --host <ip>          Bind host (default: 127.0.0.1)
         \\  --port <n>           Bind port (default: 8080)
-        \\  --model <path>       TinyGPT checkpoint from `run_tiny_gpt -- --save-checkpoint`
+        \\  --model <path>       TinyGPT checkpoint from `nnctl train tiny-gpt` or `nnctl run tiny-gpt -- --save-checkpoint`
         \\  --model-name <name>  Model id returned in OpenAI-compatible responses
         \\  --max-tokens <n>     Default completion length (default: 80)
         \\  --temperature <f>    Default sampling temperature (default: 1.0)

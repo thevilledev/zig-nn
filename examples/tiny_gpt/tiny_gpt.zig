@@ -19,7 +19,7 @@ pub const Config = struct {
 };
 
 pub const Tokenizer = struct {
-    pub const vocab = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 .,;:!?'-\n";
+    pub const vocab = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~\n";
     const fallback_id = std.mem.indexOfScalar(u8, vocab, ' ') orelse 0;
 
     pub fn vocabSize() usize {
@@ -58,10 +58,13 @@ const CliOptions = struct {
     temperature: f64 = 1.0,
     top_k: usize = 8,
     seed: u64 = 42,
+    model_config: Config = .{},
+    config_overridden: bool = false,
     corpus: CorpusPreset = .auto,
     corpus_path: ?[]const u8 = null,
     checkpoint_in: ?[]const u8 = null,
     checkpoint_out: ?[]const u8 = null,
+    resume_checkpoint: ?[]const u8 = null,
     train_demo_head: bool = true,
     train_full: bool = false,
     train_epochs: usize = 350,
@@ -69,7 +72,14 @@ const CliOptions = struct {
     full_train_steps: usize = 120,
     full_learning_rate: f64 = 0.03,
     full_train_stride: usize = 1,
+    full_batch_size: usize = 1,
+    full_optimizer: OptimizerKind = .sgd,
+    full_weight_decay: f64 = 0.0,
+    adam_beta1: f64 = 0.9,
+    adam_beta2: f64 = 0.999,
+    adam_epsilon: f64 = 1e-8,
     train_chars: usize = 512,
+    validation_chars: usize = 0,
     prior_chars: usize = 32768,
     corpus_prior: bool = true,
 };
@@ -79,6 +89,11 @@ const CorpusPreset = enum {
     toy,
     shakespeare,
     tinystories,
+};
+
+pub const OptimizerKind = enum {
+    sgd,
+    adamw,
 };
 
 const Corpus = struct {
@@ -897,6 +912,28 @@ fn limitedCorpus(text: []const u8, limit: usize) []const u8 {
     return text[0..limit];
 }
 
+fn trainingCorpus(text: []const u8, train_limit: usize, validation_chars: usize) []const u8 {
+    var end = if (train_limit == 0 or train_limit >= text.len) text.len else train_limit;
+    if (train_limit == 0 and validation_chars > 0 and text.len > validation_chars + 1) {
+        end = text.len - validation_chars;
+    }
+    return text[0..end];
+}
+
+fn validationCorpus(text: []const u8, train_limit: usize, validation_chars: usize) ?[]const u8 {
+    if (validation_chars == 0 or text.len < 2) return null;
+
+    const start = if (train_limit == 0 or train_limit >= text.len) blk: {
+        if (text.len <= validation_chars + 1) return null;
+        break :blk text.len - validation_chars;
+    } else train_limit;
+
+    if (start >= text.len - 1) return null;
+    const end = @min(start + validation_chars, text.len);
+    if (end - start < 2) return null;
+    return text[start..end];
+}
+
 const TrainingStats = struct {
     samples: usize,
     initial_loss: f64,
@@ -1016,13 +1053,117 @@ pub const FullTrainingOptions = struct {
     learning_rate: f64 = 0.03,
     context_len: usize = 16,
     stride: usize = 1,
+    batch_size: usize = 1,
+    optimizer: OptimizerKind = .sgd,
+    weight_decay: f64 = 0.0,
+    adam_beta1: f64 = 0.9,
+    adam_beta2: f64 = 0.999,
+    adam_epsilon: f64 = 1e-8,
 };
 
 pub const FullTrainingStats = struct {
     steps: usize,
+    updates: usize,
+    batch_size: usize,
     tokens_seen: usize,
     initial_loss: f64,
     final_loss: f64,
+    validation_initial_loss: ?f64 = null,
+    validation_final_loss: ?f64 = null,
+};
+
+const ParamState = struct {
+    ptr: [*]f64,
+    len: usize,
+    m: []f64,
+    v: []f64,
+};
+
+const TrainingOptimizer = struct {
+    allocator: std.mem.Allocator,
+    kind: OptimizerKind,
+    learning_rate: f64,
+    weight_decay: f64,
+    beta1: f64,
+    beta2: f64,
+    epsilon: f64,
+    step: usize = 1,
+    states: std.ArrayList(ParamState) = .empty,
+
+    fn init(allocator: std.mem.Allocator, options: FullTrainingOptions) TrainingOptimizer {
+        return .{
+            .allocator = allocator,
+            .kind = options.optimizer,
+            .learning_rate = options.learning_rate,
+            .weight_decay = options.weight_decay,
+            .beta1 = options.adam_beta1,
+            .beta2 = options.adam_beta2,
+            .epsilon = options.adam_epsilon,
+        };
+    }
+
+    fn deinit(self: *TrainingOptimizer) void {
+        for (self.states.items) |state| {
+            self.allocator.free(state.m);
+            self.allocator.free(state.v);
+        }
+        self.states.deinit(self.allocator);
+    }
+
+    fn beginStep(self: *TrainingOptimizer, step: usize) void {
+        self.step = @max(step, @as(usize, 1));
+    }
+
+    fn update(self: *TrainingOptimizer, matrix: *Matrix, index: usize, gradient: f64) !void {
+        if (index >= matrix.data.len) return error.DimensionMismatch;
+        switch (self.kind) {
+            .sgd => {
+                const decay_gradient = if (self.weight_decay == 0.0)
+                    0.0
+                else
+                    self.weight_decay * matrix.data[index];
+                matrix.data[index] -= self.learning_rate * (gradient + decay_gradient);
+            },
+            .adamw => {
+                const state = try self.stateFor(matrix.data);
+                const beta1_correction = 1.0 - math.pow(f64, self.beta1, @as(f64, @floatFromInt(self.step)));
+                const beta2_correction = 1.0 - math.pow(f64, self.beta2, @as(f64, @floatFromInt(self.step)));
+
+                state.m[index] = self.beta1 * state.m[index] + (1.0 - self.beta1) * gradient;
+                state.v[index] = self.beta2 * state.v[index] + (1.0 - self.beta2) * gradient * gradient;
+
+                const m_hat = state.m[index] / beta1_correction;
+                const v_hat = state.v[index] / beta2_correction;
+                if (self.weight_decay != 0.0) {
+                    matrix.data[index] *= 1.0 - self.learning_rate * self.weight_decay;
+                }
+                matrix.data[index] -= self.learning_rate * m_hat / (@sqrt(v_hat) + self.epsilon);
+            },
+        }
+    }
+
+    fn stateFor(self: *TrainingOptimizer, data: []f64) !*ParamState {
+        for (self.states.items) |*state| {
+            if (state.ptr == data.ptr and state.len == data.len) {
+                return state;
+            }
+        }
+
+        const m = try self.allocator.alloc(f64, data.len);
+        errdefer self.allocator.free(m);
+        const v = try self.allocator.alloc(f64, data.len);
+        errdefer self.allocator.free(v);
+        @memset(m, 0.0);
+        @memset(v, 0.0);
+
+        try self.states.append(self.allocator, .{
+            .ptr = data.ptr,
+            .len = data.len,
+            .m = m,
+            .v = v,
+        });
+        return &self.states.items[self.states.items.len - 1];
+    }
 };
 
 const AttentionForwardCache = struct {
@@ -1094,6 +1235,7 @@ const SequenceTrainCache = struct {
 pub fn trainFullOnCorpus(
     model: *TinyGPT,
     corpus: []const u8,
+    validation_corpus: ?[]const u8,
     options: FullTrainingOptions,
 ) !FullTrainingStats {
     const allocator = model.allocator;
@@ -1105,21 +1247,54 @@ pub fn trainFullOnCorpus(
     const stride = @max(options.stride, @as(usize, 1));
     const window_count = tokens.len - context_len;
     if (window_count == 0) return error.SequenceTooShort;
+    const batch_size = @max(options.batch_size, @as(usize, 1));
+    const update_count = options.steps * batch_size;
+
+    var validation_tokens: ?[]usize = null;
+    defer if (validation_tokens) |items| allocator.free(items);
+    var validation_initial_loss: ?f64 = null;
+    if (validation_corpus) |validation_text| {
+        const encoded = try Tokenizer.encode(allocator, validation_text);
+        if (encoded.len > context_len) {
+            validation_tokens = encoded;
+            validation_initial_loss = try averageCorpusLoss(model, encoded, context_len, 12);
+        } else {
+            allocator.free(encoded);
+        }
+    }
 
     const initial_loss = try averageCorpusLoss(model, tokens, context_len, 12);
+    var optimizer_options = options;
+    optimizer_options.learning_rate = options.learning_rate / @as(f64, @floatFromInt(batch_size));
+    var optimizer = TrainingOptimizer.init(allocator, optimizer_options);
+    defer optimizer.deinit();
+
+    var update_index: usize = 0;
     for (0..options.steps) |step| {
-        const start = (step * stride) % window_count;
-        const inputs = tokens[start .. start + context_len];
-        const targets = tokens[start + 1 .. start + context_len + 1];
-        _ = try trainFullStep(model, inputs, targets, options.learning_rate);
+        for (0..batch_size) |batch_item| {
+            const start = ((step * batch_size + batch_item) * stride) % window_count;
+            optimizer.beginStep(update_index + 1);
+            update_index += 1;
+            const inputs = tokens[start .. start + context_len];
+            const targets = tokens[start + 1 .. start + context_len + 1];
+            _ = try trainFullStep(model, inputs, targets, &optimizer);
+        }
     }
     const final_loss = try averageCorpusLoss(model, tokens, context_len, 12);
+    const validation_final_loss: ?f64 = if (validation_tokens) |items|
+        try averageCorpusLoss(model, items, context_len, 12)
+    else
+        null;
 
     return .{
         .steps = options.steps,
-        .tokens_seen = options.steps * context_len,
+        .updates = update_count,
+        .batch_size = batch_size,
+        .tokens_seen = update_count * context_len,
         .initial_loss = initial_loss,
         .final_loss = final_loss,
+        .validation_initial_loss = validation_initial_loss,
+        .validation_final_loss = validation_final_loss,
     };
 }
 
@@ -1154,7 +1329,7 @@ fn trainFullStep(
     model: *TinyGPT,
     inputs: []const usize,
     targets: []const usize,
-    learning_rate: f64,
+    optimizer: *TrainingOptimizer,
 ) !f64 {
     if (inputs.len != targets.len) return error.DimensionMismatch;
 
@@ -1170,7 +1345,7 @@ fn trainFullStep(
         cache.final_norm,
         grad_logits,
         model.allocator,
-        learning_rate,
+        optimizer,
     );
     defer grad_final_norm.deinit();
 
@@ -1179,7 +1354,7 @@ fn trainFullStep(
         cache.final_input,
         grad_final_norm,
         model.allocator,
-        learning_rate,
+        optimizer,
     );
     errdefer grad_current.deinit();
 
@@ -1191,13 +1366,13 @@ fn trainFullStep(
             &cache.blocks[i],
             grad_current,
             model.allocator,
-            learning_rate,
+            optimizer,
         );
         grad_current.deinit();
         grad_current = next_grad;
     }
 
-    try applyEmbeddingGradient(model, inputs, grad_current, learning_rate);
+    try applyEmbeddingGradient(model, inputs, grad_current, optimizer);
     grad_current.deinit();
 
     return loss;
@@ -1368,7 +1543,7 @@ fn blockBackward(
     cache: *const BlockTrainCache,
     grad_output: Matrix,
     allocator: std.mem.Allocator,
-    learning_rate: f64,
+    optimizer: *TrainingOptimizer,
 ) !Matrix {
     var grad_ln2_out = try mlpBackward(
         &block.mlp,
@@ -1377,7 +1552,7 @@ fn blockBackward(
         cache.mlp_activated,
         grad_output,
         allocator,
-        learning_rate,
+        optimizer,
     );
     defer grad_ln2_out.deinit();
 
@@ -1386,7 +1561,7 @@ fn blockBackward(
         cache.with_attention,
         grad_ln2_out,
         allocator,
-        learning_rate,
+        optimizer,
     );
     defer grad_with_from_ln2.deinit();
 
@@ -1401,7 +1576,7 @@ fn blockBackward(
         cache.attn_probs,
         grad_with_attention,
         allocator,
-        learning_rate,
+        optimizer,
     );
     defer grad_ln1_out.deinit();
 
@@ -1410,7 +1585,7 @@ fn blockBackward(
         cache.input,
         grad_ln1_out,
         allocator,
-        learning_rate,
+        optimizer,
     );
     defer grad_input_from_ln1.deinit();
 
@@ -1424,9 +1599,9 @@ fn mlpBackward(
     activated: Matrix,
     grad_output: Matrix,
     allocator: std.mem.Allocator,
-    learning_rate: f64,
+    optimizer: *TrainingOptimizer,
 ) !Matrix {
-    var grad_activated = try linearBackward(&mlp.c_proj, activated, grad_output, allocator, learning_rate);
+    var grad_activated = try linearBackward(&mlp.c_proj, activated, grad_output, allocator, optimizer);
     defer grad_activated.deinit();
 
     var grad_preact = try Matrix.init(allocator, preact.rows, preact.cols);
@@ -1435,7 +1610,7 @@ fn mlpBackward(
         grad_preact.data[idx] = grad_activated.data[idx] * geluDerivative(value);
     }
 
-    return linearBackward(&mlp.c_fc, input, grad_preact, allocator, learning_rate);
+    return linearBackward(&mlp.c_fc, input, grad_preact, allocator, optimizer);
 }
 
 fn attentionBackward(
@@ -1446,13 +1621,13 @@ fn attentionBackward(
     probs: []const f64,
     grad_output: Matrix,
     allocator: std.mem.Allocator,
-    learning_rate: f64,
+    optimizer: *TrainingOptimizer,
 ) !Matrix {
     const seq_len = input.rows;
     const head_dim = attn.n_embd / attn.n_head;
     const scale = 1.0 / @sqrt(@as(f64, @floatFromInt(head_dim)));
 
-    var grad_context = try linearBackward(&attn.c_proj, context, grad_output, allocator, learning_rate);
+    var grad_context = try linearBackward(&attn.c_proj, context, grad_output, allocator, optimizer);
     defer grad_context.deinit();
 
     var grad_qkv = try Matrix.init(allocator, qkv.rows, qkv.cols);
@@ -1494,7 +1669,7 @@ fn attentionBackward(
         }
     }
 
-    return linearBackward(&attn.c_attn, input, grad_qkv, allocator, learning_rate);
+    return linearBackward(&attn.c_attn, input, grad_qkv, allocator, optimizer);
 }
 
 fn linearBackward(
@@ -1502,7 +1677,7 @@ fn linearBackward(
     input: Matrix,
     grad_output: Matrix,
     allocator: std.mem.Allocator,
-    learning_rate: f64,
+    optimizer: *TrainingOptimizer,
 ) !Matrix {
     if (input.rows != grad_output.rows or input.cols != linear.weights.rows or grad_output.cols != linear.weights.cols) {
         return error.DimensionMismatch;
@@ -1529,7 +1704,7 @@ fn linearBackward(
                 grad_sum += input.data[row * input.cols + in_col] *
                     grad_output.data[row * grad_output.cols + out_col];
             }
-            linear.weights.data[in_col * linear.weights.cols + out_col] -= learning_rate * grad_sum;
+            try optimizer.update(&linear.weights, in_col * linear.weights.cols + out_col, grad_sum);
         }
     }
 
@@ -1538,7 +1713,7 @@ fn linearBackward(
         for (0..grad_output.rows) |row| {
             grad_sum += grad_output.data[row * grad_output.cols + out_col];
         }
-        linear.bias.data[out_col] -= learning_rate * grad_sum;
+        try optimizer.update(&linear.bias, out_col, grad_sum);
     }
 
     return grad_input;
@@ -1549,7 +1724,7 @@ fn layerNormBackward(
     input: Matrix,
     grad_output: Matrix,
     allocator: std.mem.Allocator,
-    learning_rate: f64,
+    optimizer: *TrainingOptimizer,
 ) !Matrix {
     if (input.rows != grad_output.rows or input.cols != grad_output.cols or input.cols != layer_norm.weight.cols) {
         return error.DimensionMismatch;
@@ -1608,8 +1783,8 @@ fn layerNormBackward(
     }
 
     for (0..input.cols) |col| {
-        layer_norm.weight.data[col] -= learning_rate * grad_weight[col];
-        layer_norm.bias.data[col] -= learning_rate * grad_bias[col];
+        try optimizer.update(&layer_norm.weight, col, grad_weight[col]);
+        try optimizer.update(&layer_norm.bias, col, grad_bias[col]);
     }
 
     return grad_input;
@@ -1652,7 +1827,7 @@ fn applyEmbeddingGradient(
     model: *TinyGPT,
     tokens: []const usize,
     grad_embedding: Matrix,
-    learning_rate: f64,
+    optimizer: *TrainingOptimizer,
 ) !void {
     if (tokens.len != grad_embedding.rows or grad_embedding.cols != model.config.n_embd) {
         return error.DimensionMismatch;
@@ -1662,8 +1837,8 @@ fn applyEmbeddingGradient(
         if (token >= model.config.vocab_size) return error.TokenOutOfVocabulary;
         for (0..model.config.n_embd) |dim| {
             const grad = grad_embedding.data[pos * grad_embedding.cols + dim];
-            model.token_embedding.data[token * model.token_embedding.cols + dim] -= learning_rate * grad;
-            model.position_embedding.data[pos * model.position_embedding.cols + dim] -= learning_rate * grad;
+            try optimizer.update(&model.token_embedding, token * model.token_embedding.cols + dim, grad);
+            try optimizer.update(&model.position_embedding, pos * model.position_embedding.cols + dim, grad);
         }
     }
 }
@@ -1697,6 +1872,26 @@ fn parseArgs(args: []const [:0]const u8) !CliOptions {
             i += 1;
             if (i >= args.len) return error.MissingArgument;
             options.seed = try std.fmt.parseInt(u64, args[i], 10);
+        } else if (std.mem.eql(u8, arg, "--block-size")) {
+            i += 1;
+            if (i >= args.len) return error.MissingArgument;
+            options.model_config.block_size = try std.fmt.parseInt(usize, args[i], 10);
+            options.config_overridden = true;
+        } else if (std.mem.eql(u8, arg, "--layers") or std.mem.eql(u8, arg, "--n-layer")) {
+            i += 1;
+            if (i >= args.len) return error.MissingArgument;
+            options.model_config.n_layer = try std.fmt.parseInt(usize, args[i], 10);
+            options.config_overridden = true;
+        } else if (std.mem.eql(u8, arg, "--heads") or std.mem.eql(u8, arg, "--n-head")) {
+            i += 1;
+            if (i >= args.len) return error.MissingArgument;
+            options.model_config.n_head = try std.fmt.parseInt(usize, args[i], 10);
+            options.config_overridden = true;
+        } else if (std.mem.eql(u8, arg, "--embd") or std.mem.eql(u8, arg, "--n-embd") or std.mem.eql(u8, arg, "--embedding-size")) {
+            i += 1;
+            if (i >= args.len) return error.MissingArgument;
+            options.model_config.n_embd = try std.fmt.parseInt(usize, args[i], 10);
+            options.config_overridden = true;
         } else if (std.mem.eql(u8, arg, "--corpus")) {
             i += 1;
             if (i >= args.len) return error.MissingArgument;
@@ -1710,6 +1905,11 @@ fn parseArgs(args: []const [:0]const u8) !CliOptions {
             i += 1;
             if (i >= args.len) return error.MissingArgument;
             options.checkpoint_in = args[i];
+        } else if (std.mem.eql(u8, arg, "--resume-checkpoint")) {
+            i += 1;
+            if (i >= args.len) return error.MissingArgument;
+            options.checkpoint_in = args[i];
+            options.resume_checkpoint = args[i];
         } else if (std.mem.eql(u8, arg, "--save-checkpoint")) {
             i += 1;
             if (i >= args.len) return error.MissingArgument;
@@ -1740,10 +1940,38 @@ fn parseArgs(args: []const [:0]const u8) !CliOptions {
             i += 1;
             if (i >= args.len) return error.MissingArgument;
             options.full_train_stride = try std.fmt.parseInt(usize, args[i], 10);
+        } else if (std.mem.eql(u8, arg, "--full-batch-size") or std.mem.eql(u8, arg, "--batch-size")) {
+            i += 1;
+            if (i >= args.len) return error.MissingArgument;
+            options.full_batch_size = try std.fmt.parseInt(usize, args[i], 10);
+        } else if (std.mem.eql(u8, arg, "--optimizer")) {
+            i += 1;
+            if (i >= args.len) return error.MissingArgument;
+            options.full_optimizer = try parseOptimizerKind(args[i]);
+        } else if (std.mem.eql(u8, arg, "--weight-decay")) {
+            i += 1;
+            if (i >= args.len) return error.MissingArgument;
+            options.full_weight_decay = try std.fmt.parseFloat(f64, args[i]);
+        } else if (std.mem.eql(u8, arg, "--adam-beta1")) {
+            i += 1;
+            if (i >= args.len) return error.MissingArgument;
+            options.adam_beta1 = try std.fmt.parseFloat(f64, args[i]);
+        } else if (std.mem.eql(u8, arg, "--adam-beta2")) {
+            i += 1;
+            if (i >= args.len) return error.MissingArgument;
+            options.adam_beta2 = try std.fmt.parseFloat(f64, args[i]);
+        } else if (std.mem.eql(u8, arg, "--adam-epsilon")) {
+            i += 1;
+            if (i >= args.len) return error.MissingArgument;
+            options.adam_epsilon = try std.fmt.parseFloat(f64, args[i]);
         } else if (std.mem.eql(u8, arg, "--train-chars")) {
             i += 1;
             if (i >= args.len) return error.MissingArgument;
             options.train_chars = try std.fmt.parseInt(usize, args[i], 10);
+        } else if (std.mem.eql(u8, arg, "--validation-chars")) {
+            i += 1;
+            if (i >= args.len) return error.MissingArgument;
+            options.validation_chars = try std.fmt.parseInt(usize, args[i], 10);
         } else if (std.mem.eql(u8, arg, "--prior-chars")) {
             i += 1;
             if (i >= args.len) return error.MissingArgument;
@@ -1767,6 +1995,12 @@ fn parseCorpusPreset(value: []const u8) !CorpusPreset {
     return error.UnknownCorpusPreset;
 }
 
+fn parseOptimizerKind(value: []const u8) !OptimizerKind {
+    if (std.mem.eql(u8, value, "sgd")) return .sgd;
+    if (std.mem.eql(u8, value, "adamw")) return .adamw;
+    return error.UnknownOptimizer;
+}
+
 fn printUsage(writer: anytype) !void {
     try writer.writeAll(
         \\Usage: zig build run_tiny_gpt -- [options]
@@ -1777,9 +2011,14 @@ fn printUsage(writer: anytype) !void {
         \\  --temperature <float>    Sampling temperature (default: 1.0)
         \\  --top-k <n>              Restrict sampling to top k tokens (default: 8)
         \\  --seed <n>               Deterministic seed (default: 42)
+        \\  --block-size <n>         Context length for new models (default: 16)
+        \\  --layers <n>             Transformer block count for new models (default: 2)
+        \\  --heads <n>              Attention head count for new models (default: 2)
+        \\  --embd <n>               Embedding/channel size for new models (default: 32)
         \\  --corpus <name>          auto, toy, shakespeare, or tinystories
         \\  --corpus-path <path>     Use a custom UTF-8 text corpus
         \\  --load-checkpoint <path> Load a TinyGPT checkpoint before generation/training
+        \\  --resume-checkpoint <p>  Load a checkpoint and save back to it unless overridden
         \\  --save-checkpoint <path> Save the model checkpoint after optional training
         \\  --no-train               Skip the tiny demo-corpus output-head training
         \\  --train-full             Train all Transformer weights instead of only the head
@@ -1788,13 +2027,20 @@ fn printUsage(writer: anytype) !void {
         \\  --full-train-steps <n>   Full-model context-window updates (default: 120)
         \\  --full-learning-rate <f> Full-model learning rate (default: 0.03)
         \\  --full-train-stride <n>  Full-model corpus window stride (default: 1)
+        \\  --full-batch-size <n>    Full-model corpus windows per step (default: 1)
+        \\  --optimizer <name>       sgd or adamw for full training (default: sgd)
+        \\  --weight-decay <f>       Full-training weight decay (default: 0)
+        \\  --adam-beta1 <f>         AdamW beta1 (default: 0.9)
+        \\  --adam-beta2 <f>         AdamW beta2 (default: 0.999)
+        \\  --adam-epsilon <f>       AdamW epsilon (default: 1e-8)
         \\  --train-chars <n>        Corpus prefix for output-head training (default: 512)
+        \\  --validation-chars <n>   Corpus holdout chars after the train slice (default: 0)
         \\  --prior-chars <n>        Corpus prefix for readable sampling prior (default: 32768)
         \\  --no-corpus-prior        Skip the tiny backoff corpus prior used for readable sampling
         \\
         \\Data:
         \\  `--corpus auto` uses prepared TinyStories, then Tiny Shakespeare, then toy.
-        \\  Run `make prepare-tiny-gpt-data` to download the sourced corpora.
+        \\  Run `nnctl data tiny-gpt` to download the sourced corpora.
         \\
     );
 }
@@ -1817,17 +2063,22 @@ pub fn main(init: std.process.Init) !void {
         return err;
     };
 
+    if (options.checkpoint_in != null and options.config_overridden) {
+        return error.ConfigOverridesCheckpoint;
+    }
+    const checkpoint_out = if (options.checkpoint_out) |path| path else options.resume_checkpoint;
+
     var model = if (options.checkpoint_in) |path|
         try TinyGPT.loadFromFile(allocator, path)
     else
-        try TinyGPT.init(allocator, .{}, options.seed);
+        try TinyGPT.init(allocator, options.model_config, options.seed);
     defer model.deinit();
     const config = model.config;
 
     var corpus = loadCorpus(allocator, options) catch |err| {
         if (err == error.MissingCorpusFile) {
             try stdout.print(
-                "Missing corpus file. Run `make prepare-tiny-gpt-data`, use `--corpus toy`, or pass `--corpus-path <path>`.\n",
+                "Missing corpus file. Run `nnctl data tiny-gpt`, use `--corpus toy`, or pass `--corpus-path <path>`.\n",
                 .{},
             );
         }
@@ -1835,7 +2086,8 @@ pub fn main(init: std.process.Init) !void {
     };
     defer corpus.deinit();
 
-    const training_corpus = limitedCorpus(corpus.text, options.train_chars);
+    const training_corpus = trainingCorpus(corpus.text, options.train_chars, options.validation_chars);
+    const validation_corpus = validationCorpus(corpus.text, options.train_chars, options.validation_chars);
     const prior_corpus = limitedCorpus(corpus.text, options.prior_chars);
 
     const training_stats: ?TrainingStats = if (options.train_demo_head and !options.train_full)
@@ -1843,16 +2095,22 @@ pub fn main(init: std.process.Init) !void {
     else
         null;
     const full_training_stats: ?FullTrainingStats = if (options.train_full)
-        try trainFullOnCorpus(&model, training_corpus, .{
+        try trainFullOnCorpus(&model, training_corpus, validation_corpus, .{
             .steps = options.full_train_steps,
             .learning_rate = options.full_learning_rate,
             .context_len = config.block_size,
             .stride = options.full_train_stride,
+            .batch_size = options.full_batch_size,
+            .optimizer = options.full_optimizer,
+            .weight_decay = options.full_weight_decay,
+            .adam_beta1 = options.adam_beta1,
+            .adam_beta2 = options.adam_beta2,
+            .adam_epsilon = options.adam_epsilon,
         })
     else
         null;
 
-    if (options.checkpoint_out) |path| {
+    if (checkpoint_out) |path| {
         try model.saveToFile(path);
     }
 
@@ -1897,12 +2155,24 @@ pub fn main(init: std.process.Init) !void {
     }
     try stdout.print(", {} chars loaded\n", .{corpus.text.len});
     if (full_training_stats) |stats| {
-        try stdout.print("Full training: {} window updates, {} tokens seen, {} chars\n", .{
+        try stdout.print("Full training: {} steps, {} updates, batch {}, {} tokens seen, {} train chars\n", .{
             stats.steps,
+            stats.updates,
+            stats.batch_size,
             stats.tokens_seen,
             training_corpus.len,
         });
+        try stdout.print("Full optimizer: {s}, learning rate {d}, weight decay {d}\n", .{
+            @tagName(options.full_optimizer),
+            options.full_learning_rate,
+            options.full_weight_decay,
+        });
         try stdout.print("Full training loss: {d:.4} -> {d:.4}\n", .{ stats.initial_loss, stats.final_loss });
+        if (stats.validation_initial_loss) |initial_validation| {
+            if (stats.validation_final_loss) |final_validation| {
+                try stdout.print("Validation loss: {d:.4} -> {d:.4}\n", .{ initial_validation, final_validation });
+            }
+        }
     } else if (training_stats) |stats| {
         try stdout.print("Demo training: {} frozen-context samples, {} output-head epochs, {} chars\n", .{
             stats.samples,
@@ -1913,7 +2183,7 @@ pub fn main(init: std.process.Init) !void {
     } else {
         try stdout.print("Demo training: skipped, output head remains random\n", .{});
     }
-    if (options.checkpoint_out) |path| {
+    if (checkpoint_out) |path| {
         try stdout.print("Checkpoint saved: {s}\n", .{path});
     }
     try stdout.print("Readable sampling: {s}", .{if (options.corpus_prior) "corpus prior enabled" else "corpus prior disabled"});
@@ -2211,13 +2481,18 @@ test "full transformer training lowers corpus loss" {
     var model = try TinyGPT.init(allocator, config, 21);
     defer model.deinit();
 
-    const stats = try trainFullOnCorpus(&model, "abababababababab\n", .{
+    const stats = try trainFullOnCorpus(&model, "abababababababab\n", "babababababababa\n", .{
         .steps = 40,
         .learning_rate = 0.05,
         .context_len = config.block_size,
         .stride = 1,
+        .batch_size = 2,
+        .optimizer = .adamw,
+        .weight_decay = 0.01,
     });
 
     try testing.expect(stats.tokens_seen > 0);
+    try testing.expect(stats.updates == stats.steps * stats.batch_size);
     try testing.expect(stats.final_loss < stats.initial_loss);
+    try testing.expect(stats.validation_initial_loss != null);
 }

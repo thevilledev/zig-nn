@@ -21,7 +21,7 @@ Location: [examples/quantization](../examples/quantization/README.md)
 Run:
 
 ```bash
-zig build run_turboquant
+./bin/nnctl run turboquant
 ```
 
 This compares a uniform scalar quantization baseline with a rotated scalar
@@ -35,21 +35,22 @@ Location: [examples/tiny_gpt](../examples/tiny_gpt/README.md)
 Run:
 
 ```bash
-zig build run_tiny_gpt -- --prompt "to be" --tokens 80 --seed 42
+./bin/nnctl run tiny-gpt -- --prompt "to be" --tokens 80 --seed 42
 ```
 
 This is a tiny decoder-only Transformer demo that uses this project's matrix
 operations for projections and logits. It includes readable sampling and an
-output-head-only training path, while full Transformer training remains future
-work.
+output-head-only training path, plus full-model educational training for small
+checkpoints.
 
 By default, `--corpus auto` uses a prepared TinyStories slice if it exists,
 then prepared Tiny Shakespeare, then the checked-in toy corpus. Prepare the
 sourced corpora with:
 
 ```bash
-make prepare-tiny-gpt-data
-zig build run_tiny_gpt -- --corpus tinystories --prompt "Once upon a time"
+./bin/nnctl data tiny-gpt
+./bin/nnctl train tiny-gpt --corpus tinystories --output tiny-gpt.bin
+./bin/nnctl chat --model tiny-gpt.bin
 ```
 
 ## When Adding A New Experiment

@@ -31,6 +31,7 @@ var examples = []Example{
 	{Name: "gpu-benchmark", Step: "run_gpu_benchmark", Description: "Benchmark Metal backend against CPU", DefaultGPU: "metal", DefaultOptimize: "ReleaseFast"},
 	{Name: "turboquant", Step: "run_turboquant", Description: "Run TurboQuant paper lab", Quick: true},
 	{Name: "tiny-gpt", Step: "run_tiny_gpt", Description: "Run tiny GPT decoder-only Transformer", Quick: true},
+	{Name: "tiny-gpt-openai", Step: "run_tiny_gpt_openai", Description: "Run Tiny GPT OpenAI-compatible server"},
 }
 
 var tests = []string{
@@ -57,6 +58,7 @@ var tests = []string{
 	"gpu-benchmark",
 	"turboquant",
 	"tiny-gpt",
+	"tiny-gpt-openai",
 }
 
 func Examples() []Example {
