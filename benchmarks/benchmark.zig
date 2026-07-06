@@ -66,6 +66,9 @@ pub fn main(init: std.process.Init) !void {
     if (shouldRun(options, "activation")) {
         try benchmarkActivations(allocator, cpu, metal, options);
     }
+    if (shouldRun(options, "layer_norm")) {
+        try benchmarkLayerNorm(allocator, options);
+    }
     if (shouldRun(options, "training")) {
         try benchmarkTraining(allocator, options);
     }
@@ -107,6 +110,7 @@ fn printHelp() void {
         \\Suites:
         \\  matmul        backend matrix multiplication
         \\  activation    backend activations and gated activations
+        \\  layer_norm    CPU LayerNorm forward passes
         \\  training      CPU Network.trainBatch loops
         \\  tiny_gpt      CPU TinyGPT forward passes
         \\  quantization  CPU uniform and TurboQuant encode/decode/error loops
@@ -376,6 +380,81 @@ fn compareActivation(
     const metal_result = try runBackendOp(allocator, op, metal_input, metal_gate);
     defer metal_result.deinit();
     return sampleMaxAbsDiff(cpu_result, metal_result);
+}
+
+fn benchmarkLayerNorm(allocator: Allocator, options: Options) !void {
+    const cases = [_]struct {
+        name: []const u8,
+        rows: usize,
+        cols: usize,
+        warmups: usize,
+        iterations: usize,
+    }{
+        .{ .name = "batch128_width64", .rows = 128, .cols = 64, .warmups = 1, .iterations = 10 },
+        .{ .name = "batch512_width256", .rows = 512, .cols = 256, .warmups = 1, .iterations = 6 },
+        .{ .name = "batch1024_width768", .rows = 1024, .cols = 768, .warmups = 1, .iterations = 3 },
+    };
+
+    for (cases, 0..) |case, index| {
+        if (options.quick and index > 0) break;
+
+        var layer_norm = try nn.LayerNorm.init(allocator, case.cols);
+        defer layer_norm.deinit();
+        fillCpuMatrix(&layer_norm.weight, 211);
+        fillCpuMatrix(&layer_norm.bias, 223);
+
+        var input = try Matrix.init(allocator, case.rows, case.cols);
+        defer input.deinit();
+        fillCpuMatrix(&input, 197);
+
+        const timing = try timeLayerNormForward(
+            &layer_norm,
+            input,
+            quickCount(options, case.warmups),
+            quickCount(options, case.iterations),
+        );
+        printResult("layer_norm", case.name, "cpu", timing, 0.0, "ok");
+        printSkipped("layer_norm", case.name, "metal", timing.warmups, timing.iterations, "skipped_cpu_only_path");
+    }
+}
+
+fn timeLayerNormForward(
+    layer_norm: *const nn.LayerNorm,
+    input: Matrix,
+    warmups: usize,
+    iterations: usize,
+) !Timing {
+    for (0..warmups) |_| {
+        var output = try layer_norm.forward(input, input.allocator);
+        output.deinit();
+    }
+
+    var total_ns: f64 = 0.0;
+    var min_ns: f64 = std.math.inf(f64);
+    var max_ns: f64 = 0.0;
+    var checksum: f64 = 0.0;
+
+    for (0..iterations) |iteration| {
+        const start = nowNs();
+        var output = try layer_norm.forward(input, input.allocator);
+        const elapsed = nowNs() - start;
+        checksum += sampleCpuMatrix(output, iteration);
+        output.deinit();
+
+        const elapsed_ns = @as(f64, @floatFromInt(elapsed));
+        total_ns += elapsed_ns;
+        min_ns = @min(min_ns, elapsed_ns);
+        max_ns = @max(max_ns, elapsed_ns);
+    }
+
+    return .{
+        .warmups = warmups,
+        .iterations = iterations,
+        .average_ns = total_ns / @as(f64, @floatFromInt(iterations)),
+        .min_ns = min_ns,
+        .max_ns = max_ns,
+        .checksum = checksum,
+    };
 }
 
 fn benchmarkTraining(allocator: Allocator, options: Options) !void {

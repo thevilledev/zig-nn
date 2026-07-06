@@ -7,6 +7,7 @@ const math = std.math;
 
 pub const Config = config_mod.Config;
 pub const Tokenizer = config_mod.Tokenizer;
+pub const LayerNorm = nn.LayerNorm;
 
 const checkpoint_format_version: u32 = 2;
 
@@ -52,62 +53,6 @@ pub const Linear = struct {
 
     pub fn parameterCount(self: *const Linear) usize {
         return self.weights.rows * self.weights.cols + self.bias.cols;
-    }
-};
-
-pub const LayerNorm = struct {
-    weight: Matrix,
-    bias: Matrix,
-    eps: f64 = 1e-5,
-
-    pub fn init(allocator: std.mem.Allocator, size: usize) !LayerNorm {
-        var weight = try Matrix.init(allocator, 1, size);
-        errdefer weight.deinit();
-        var bias = try Matrix.init(allocator, 1, size);
-        errdefer bias.deinit();
-
-        weight.fill(1.0);
-        bias.fill(0.0);
-
-        return .{ .weight = weight, .bias = bias };
-    }
-
-    pub fn deinit(self: *LayerNorm) void {
-        self.weight.deinit();
-        self.bias.deinit();
-    }
-
-    pub fn forward(self: *const LayerNorm, input: Matrix, allocator: std.mem.Allocator) !Matrix {
-        var output = try Matrix.init(allocator, input.rows, input.cols);
-        errdefer output.deinit();
-
-        for (0..input.rows) |row| {
-            var mean: f64 = 0.0;
-            for (0..input.cols) |col| {
-                mean += try input.get(row, col);
-            }
-            mean /= @as(f64, @floatFromInt(input.cols));
-
-            var variance: f64 = 0.0;
-            for (0..input.cols) |col| {
-                const centered = (try input.get(row, col)) - mean;
-                variance += centered * centered;
-            }
-            variance /= @as(f64, @floatFromInt(input.cols));
-
-            const inv_std = 1.0 / @sqrt(variance + self.eps);
-            for (0..input.cols) |col| {
-                const normalized = ((try input.get(row, col)) - mean) * inv_std;
-                const scaled = normalized * (try self.weight.get(0, col)) + (try self.bias.get(0, col));
-                try output.set(row, col, scaled);
-            }
-        }
-
-        return output;
-    }
-
-    pub fn parameterCount(self: *const LayerNorm) usize {
-        return self.weight.cols + self.bias.cols;
     }
 };
 
