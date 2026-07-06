@@ -13,6 +13,7 @@ func TestDirectHelpAvailableForEveryCommand(t *testing.T) {
 		{"build", "--help"},
 		{"release", "--help"},
 		{"test", "--help"},
+		{"benchmark", "--help"},
 		{"examples", "--help"},
 		{"run", "--help"},
 		{"run", "tiny-gpt", "--help"},

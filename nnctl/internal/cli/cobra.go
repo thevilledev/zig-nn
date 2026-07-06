@@ -65,6 +65,7 @@ func (a *App) newRootCommand() *cobra.Command {
 		a.newBuildCommand(withRepo),
 		a.newReleaseCommand(withRepo),
 		a.newTestCommand(withRepo),
+		a.newBenchmarkCommand(withRepo),
 		a.newExamplesCommand(withRepo),
 		a.newRunCommand(withRepo),
 		a.newTrainCommand(withRepo),
@@ -159,6 +160,33 @@ func (a *App) newTestCommand(withRepo repoRunner) *cobra.Command {
 	cmd.Flags().BoolVar(&opts.unitOnly, "unit-only", false, "run only unit tests")
 	cmd.Flags().BoolVar(&opts.acceptanceOnly, "acceptance-only", false, "run only acceptance tests")
 	cmd.Flags().StringVar(&opts.name, "name", "", "individual test name")
+	cmd.Flags().SortFlags = false
+	return cmd
+}
+
+func (a *App) newBenchmarkCommand(withRepo repoRunner) *cobra.Command {
+	opts := defaultBenchmarkOptions()
+	cmd := &cobra.Command{
+		Use:   "benchmark",
+		Short: "Run benchmarks with a readable CPU/Metal comparison",
+		Long: `Runs the Zig benchmark suite and renders the CSV as grouped tables.
+The default uses ReleaseFast and Metal so CPU and Metal rows can be compared.
+Use --csv to print the raw benchmark CSV instead.`,
+		Example: `  nnctl benchmark
+  nnctl benchmark --quick
+  nnctl benchmark --filter matmul
+  nnctl benchmark --gpu none --csv
+  nnctl benchmark --debug --filter activation`,
+		Args: cobra.NoArgs,
+		RunE: withRepo(func(ctx context.Context, cmd *cobra.Command, args []string) error {
+			return a.runBenchmark(ctx, opts)
+		}),
+	}
+	addGPUFlag(cmd, &opts.gpu)
+	cmd.Flags().StringVar(&opts.filter, "filter", opts.filter, "benchmark suite filter")
+	cmd.Flags().BoolVar(&opts.quick, "quick", opts.quick, "run the smoke-sized benchmark subset")
+	cmd.Flags().BoolVar(&opts.debug, "debug", opts.debug, "run benchmark-debug instead of ReleaseFast benchmark")
+	cmd.Flags().BoolVar(&opts.csv, "csv", opts.csv, "print raw CSV output")
 	cmd.Flags().SortFlags = false
 	return cmd
 }

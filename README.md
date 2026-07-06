@@ -58,6 +58,9 @@ nnctl chat --model tiny-gpt.bin
 
 # Build with a different optimization mode
 nnctl build --mode ReleaseFast
+
+# Run readable benchmark comparisons
+nnctl benchmark
 ```
 
 For setup details and direct `zig build` commands, see

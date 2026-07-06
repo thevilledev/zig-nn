@@ -6,6 +6,16 @@ and a checksum so obviously-elided work is visible.
 
 ## Commands
 
+Run the human-readable `nnctl` report:
+
+```bash
+./bin/nnctl benchmark
+```
+
+That command runs the ReleaseFast benchmark with Metal enabled by default,
+groups results by suite, and shows CPU vs Metal timing deltas where both
+backends are available. Use `--csv` to print the raw benchmark CSV.
+
 Run the default release-mode suite. The `benchmark` step pins the benchmark
 binary and its `nn` module import to `ReleaseFast` so timings are not
 accidentally collected from a Debug build:
