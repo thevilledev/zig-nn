@@ -22,12 +22,15 @@ The repo has two matrix paths:
 
 - `Matrix` is the learning-oriented path used by the default `Network`,
   `Layer`, examples, and training code.
-- `BackendMatrix` is the backend-aware path that can run operations through CPU
+- `BackendMatrix` is the backend-aware path that can run operations through CPU,
   Metal, or CUDA implementations.
 
 Metal and CUDA support currently applies to backend matrix operations, GPU
-examples, and backend-aware `Network.forwardBackend` / `Network.predictBackend`
-inference. The higher-level training path is still CPU-only.
+examples, backend-aware `Network.forwardBackend` / `Network.predictBackend`
+inference, and `Network.trainBatchBackend` / `Network.trainBackend` training.
+Backend training is functional, but network parameters are still CPU-owned and
+mirrored into backend matrices during the current training calls. Persistent
+backend parameters remain the next major performance bridge.
 
 ## Start Here
 
@@ -45,6 +48,7 @@ nnctl all
 # Run specific examples
 nnctl run simple-xor
 nnctl run tiny-gpt
+nnctl run backend-training
 
 # Download data for examples
 nnctl data mnist

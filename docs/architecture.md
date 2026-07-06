@@ -45,10 +45,15 @@ Two main layer types:
 - CUDA backend accelerates backend matrix operations on Linux with NVIDIA GPUs
 - `Network.forwardBackend` and `Network.predictBackend` provide
   backend-aware inference without updating training caches
+- `Network.trainBatchBackend` and `Network.trainBackend` provide
+  backend-aware training against `BackendMatrix` inputs and targets
 
-The default high-level `Network.forward`, training, and backpropagation paths
-still use the CPU `Matrix` implementation. GPU support should be verified
-through backend tests, GPU examples, and benchmark rows for the target machine.
+The default high-level `Network.forward`, `Network.trainBatch`, and
+`Network.train` paths still use the CPU `Matrix` implementation. Backend
+training works through explicit backend methods, while network parameters
+remain CPU-owned and are mirrored into backend matrices during training calls.
+GPU support should be verified through backend tests, GPU examples, backend
+training examples, and benchmark rows for the target machine.
 
 ### Quantization (`quantization.zig`)
 - Uniform scalar quantization baseline
@@ -106,12 +111,11 @@ Using Zig's error union types for handling:
 
 Areas for potential improvement:
 1. SIMD optimizations
-2. Extending backend-aware inference toward persistent backend parameters and
-   backend-aware training
+2. Persistent backend parameters for backend-aware inference and training
 3. Distributed training support
 4. Additional layer types:
    - Convolutional layers
    - Attention mechanisms
    - Residual connections
-5. Backend-aware training
+5. Backend-aware Tiny GPT inference and training experiments
 6. Quantized network inference and KV-cache experiments

@@ -14,8 +14,13 @@ backend-aware matrix path.
   NVIDIA driver, CUDA toolkit headers, and NVRTC libraries available.
 - `Network.forwardBackend` and `Network.predictBackend` can run inference with
   `BackendMatrix` inputs through the selected backend.
-- The high-level training and backpropagation path does not yet use
-  `BackendMatrix`.
+- `Network.trainBatchBackend` and `Network.trainBackend` can train with
+  `BackendMatrix` inputs and targets through the selected backend.
+- The default `Network.trainBatch` and `Network.train` methods still use the
+  CPU `Matrix` path.
+- Backend training currently mirrors CPU-owned network parameters into backend
+  matrices during training calls. Persistent backend parameters remain future
+  performance work.
 
 ## Metal Verification
 
@@ -76,10 +81,11 @@ backend creation falls back to CPU.
 ## Working On Backends
 
 Use `BackendMatrix` when testing backend behavior directly. Use
-`Network.forwardBackend` or `Network.predictBackend` when testing backend-aware
-inference. Use `Matrix`, `Network.forward`, and training methods when working
-on the learning-oriented training path.
+`Network.forwardBackend`, `Network.predictBackend`, `Network.trainBatchBackend`,
+or `Network.trainBackend` when testing backend-aware network execution. Use
+`Matrix`, `Network.forward`, and the default training methods when working on
+the learning-oriented CPU path.
 
-The next major bridge is moving from inference-only backend execution to
-persistent backend parameters and backend-aware training without losing the
-readability that makes the project useful as a learning repo.
+The next major bridge is persistent backend parameters for backend execution
+without losing the readability that makes the project useful as a learning
+repo.

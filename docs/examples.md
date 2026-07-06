@@ -24,6 +24,7 @@ toolchain, prefer the individual CPU examples below.
 | Gated network | `zig build run_gated_network` | `nnctl run gated-network` | GLU/SwiGLU-style gated layer behavior |
 | Network visualisation | `zig build run_network_visualisation` | `nnctl run network-visualisation` | Unicode terminal topology diagram of a network shape |
 | Backend demo | `zig build run_backend_demo` | `nnctl run backend-demo` | Basic matrix operations through the public API |
+| Backend training | `zig build run_backend_training` | `nnctl run backend-training` | Tiny supervised training loop through `BackendMatrix` |
 | GPU demo | `zig build run_gpu -Dgpu=auto` | `nnctl run gpu` | Backend matrix operations on Metal or CUDA |
 | GPU benchmark | `zig build run_gpu_benchmark -Dgpu=auto -Doptimize=ReleaseFast` | `nnctl run gpu-benchmark` | CPU vs GPU matrix multiplication timing |
 | TurboQuant | `zig build run_turboquant` | `nnctl run turboquant` | Quantization experiment with comparable metrics |

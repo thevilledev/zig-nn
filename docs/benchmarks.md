@@ -63,9 +63,8 @@ zig build benchmark -- --filter quantization
 - `matmul`: backend-aware `BackendMatrix.dotProduct` on CPU, Metal, and CUDA.
 - `activation`: backend-aware ReLU, tanh, Swish, softmax, GLU, and SwiGLU on
   CPU, Metal, and CUDA.
-- `training`: CPU `Network.trainBatch` loops. The current training path uses
-  the learning-oriented `Matrix`, so GPU rows are marked
-  `skipped_cpu_only_path`.
+- `training`: CPU `Network.trainBatch` loops plus `Network.trainBatchBackend`
+  rows for Metal and CUDA when those backends are available.
 - `tiny_gpt`: CPU TinyGPT forward passes through the example model. TinyGPT also
   uses the learning-oriented `Matrix` path today.
 - `quantization`: CPU uniform scalar quantization and TurboQuant encode,
