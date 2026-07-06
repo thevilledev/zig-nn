@@ -48,6 +48,13 @@ Run a fast smoke benchmark:
 zig build benchmark -- --quick
 ```
 
+Save a raw `nnctl` CSV baseline and compare a later run against it:
+
+```bash
+nnctl benchmark --quick --csv > baseline.csv
+nnctl benchmark --quick --compare baseline.csv
+```
+
 Run one suite:
 
 ```bash

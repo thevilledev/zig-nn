@@ -6,6 +6,7 @@ import (
 	"encoding/csv"
 	"fmt"
 	"math"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -15,11 +16,12 @@ import (
 )
 
 type benchmarkOptions struct {
-	gpu    string
-	filter string
-	quick  bool
-	debug  bool
-	csv    bool
+	gpu     string
+	filter  string
+	quick   bool
+	debug   bool
+	csv     bool
+	compare string
 }
 
 type benchmarkRow struct {
@@ -44,6 +46,10 @@ func defaultBenchmarkOptions() benchmarkOptions {
 }
 
 func (a *App) runBenchmark(ctx context.Context, opts benchmarkOptions) error {
+	if opts.csv && opts.compare != "" {
+		return fmt.Errorf("--csv cannot be used with --compare")
+	}
+
 	step := "benchmark"
 	if opts.debug {
 		step = "benchmark-debug"
@@ -82,6 +88,19 @@ func (a *App) runBenchmark(ctx context.Context, opts benchmarkOptions) error {
 			fmt.Fprint(a.stderr(), string(output))
 		}
 		return err
+	}
+
+	if opts.compare != "" {
+		baselineOutput, err := os.ReadFile(opts.compare)
+		if err != nil {
+			return fmt.Errorf("read benchmark baseline: %w", err)
+		}
+		baselineRows, err := parseBenchmarkCSV(baselineOutput)
+		if err != nil {
+			return fmt.Errorf("parse benchmark baseline: %w", err)
+		}
+		printBenchmarkComparison(a.stdout(), rows, baselineRows)
+		return nil
 	}
 
 	printBenchmarkReport(a.stdout(), rows)
@@ -322,6 +341,93 @@ func comparableBenchmarkRows(cpu, metal *benchmarkRow) bool {
 		metal.AverageNS > 0 &&
 		!math.IsNaN(cpu.AverageNS) &&
 		!math.IsNaN(metal.AverageNS)
+}
+
+func printBenchmarkComparison(dst interface{ Write([]byte) (int, error) }, current, baseline []benchmarkRow) {
+	fmt.Fprintf(dst, "Benchmark comparison\n")
+	if len(current) > 0 {
+		fmt.Fprintf(dst, "Mode: %s\n", current[0].Mode)
+	}
+	fmt.Fprintf(dst, "\n")
+
+	baselineByKey := make(map[string]*benchmarkRow, len(baseline))
+	for i := range baseline {
+		row := &baseline[i]
+		baselineByKey[benchmarkRowKey(*row)] = row
+	}
+
+	seen := make(map[string]bool, len(current))
+	var table bytes.Buffer
+	tw := tabwriter.NewWriter(&table, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "suite\tcase\tbackend\tcurrent\tbaseline\tdelta\tstatus")
+
+	for i := range current {
+		row := &current[i]
+		key := benchmarkRowKey(*row)
+		seen[key] = true
+		base := baselineByKey[key]
+		fmt.Fprintf(
+			tw,
+			"%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			row.Suite,
+			row.Case,
+			row.Backend,
+			formatBenchmarkTime(row),
+			formatBenchmarkTime(base),
+			formatBenchmarkComparisonDelta(row, base),
+			formatBenchmarkComparisonStatus(row, base),
+		)
+	}
+
+	for i := range baseline {
+		row := &baseline[i]
+		key := benchmarkRowKey(*row)
+		if seen[key] {
+			continue
+		}
+		fmt.Fprintf(
+			tw,
+			"%s\t%s\t%s\t-\t%s\t-\tmissing_current\n",
+			row.Suite,
+			row.Case,
+			row.Backend,
+			formatBenchmarkTime(row),
+		)
+	}
+
+	_ = tw.Flush()
+	fmt.Fprint(dst, table.String())
+}
+
+func benchmarkRowKey(row benchmarkRow) string {
+	return strings.Join([]string{row.Mode, row.Suite, row.Case, row.Backend}, "\x00")
+}
+
+func formatBenchmarkComparisonDelta(current, baseline *benchmarkRow) string {
+	if !comparableBenchmarkRows(baseline, current) {
+		return "-"
+	}
+	delta := (current.AverageNS - baseline.AverageNS) / baseline.AverageNS * 100.0
+	return fmt.Sprintf("%+.1f%%", delta)
+}
+
+func formatBenchmarkComparisonStatus(current, baseline *benchmarkRow) string {
+	switch {
+	case current == nil && baseline == nil:
+		return "missing"
+	case current == nil:
+		return "missing_current"
+	case baseline == nil:
+		return "new"
+	case current.Status != "ok" && current.Status == baseline.Status:
+		return current.Status
+	case current.Status != "ok":
+		return "current: " + current.Status
+	case baseline.Status != "ok":
+		return "baseline: " + baseline.Status
+	default:
+		return "ok"
+	}
 }
 
 func formatDurationNS(ns float64) string {

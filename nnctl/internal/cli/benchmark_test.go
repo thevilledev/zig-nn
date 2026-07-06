@@ -56,3 +56,43 @@ func TestPrintBenchmarkReportShowsDiffsAndSkips(t *testing.T) {
 		}
 	}
 }
+
+func TestPrintBenchmarkComparisonShowsBaselineDeltas(t *testing.T) {
+	current := []benchmarkRow{
+		{Suite: "matmul", Case: "64x64x64", Backend: "cpu", Mode: "ReleaseFast", AverageNS: 1_200_000, Status: "ok"},
+		{Suite: "matmul", Case: "64x64x64", Backend: "metal", Mode: "ReleaseFast", AverageNS: 400_000, Status: "ok"},
+		{Suite: "training", Case: "batch", Backend: "cuda", Mode: "ReleaseFast", Status: "skipped_cuda_unavailable"},
+		{Suite: "tiny_gpt", Case: "small", Backend: "metal", Mode: "ReleaseFast", Status: "skipped_cpu_only_path"},
+		{Suite: "tiny_gpt", Case: "small", Backend: "cpu", Mode: "ReleaseFast", AverageNS: 750_000, Status: "ok"},
+	}
+	baseline := []benchmarkRow{
+		{Suite: "matmul", Case: "64x64x64", Backend: "cpu", Mode: "ReleaseFast", AverageNS: 1_000_000, Status: "ok"},
+		{Suite: "matmul", Case: "64x64x64", Backend: "metal", Mode: "ReleaseFast", AverageNS: 500_000, Status: "ok"},
+		{Suite: "training", Case: "batch", Backend: "cuda", Mode: "ReleaseFast", AverageNS: 2_000_000, Status: "ok"},
+		{Suite: "tiny_gpt", Case: "small", Backend: "metal", Mode: "ReleaseFast", Status: "skipped_cpu_only_path"},
+		{Suite: "quantization", Case: "uniform", Backend: "cpu", Mode: "ReleaseFast", AverageNS: 100_000, Status: "ok"},
+	}
+
+	var out bytes.Buffer
+	printBenchmarkComparison(&out, current, baseline)
+	report := out.String()
+
+	for _, want := range []string{
+		"Benchmark comparison",
+		"Mode: ReleaseFast",
+		"matmul",
+		"64x64x64",
+		"+20.0%",
+		"-20.0%",
+		"current: skipped_cuda_unavailable",
+		"tiny_gpt",
+		"skipped_cpu_only_path",
+		"new",
+		"quantization",
+		"missing_current",
+	} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("comparison missing %q:\n%s", want, report)
+		}
+	}
+}

@@ -172,11 +172,13 @@ func (a *App) newBenchmarkCommand(withRepo repoRunner) *cobra.Command {
 		Long: `Runs the Zig benchmark suite and renders the CSV as grouped tables.
 The default uses ReleaseFast and GPU auto-detection so CPU, Metal, and CUDA rows
 can be compared where those backends are available.
-Use --csv to print the raw benchmark CSV instead.`,
+Use --csv to print the raw benchmark CSV instead. Use --compare with a previous
+raw CSV file to print current-vs-baseline deltas.`,
 		Example: `  nnctl benchmark
   nnctl benchmark --quick
   nnctl benchmark --filter matmul
   nnctl benchmark --gpu none --csv
+  nnctl benchmark --quick --compare baseline.csv
   nnctl benchmark --debug --filter activation`,
 		Args: cobra.NoArgs,
 		RunE: withRepo(func(ctx context.Context, cmd *cobra.Command, args []string) error {
@@ -188,6 +190,7 @@ Use --csv to print the raw benchmark CSV instead.`,
 	cmd.Flags().BoolVar(&opts.quick, "quick", opts.quick, "run the smoke-sized benchmark subset")
 	cmd.Flags().BoolVar(&opts.debug, "debug", opts.debug, "run benchmark-debug instead of ReleaseFast benchmark")
 	cmd.Flags().BoolVar(&opts.csv, "csv", opts.csv, "print raw CSV output")
+	cmd.Flags().StringVar(&opts.compare, "compare", opts.compare, "compare current results against a raw benchmark CSV file")
 	cmd.Flags().SortFlags = false
 	return cmd
 }
