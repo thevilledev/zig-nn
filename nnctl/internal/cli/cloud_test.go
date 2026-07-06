@@ -76,6 +76,60 @@ func TestCloudDeployRequiresInstanceTypeFlag(t *testing.T) {
 	}
 }
 
+func TestCloudDestroyDryRunJSON(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	app := &App{Stdout: &stdout, Stderr: &stderr}
+
+	err := app.Run(context.Background(), []string{"cloud", "destroy", "inst-1", "inst-2", "--dry-run", "--permanent=false", "--volume-id", "vol-1", "--json"})
+	if err != nil {
+		t.Fatalf("Run() error = %v\nstderr:\n%s", err, stderr.String())
+	}
+
+	var result struct {
+		Provider string `json:"provider"`
+		DryRun   bool   `json:"dry_run"`
+		Request  struct {
+			InstanceIDs       []string `json:"instance_ids"`
+			VolumeIDs         []string `json:"volume_ids"`
+			DeletePermanently bool     `json:"delete_permanently"`
+		} `json:"request"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("invalid JSON output: %v\n%s", err, stdout.String())
+	}
+
+	if result.Provider != "verda" || !result.DryRun {
+		t.Fatalf("unexpected result header: %#v", result)
+	}
+	if len(result.Request.InstanceIDs) != 2 || result.Request.InstanceIDs[0] != "inst-1" || result.Request.InstanceIDs[1] != "inst-2" {
+		t.Fatalf("unexpected instance ids: %#v", result.Request.InstanceIDs)
+	}
+	if len(result.Request.VolumeIDs) != 1 || result.Request.VolumeIDs[0] != "vol-1" {
+		t.Fatalf("unexpected volume ids: %#v", result.Request.VolumeIDs)
+	}
+	if result.Request.DeletePermanently {
+		t.Fatal("DeletePermanently = true, want false")
+	}
+}
+
+func TestCloudDestroyDefaultsToPermanentDryRun(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	app := &App{Stdout: &stdout, Stderr: &stderr}
+
+	err := app.Run(context.Background(), []string{"cloud", "destroy", "inst-1", "--dry-run", "--json"})
+	if err != nil {
+		t.Fatalf("Run() error = %v\nstderr:\n%s", err, stderr.String())
+	}
+
+	var result verdacloud.DestroyResult
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("invalid JSON output: %v\n%s", err, stdout.String())
+	}
+	if !result.Request.DeletePermanently {
+		t.Fatal("DeletePermanently = false, want true")
+	}
+}
+
 func TestPrintCloudSSHKeysPlainText(t *testing.T) {
 	var stdout bytes.Buffer
 	app := &App{Stdout: &stdout}
@@ -119,6 +173,32 @@ func TestPrintCloudSSHKeysJSON(t *testing.T) {
 	}
 	if len(keys) != 1 || keys[0].ID != "11111111-1111-1111-1111-111111111111" {
 		t.Fatalf("unexpected keys: %#v", keys)
+	}
+}
+
+func TestPrintCloudDestroyResultPlainText(t *testing.T) {
+	var stdout bytes.Buffer
+	app := &App{Stdout: &stdout}
+
+	err := app.printCloudDestroyResult(&verdacloud.DestroyResult{
+		Provider: "verda",
+		Request: verdacloud.DestroyInstanceRequest{
+			InstanceIDs:       []string{"inst-1"},
+			DeletePermanently: true,
+		},
+		Results: []verdacloud.DestroyInstanceResult{
+			{InstanceID: "inst-1", Status: "success"},
+		},
+	}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	output := stdout.String()
+	for _, want := range []string{"destroy requested", "inst-1", "delete permanently: true", "success"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("destroy output missing %q:\n%s", want, output)
+		}
 	}
 }
 

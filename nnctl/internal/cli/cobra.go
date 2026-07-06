@@ -208,6 +208,7 @@ func (a *App) newCloudCommand() *cobra.Command {
 	}
 	cmd.AddCommand(
 		a.newCloudDeployCommand(),
+		a.newCloudDestroyCommand(),
 		a.newCloudListCommand(),
 		a.newCloudPricingCommand(),
 		a.newCloudSSHKeysCommand(),
@@ -250,6 +251,34 @@ script from nnctl/internal/cloud/verda/bootstrap.sh.`,
 	cmd.Flags().BoolVar(&opts.jsonOutput, "json", opts.jsonOutput, "print machine-readable JSON")
 	cmd.Flags().SortFlags = false
 	_ = cmd.MarkFlagRequired("instance-type")
+	return cmd
+}
+
+func (a *App) newCloudDestroyCommand() *cobra.Command {
+	opts := cloudDestroyOptions{
+		DestroyOptions: verdacloud.DefaultDestroyOptions(nil),
+	}
+	cmd := &cobra.Command{
+		Use:     "destroy INSTANCE_ID [INSTANCE_ID...]",
+		Aliases: []string{"delete", "rm", "terminate"},
+		Short:   "Destroy Verda instances",
+		Long:    "Destroys one or more Verda instances by ID. Instance IDs can be copied from `nnctl cloud list`.",
+		Example: `  nnctl cloud destroy instance_id
+  nnctl cloud destroy instance_id --dry-run
+  nnctl cloud destroy instance_id --permanent=false
+  nnctl cloud destroy instance_id --volume-id volume_id --json`,
+		Args: cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			opts.InstanceIDs = args
+			return a.runCloudDestroy(cmd.Context(), opts)
+		},
+	}
+	cmd.Flags().StringArrayVar(&opts.VolumeIDs, "volume-id", opts.VolumeIDs, "Verda volume ID to delete with the instance (repeatable)")
+	cmd.Flags().BoolVar(&opts.DeletePermanently, "permanent", opts.DeletePermanently, "delete permanently instead of using Verda's non-permanent delete")
+	cmd.Flags().StringVar(&opts.BaseURL, "base-url", opts.BaseURL, "Verda API base URL")
+	cmd.Flags().BoolVar(&opts.DryRun, "dry-run", opts.DryRun, "print the planned destroy request without reading keychain credentials")
+	cmd.Flags().BoolVar(&opts.jsonOutput, "json", opts.jsonOutput, "print machine-readable JSON")
+	cmd.Flags().SortFlags = false
 	return cmd
 }
 

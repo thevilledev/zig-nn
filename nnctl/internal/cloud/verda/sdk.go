@@ -285,6 +285,29 @@ func (c *SDKClient) CreateInstance(ctx context.Context, req CreateInstanceReques
 	return instanceFromSDK(*created), nil
 }
 
+func (c *SDKClient) DestroyInstances(ctx context.Context, req DestroyInstanceRequest) ([]DestroyInstanceResult, error) {
+	results, err := c.client.Instances.Action(ctx, sdkverda.InstanceActionRequest{
+		Action:            sdkverda.ActionDelete,
+		ID:                req.InstanceIDs,
+		VolumeIDs:         req.VolumeIDs,
+		DeletePermanently: req.DeletePermanently,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	destroyResults := make([]DestroyInstanceResult, 0, len(results))
+	for _, result := range results {
+		destroyResults = append(destroyResults, DestroyInstanceResult{
+			InstanceID: result.InstanceID,
+			Status:     result.Status,
+			Error:      result.Error,
+			StatusCode: result.StatusCode,
+		})
+	}
+	return destroyResults, nil
+}
+
 func instanceFromSDK(instance sdkverda.Instance) Instance {
 	createdAt := ""
 	if !instance.CreatedAt.IsZero() {

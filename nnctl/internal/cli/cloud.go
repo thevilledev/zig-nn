@@ -23,6 +23,11 @@ type cloudSSHKeysOptions struct {
 	jsonOutput bool
 }
 
+type cloudDestroyOptions struct {
+	verdacloud.DestroyOptions
+	jsonOutput bool
+}
+
 type cloudListOptions struct {
 	baseURL    string
 	status     string
@@ -91,6 +96,23 @@ func (a *App) runCloudSSHKeys(ctx context.Context, opts cloudSSHKeysOptions) err
 	return a.printCloudSSHKeys(keys, opts.jsonOutput)
 }
 
+func (a *App) runCloudDestroy(ctx context.Context, opts cloudDestroyOptions) error {
+	var client verdacloud.DestroyClient
+	if !opts.DryRun {
+		sdkClient, err := a.newVerdaSDKClient(ctx, opts.BaseURL)
+		if err != nil {
+			return err
+		}
+		client = sdkClient
+	}
+
+	result, err := verdacloud.Destroy(ctx, client, opts.DestroyOptions)
+	if err != nil {
+		return err
+	}
+	return a.printCloudDestroyResult(result, opts.jsonOutput)
+}
+
 func (a *App) runCloudList(ctx context.Context, opts cloudListOptions) error {
 	client, err := a.newVerdaSDKClient(ctx, opts.baseURL)
 	if err != nil {
@@ -136,6 +158,29 @@ func (a *App) printCloudSSHKeys(keys []verdacloud.SSHKey, jsonOutput bool) error
 		fmt.Fprintf(w, "%s\t%s\t%s\n", key.ID, key.Name, key.Fingerprint)
 	}
 	return w.Flush()
+}
+
+func (a *App) printCloudDestroyResult(result *verdacloud.DestroyResult, jsonOutput bool) error {
+	if jsonOutput {
+		enc := json.NewEncoder(a.stdout())
+		enc.SetIndent("", "  ")
+		return enc.Encode(result)
+	}
+
+	ids := strings.Join(result.Request.InstanceIDs, ", ")
+	if result.DryRun {
+		fmt.Fprintf(a.stdout(), "dry run: would destroy Verda instance%s %s\n", pluralSuffix(result.Request.InstanceIDs), ids)
+	} else {
+		fmt.Fprintf(a.stdout(), "destroy requested for Verda instance%s %s\n", pluralSuffix(result.Request.InstanceIDs), ids)
+	}
+	fmt.Fprintf(a.stdout(), "delete permanently: %t\n", result.Request.DeletePermanently)
+	if len(result.Request.VolumeIDs) > 0 {
+		fmt.Fprintf(a.stdout(), "volume ids: %s\n", strings.Join(result.Request.VolumeIDs, ", "))
+	}
+	for _, actionResult := range result.Results {
+		fmt.Fprintf(a.stdout(), "%s: %s\n", actionResult.InstanceID, firstNonEmpty(actionResult.Status, "accepted"))
+	}
+	return nil
 }
 
 func (a *App) printCloudInstances(instances []verdacloud.Instance, jsonOutput bool) error {
@@ -285,6 +330,13 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return "-"
+}
+
+func pluralSuffix[T any](values []T) string {
+	if len(values) == 1 {
+		return ""
+	}
+	return "s"
 }
 
 func formatCloudPrice(price verdacloud.SpotPrice) string {
