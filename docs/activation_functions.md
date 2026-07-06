@@ -66,4 +66,4 @@ In our implementation, these activation functions are:
 1. Vectorized for performance
 2. Numerically stable through careful handling of edge cases
 3. Memory efficient with in-place operations where possible
-4. Thoroughly tested with comprehensive unit tests 
+4. Thoroughly tested with comprehensive unit tests

@@ -67,4 +67,4 @@ zig test examples/server.zig
 - Hardcoded to listen to 127.0.0.1 on port 8080
 - Input dimensions must match the model's expected input size
 - The confidence value is currently derived from the first prediction value
-- The server supports concurrent connections 
+- The server supports concurrent connections

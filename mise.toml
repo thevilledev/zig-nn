@@ -1,0 +1,64 @@
+[tools]
+# nnctl/go.mod declares the Go language version as 1.26; pin the patch
+# release used in this workspace so mise installs a concrete toolchain.
+go = "1.26.1"
+zig = "0.16.0"
+golangci-lint = "2.12.2"
+"cargo:zizmor" = "1.26.1"
+node = "25.9.0"
+
+# Commit hook tooling is pinned by package-lock.json:
+# @commitlint/cli 21.1.0, @commitlint/config-conventional 21.1.0,
+# and @j178/prek 0.4.5.
+
+[tasks."zig:test"]
+description = "Run Zig unit tests"
+run = "zig build test"
+
+[tasks."zig:test-acceptance"]
+description = "Run Zig acceptance tests"
+run = "zig build test-acceptance"
+
+[tasks."go:test"]
+description = "Run nnctl Go tests"
+dir = "nnctl"
+run = "go test ./..."
+
+[tasks."go:lint"]
+description = "Run golangci-lint for nnctl"
+dir = "nnctl"
+run = "golangci-lint run --config ../.golangci.yml ./..."
+
+[tasks."actions:lint"]
+description = "Scan GitHub Actions workflows with zizmor"
+run = "zizmor .github/workflows"
+
+[tasks."npm:install"]
+description = "Install Node hook dependencies"
+run = "npm ci"
+
+[tasks."hooks:install"]
+description = "Install git hooks through prek"
+depends = ["npm:install"]
+run = "npm run hooks:install"
+
+[tasks."hooks:check"]
+description = "Run prek hooks on all files"
+depends = ["npm:install"]
+run = "npm run prek:all"
+
+[tasks."commitlint:head"]
+description = "Lint the latest commit message"
+depends = ["npm:install"]
+run = "npx --no-install commitlint --last --verbose"
+
+[tasks.ci]
+description = "Run local CI checks"
+depends = [
+  "zig:test",
+  "zig:test-acceptance",
+  "go:test",
+  "go:lint",
+  "actions:lint",
+  "hooks:check",
+]

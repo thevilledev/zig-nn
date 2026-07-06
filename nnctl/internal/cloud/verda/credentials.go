@@ -48,7 +48,7 @@ func (s KeyringCredentialStore) Credentials(ctx context.Context) (Credentials, e
 		ClientSecret: strings.TrimSpace(clientSecret),
 	}
 	if creds.ClientID == "" || creds.ClientSecret == "" {
-		return Credentials{}, fmt.Errorf("Verda credentials in keyring service %q must not be empty", service)
+		return Credentials{}, fmt.Errorf("verda credentials in keyring service %q must not be empty", service)
 	}
 	return creds, nil
 }

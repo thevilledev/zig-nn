@@ -52,4 +52,4 @@ void metal_release(void* object);
 }
 #endif
 
-#endif /* METAL_WRAPPER_H */ 
+#endif /* METAL_WRAPPER_H */

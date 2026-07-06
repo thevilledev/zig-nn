@@ -154,7 +154,7 @@ func Deploy(ctx context.Context, client Client, opts DeployOptions) (*DeployResu
 		return result, nil
 	}
 	if client == nil {
-		return nil, fmt.Errorf("Verda client is required")
+		return nil, fmt.Errorf("verda client is required")
 	}
 
 	instanceType, err := client.GetInstanceType(ctx, normalized.InstanceType, true, normalized.LocationCode)
@@ -243,7 +243,7 @@ func selectCheapestSpotPlacement(ctx context.Context, client Client, instanceTyp
 		return SpotPlacement{}, fmt.Errorf("list Verda spot placement options for %q: %w", instanceType, err)
 	}
 	if len(options) == 0 {
-		return SpotPlacement{}, fmt.Errorf("Verda spot instance type %q is not currently available in any location", instanceType)
+		return SpotPlacement{}, fmt.Errorf("verda spot instance type %q is not currently available in any location", instanceType)
 	}
 	sortSpotPlacements(options)
 	return options[0], nil
@@ -259,7 +259,7 @@ func requireSpotPlacement(ctx context.Context, client Client, instanceType, loca
 			return option, nil
 		}
 	}
-	return SpotPlacement{}, fmt.Errorf("Verda spot instance type %q is not currently available in %s", instanceType, locationCode)
+	return SpotPlacement{}, fmt.Errorf("verda spot instance type %q is not currently available in %s", instanceType, locationCode)
 }
 
 func sortSpotPlacements(options []SpotPlacement) {
@@ -311,7 +311,7 @@ func compactStrings(values []string) []string {
 func ValidateSSHKeyIDs(ids []string) error {
 	for _, id := range ids {
 		if !sshKeyIDPattern.MatchString(id) {
-			return fmt.Errorf("Verda SSH key %q is not a UUID; run `nnctl cloud ssh-keys` to list SSH key IDs", id)
+			return fmt.Errorf("verda SSH key %q is not a UUID; run `nnctl cloud ssh-keys` to list SSH key IDs", id)
 		}
 	}
 	return nil

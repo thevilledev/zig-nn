@@ -23,7 +23,7 @@ Two main layer types:
    - Traditional fully connected layer
    - Configurable activation functions
    - Weight and bias management
-   
+
 2. **Gated Layer**
    - Support for GLU and SwiGLU
    - Dual weight matrices

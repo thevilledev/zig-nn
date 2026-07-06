@@ -16,13 +16,13 @@ kernel void matrix_multiply(
     if (position.x >= B_cols || position.y >= A_rows) {
         return;
     }
-    
+
     // Calculate result for this thread's position
     float sum = 0.0f;
     for (uint k = 0; k < A_cols; k++) {
         sum += A[position.y * A_cols + k] * B[k * B_cols + position.x];
     }
-    
+
     // Write result
     C[position.y * B_cols + position.x] = sum;
 }
@@ -41,10 +41,10 @@ kernel void matrix_add(
     if (position.x >= cols || position.y >= rows) {
         return;
     }
-    
+
     // Calculate index
     uint index = position.y * cols + position.x;
-    
+
     // Write result
     C[index] = A[index] + B[index];
 }
@@ -63,10 +63,10 @@ kernel void matrix_subtract(
     if (position.x >= cols || position.y >= rows) {
         return;
     }
-    
+
     // Calculate index
     uint index = position.y * cols + position.x;
-    
+
     // Write result
     C[index] = A[index] - B[index];
 }
@@ -85,10 +85,10 @@ kernel void matrix_element_wise_multiply(
     if (position.x >= cols || position.y >= rows) {
         return;
     }
-    
+
     // Calculate index
     uint index = position.y * cols + position.x;
-    
+
     // Write result
     C[index] = A[index] * B[index];
 }
@@ -107,10 +107,10 @@ kernel void matrix_scale(
     if (position.x >= cols || position.y >= rows) {
         return;
     }
-    
+
     // Calculate index
     uint index = position.y * cols + position.x;
-    
+
     // Write result
     B[index] = A[index] * scalar;
 }
@@ -126,16 +126,16 @@ kernel void matrix_transpose(
 ) {
     // Note: threads positions align with output B dimensions
     // If A is rows x cols, B is cols x rows
-    
+
     // Check if within bounds (of B)
     if (position.x >= A_rows || position.y >= A_cols) {
         return;
     }
-    
+
     // Calculate indices
     uint A_index = position.x * A_cols + position.y;
     uint B_index = position.y * A_rows + position.x;
-    
+
     // Write result
     B[B_index] = A[A_index];
 }
@@ -221,7 +221,7 @@ kernel void apply_sigmoid(
     if (position >= size) {
         return;
     }
-    
+
     // Apply sigmoid
     B[position] = 1.0f / (1.0f + exp(-A[position]));
 }
@@ -254,7 +254,7 @@ kernel void apply_relu(
     if (position >= size) {
         return;
     }
-    
+
     // Apply ReLU
     B[position] = max(0.0f, A[position]);
 }
@@ -286,7 +286,7 @@ kernel void apply_tanh(
     if (position >= size) {
         return;
     }
-    
+
     // Apply tanh
     B[position] = tanh(A[position]);
 }
@@ -319,7 +319,7 @@ kernel void apply_swish(
     if (position >= size) {
         return;
     }
-    
+
     // Apply Swish
     float sigmoid_val = 1.0f / (1.0f + exp(-A[position]));
     B[position] = A[position] * sigmoid_val;
@@ -389,13 +389,13 @@ kernel void softmax_find_max(
     if (row_idx >= rows) {
         return;
     }
-    
+
     // Find max value in this row
     float max_val = -INFINITY;
     for (uint j = 0; j < cols; j++) {
         max_val = max(max_val, A[row_idx * cols + j]);
     }
-    
+
     // Store max value for this row
     row_maxes[row_idx] = max_val;
 }
@@ -436,12 +436,12 @@ kernel void softmax_normalize(
 ) {
     uint row = position.y;
     uint col = position.x;
-    
+
     // Check if within bounds
     if (row >= rows || col >= cols) {
         return;
     }
-    
+
     // Normalize by row sum
     uint idx = row * cols + col;
     result[idx] = exp_values[idx] / row_sums[row];

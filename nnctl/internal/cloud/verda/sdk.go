@@ -53,7 +53,7 @@ func (c *SDKClient) GetInstanceType(ctx context.Context, instanceType string, sp
 			return instanceTypeFromSDK(info), nil
 		}
 	}
-	return InstanceType{}, fmt.Errorf("Verda instance type %q was not returned by /instance-types", instanceType)
+	return InstanceType{}, fmt.Errorf("verda instance type %q was not returned by /instance-types", instanceType)
 }
 
 func (c *SDKClient) GetSpotPlacementOptions(ctx context.Context, instanceType string) ([]SpotPlacement, error) {
