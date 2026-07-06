@@ -70,6 +70,8 @@ For setup details and direct `zig build` commands, see
   tests, and common development tasks
 - [Examples](docs/examples.md) - runnable demos and what each one is meant to
   show
+- [Benchmarks](docs/benchmarks.md) - repeatable CPU, Metal, and release-mode
+  benchmark commands
 - [Experiments](docs/experiments.md) - research-style probes, metrics, and
   current experiment notes
 - [GPU and Backend Notes](docs/gpu.md) - current backend boundaries, Metal

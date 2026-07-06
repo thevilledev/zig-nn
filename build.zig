@@ -122,8 +122,6 @@ pub fn build(b: *std.Build) void {
         // Conditionally link frameworks/libraries for GPU examples
         if (std.mem.eql(u8, example.name, "gpu") or std.mem.eql(u8, example.name, "gpu_benchmark")) {
             if (enable_metal) {
-                // add log here for debug
-                std.debug.print("Linking Metal and Foundation frameworks on macOS\n", .{});
                 addMetalSupport(b, exe_mod, enable_metal, false);
             }
             if (enable_cuda) {
@@ -157,6 +155,27 @@ pub fn build(b: *std.Build) void {
         // Add the example to the examples step
         examples_step.dependOn(&exe.step);
     }
+
+    addBenchmarkStep(
+        b,
+        target,
+        build_options,
+        enable_metal,
+        .ReleaseFast,
+        "zig_nn_benchmark",
+        "benchmark",
+        "Run repeatable ReleaseFast CPU/Metal benchmark suite",
+    );
+    addBenchmarkStep(
+        b,
+        target,
+        build_options,
+        enable_metal,
+        .Debug,
+        "zig_nn_benchmark_debug",
+        "benchmark-debug",
+        "Run repeatable Debug CPU/Metal benchmark suite",
+    );
 
     // Main test step that will run all tests
     const test_step = b.step("test", "Run all unit tests");
@@ -202,6 +221,57 @@ pub fn build(b: *std.Build) void {
     }) |example| {
         example_prev_step = addTestStep(b, acceptance_test_step, example.name, example.path, example_prev_step, target, optimize, build_options, enable_metal, lib_mod);
     }
+}
+
+fn addBenchmarkStep(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    build_options: *std.Build.Step.Options,
+    enable_metal: bool,
+    benchmark_optimize: std.builtin.OptimizeMode,
+    exe_name: []const u8,
+    step_name: []const u8,
+    description: []const u8,
+) void {
+    const bench_nn_mod = b.createModule(.{
+        .root_source_file = b.path("src/root.zig"),
+        .target = target,
+        .optimize = benchmark_optimize,
+    });
+    bench_nn_mod.addOptions("build_options", build_options);
+    addMetalSupport(b, bench_nn_mod, enable_metal, true);
+
+    const bench_mod = b.createModule(.{
+        .root_source_file = b.path("benchmarks/benchmark.zig"),
+        .target = target,
+        .optimize = benchmark_optimize,
+    });
+    bench_mod.addImport("nn", bench_nn_mod);
+
+    const tiny_gpt_mod = b.createModule(.{
+        .root_source_file = b.path("examples/tiny_gpt/model.zig"),
+        .target = target,
+        .optimize = benchmark_optimize,
+    });
+    tiny_gpt_mod.addImport("nn", bench_nn_mod);
+    bench_mod.addImport("tiny_gpt", tiny_gpt_mod);
+
+    if (enable_metal) {
+        addMetalSupport(b, bench_mod, enable_metal, false);
+    }
+
+    const exe = b.addExecutable(.{
+        .name = exe_name,
+        .root_module = bench_mod,
+    });
+
+    const run_cmd = b.addRunArtifact(exe);
+    if (b.args) |args| {
+        run_cmd.addArgs(args);
+    }
+
+    const benchmark_step = b.step(step_name, description);
+    benchmark_step.dependOn(&run_cmd.step);
 }
 
 fn addMetalSupport(b: *std.Build, mod: *std.Build.Module, enable_metal: bool, include_wrapper: bool) void {
