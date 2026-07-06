@@ -211,7 +211,7 @@ func (a *App) printCloudDeployResult(result *verdacloud.DeployResult, jsonOutput
 		fmt.Fprintf(a.stdout(), "dry run: would deploy %s as a spot single-GPU instance in %s\n", result.Request.InstanceType, location)
 		fmt.Fprintf(a.stdout(), "hostname: %s\n", result.Request.Hostname)
 		fmt.Fprintf(a.stdout(), "image: %s\n", result.Request.Image)
-		fmt.Fprintf(a.stdout(), "startup script: hardcoded userdata\n")
+		fmt.Fprintf(a.stdout(), "startup script: embedded userdata\n")
 		return nil
 	}
 

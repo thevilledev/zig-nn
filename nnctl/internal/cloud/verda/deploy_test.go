@@ -9,7 +9,7 @@ import (
 )
 
 func TestDefaultUserDataScriptMatchesBootstrap(t *testing.T) {
-	bootstrap, err := os.ReadFile("../../../../bootstrap.sh")
+	bootstrap, err := os.ReadFile("bootstrap.sh")
 	if err != nil {
 		t.Fatal(err)
 	}

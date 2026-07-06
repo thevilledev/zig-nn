@@ -225,12 +225,12 @@ func (a *App) newCloudDeployCommand() *cobra.Command {
 		Long: `Deploys one Verda GPU instance for nnctl benchmark work.
 The deployment policy is intentionally narrow: spot only and single-GPU instance
 types only. By default nnctl chooses the cheapest currently available spot
-location for the requested instance type. Userdata defaults to the hardcoded
-script in nnctl/internal/cloud/verda/userdata.go.`,
+location for the requested instance type. Userdata defaults to the embedded
+script from nnctl/internal/cloud/verda/bootstrap.sh.`,
 		Example: `  nnctl cloud deploy --instance-type 1V100.6V --ssh-key-id ssh_key_id
   nnctl cloud deploy --instance-type 1V100.6V --dry-run --json
   nnctl cloud deploy --instance-type 1V100.6V --location-code FIN-03
-  nnctl cloud deploy --instance-type 1V100.6V --user-data-file ./bootstrap.sh`,
+  nnctl cloud deploy --instance-type 1V100.6V --user-data-file ./custom-bootstrap.sh`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return a.runCloudDeploy(cmd.Context(), opts)
@@ -243,7 +243,7 @@ script in nnctl/internal/cloud/verda/userdata.go.`,
 	cmd.Flags().StringArrayVar(&opts.SSHKeyIDs, "ssh-key-id", opts.SSHKeyIDs, "Verda SSH key ID to attach (repeatable)")
 	cmd.Flags().StringVar(&opts.LocationCode, "location-code", opts.LocationCode, "Verda location code; defaults to cheapest currently available spot location")
 	cmd.Flags().StringVar(&opts.StartupScriptName, "startup-script-name", opts.StartupScriptName, "Verda startup script name")
-	cmd.Flags().StringVar(&opts.userDataFile, "user-data-file", opts.userDataFile, "read userdata from a file instead of the hardcoded script")
+	cmd.Flags().StringVar(&opts.userDataFile, "user-data-file", opts.userDataFile, "read userdata from a file instead of the embedded script")
 	cmd.Flags().StringVar(&opts.BaseURL, "base-url", opts.BaseURL, "Verda API base URL")
 	cmd.Flags().BoolVar(&opts.SkipAvailabilityCheck, "skip-availability-check", opts.SkipAvailabilityCheck, "skip spot availability check before creating the instance")
 	cmd.Flags().BoolVar(&opts.DryRun, "dry-run", opts.DryRun, "print the planned spot deployment without reading keychain credentials")
