@@ -658,18 +658,322 @@ const BackendTrainingStandardLayer = struct {
     }
 };
 
-/// BackendTrainer owns backend-side trainable parameters for standard layers.
+const BackendTrainingGatedLayer = struct {
+    linear_weights: *BackendMatrix,
+    linear_bias: *BackendMatrix,
+    gate_weights: *BackendMatrix,
+    gate_bias: *BackendMatrix,
+    use_swiglu: bool,
+    last_input: ?*BackendMatrix,
+    last_linear_output: ?*BackendMatrix,
+    last_gate_output: ?*BackendMatrix,
+    last_output: ?*BackendMatrix,
+
+    fn init(allocator: Allocator, source: *const GatedLayer, backend_instance: anytype) !BackendTrainingGatedLayer {
+        const linear_weights = try BackendMatrix.fromMatrix(backend_instance, source.linear_weights, allocator);
+        errdefer linear_weights.deinit();
+        const linear_bias = try BackendMatrix.fromMatrix(backend_instance, source.linear_bias, allocator);
+        errdefer linear_bias.deinit();
+        const gate_weights = try BackendMatrix.fromMatrix(backend_instance, source.gate_weights, allocator);
+        errdefer gate_weights.deinit();
+        const gate_bias = try BackendMatrix.fromMatrix(backend_instance, source.gate_bias, allocator);
+        errdefer gate_bias.deinit();
+
+        return .{
+            .linear_weights = linear_weights,
+            .linear_bias = linear_bias,
+            .gate_weights = gate_weights,
+            .gate_bias = gate_bias,
+            .use_swiglu = source.use_swiglu,
+            .last_input = null,
+            .last_linear_output = null,
+            .last_gate_output = null,
+            .last_output = null,
+        };
+    }
+
+    fn clearCaches(self: *BackendTrainingGatedLayer) void {
+        if (self.last_input) |input| {
+            input.deinit();
+            self.last_input = null;
+        }
+        if (self.last_linear_output) |output| {
+            output.deinit();
+            self.last_linear_output = null;
+        }
+        if (self.last_gate_output) |output| {
+            output.deinit();
+            self.last_gate_output = null;
+        }
+        if (self.last_output) |output| {
+            output.deinit();
+            self.last_output = null;
+        }
+    }
+
+    fn deinit(self: *BackendTrainingGatedLayer) void {
+        self.clearCaches();
+        self.linear_weights.deinit();
+        self.linear_bias.deinit();
+        self.gate_weights.deinit();
+        self.gate_bias.deinit();
+    }
+
+    fn getInputSize(self: BackendTrainingGatedLayer) usize {
+        return self.linear_weights.rows;
+    }
+
+    fn forwardInference(self: BackendTrainingGatedLayer, input: *const BackendMatrix, allocator: Allocator) !*BackendMatrix {
+        if (input.cols != self.getInputSize()) {
+            return error.InvalidInputDimensions;
+        }
+
+        const linear_weighted_sum = try input.dotProduct(self.linear_weights, allocator);
+        defer linear_weighted_sum.deinit();
+        const linear_biased = try addBackendBias(linear_weighted_sum, self.linear_bias, allocator);
+        defer linear_biased.deinit();
+
+        const gate_weighted_sum = try input.dotProduct(self.gate_weights, allocator);
+        defer gate_weighted_sum.deinit();
+        const gate_biased = try addBackendBias(gate_weighted_sum, self.gate_bias, allocator);
+        defer gate_biased.deinit();
+
+        if (self.use_swiglu) {
+            return linear_biased.applySwiGLU(gate_biased, allocator);
+        }
+        return linear_biased.applyGLU(gate_biased, allocator);
+    }
+
+    fn forwardTrain(self: *BackendTrainingGatedLayer, input: *const BackendMatrix, allocator: Allocator) !*BackendMatrix {
+        if (input.cols != self.getInputSize()) {
+            return error.InvalidInputDimensions;
+        }
+
+        self.clearCaches();
+        errdefer self.clearCaches();
+
+        self.last_input = try input.copy(allocator);
+
+        const linear_weighted_sum = try input.dotProduct(self.linear_weights, allocator);
+        defer linear_weighted_sum.deinit();
+        self.last_linear_output = try addBackendBias(linear_weighted_sum, self.linear_bias, allocator);
+
+        const gate_weighted_sum = try input.dotProduct(self.gate_weights, allocator);
+        defer gate_weighted_sum.deinit();
+        self.last_gate_output = try addBackendBias(gate_weighted_sum, self.gate_bias, allocator);
+
+        const output = if (self.use_swiglu)
+            try self.last_linear_output.?.applySwiGLU(self.last_gate_output.?, allocator)
+        else
+            try self.last_linear_output.?.applyGLU(self.last_gate_output.?, allocator);
+        errdefer output.deinit();
+
+        self.last_output = try output.copy(allocator);
+        return output;
+    }
+
+    fn backward(self: *BackendTrainingGatedLayer, output_gradient: *const BackendMatrix, learning_rate: f64, allocator: Allocator) !*BackendMatrix {
+        if (self.last_input == null or self.last_linear_output == null or
+            self.last_gate_output == null or self.last_output == null)
+        {
+            return error.NoForwardPassPerformed;
+        }
+        defer self.clearCaches();
+
+        var linear_gradient: ?*BackendMatrix = null;
+        var gate_gradient: ?*BackendMatrix = null;
+        defer if (linear_gradient) |gradient| gradient.deinit();
+        defer if (gate_gradient) |gradient| gradient.deinit();
+
+        if (self.use_swiglu) {
+            const swish_gate = try self.last_gate_output.?.applyActivation(Activation.swish, allocator);
+            defer swish_gate.deinit();
+
+            const swish_derivative = try self.last_gate_output.?.applyActivation(Activation.swish_derivative, allocator);
+            defer swish_derivative.deinit();
+
+            linear_gradient = try swish_gate.elementWiseMultiply(output_gradient, allocator);
+
+            const linear_times_gradient = try self.last_linear_output.?.elementWiseMultiply(output_gradient, allocator);
+            defer linear_times_gradient.deinit();
+
+            gate_gradient = try linear_times_gradient.elementWiseMultiply(swish_derivative, allocator);
+        } else {
+            const sigmoid_gate = try self.last_gate_output.?.applyActivation(Activation.sigmoid, allocator);
+            defer sigmoid_gate.deinit();
+
+            const sigmoid_derivative = try self.last_gate_output.?.applyActivation(Activation.sigmoid_derivative, allocator);
+            defer sigmoid_derivative.deinit();
+
+            linear_gradient = try sigmoid_gate.elementWiseMultiply(output_gradient, allocator);
+
+            const linear_times_gradient = try self.last_linear_output.?.elementWiseMultiply(output_gradient, allocator);
+            defer linear_times_gradient.deinit();
+
+            gate_gradient = try linear_times_gradient.elementWiseMultiply(sigmoid_derivative, allocator);
+        }
+
+        const transposed_input = try self.last_input.?.transpose(allocator);
+        defer transposed_input.deinit();
+
+        const linear_weights_gradient = try transposed_input.dotProduct(linear_gradient.?, allocator);
+        defer linear_weights_gradient.deinit();
+
+        const gate_weights_gradient = try transposed_input.dotProduct(gate_gradient.?, allocator);
+        defer gate_weights_gradient.deinit();
+
+        const linear_bias_gradient = try linear_gradient.?.sumRows(allocator);
+        defer linear_bias_gradient.deinit();
+
+        const gate_bias_gradient = try gate_gradient.?.sumRows(allocator);
+        defer gate_bias_gradient.deinit();
+
+        const transposed_linear_weights = try self.linear_weights.transpose(allocator);
+        defer transposed_linear_weights.deinit();
+
+        const transposed_gate_weights = try self.gate_weights.transpose(allocator);
+        defer transposed_gate_weights.deinit();
+
+        const linear_input_gradient = try linear_gradient.?.dotProduct(transposed_linear_weights, allocator);
+        defer linear_input_gradient.deinit();
+
+        const gate_input_gradient = try gate_gradient.?.dotProduct(transposed_gate_weights, allocator);
+        defer gate_input_gradient.deinit();
+
+        const input_gradient = try linear_input_gradient.add(gate_input_gradient, allocator);
+        errdefer input_gradient.deinit();
+
+        const scaled_linear_weights_gradient = try linear_weights_gradient.scale(learning_rate, allocator);
+        defer scaled_linear_weights_gradient.deinit();
+
+        const scaled_gate_weights_gradient = try gate_weights_gradient.scale(learning_rate, allocator);
+        defer scaled_gate_weights_gradient.deinit();
+
+        const scaled_linear_bias_gradient = try linear_bias_gradient.scale(learning_rate, allocator);
+        defer scaled_linear_bias_gradient.deinit();
+
+        const scaled_gate_bias_gradient = try gate_bias_gradient.scale(learning_rate, allocator);
+        defer scaled_gate_bias_gradient.deinit();
+
+        const new_linear_weights = try self.linear_weights.subtract(scaled_linear_weights_gradient, allocator);
+        self.linear_weights.deinit();
+        self.linear_weights = new_linear_weights;
+
+        const new_gate_weights = try self.gate_weights.subtract(scaled_gate_weights_gradient, allocator);
+        self.gate_weights.deinit();
+        self.gate_weights = new_gate_weights;
+
+        const new_linear_bias = try self.linear_bias.subtract(scaled_linear_bias_gradient, allocator);
+        self.linear_bias.deinit();
+        self.linear_bias = new_linear_bias;
+
+        const new_gate_bias = try self.gate_bias.subtract(scaled_gate_bias_gradient, allocator);
+        self.gate_bias.deinit();
+        self.gate_bias = new_gate_bias;
+
+        return input_gradient;
+    }
+
+    fn syncToLayer(self: BackendTrainingGatedLayer, target: *GatedLayer, allocator: Allocator) !void {
+        if (target.linear_weights.rows != self.linear_weights.rows or target.linear_weights.cols != self.linear_weights.cols or
+            target.linear_bias.rows != self.linear_bias.rows or target.linear_bias.cols != self.linear_bias.cols or
+            target.gate_weights.rows != self.gate_weights.rows or target.gate_weights.cols != self.gate_weights.cols or
+            target.gate_bias.rows != self.gate_bias.rows or target.gate_bias.cols != self.gate_bias.cols)
+        {
+            return error.DimensionMismatch;
+        }
+
+        var replacement_linear_weights = try self.linear_weights.toMatrix(allocator);
+        errdefer replacement_linear_weights.deinit();
+        var replacement_linear_bias = try self.linear_bias.toMatrix(allocator);
+        errdefer replacement_linear_bias.deinit();
+        var replacement_gate_weights = try self.gate_weights.toMatrix(allocator);
+        errdefer replacement_gate_weights.deinit();
+        var replacement_gate_bias = try self.gate_bias.toMatrix(allocator);
+        errdefer replacement_gate_bias.deinit();
+
+        target.linear_weights.deinit();
+        target.linear_bias.deinit();
+        target.gate_weights.deinit();
+        target.gate_bias.deinit();
+        target.linear_weights = replacement_linear_weights;
+        target.linear_bias = replacement_linear_bias;
+        target.gate_weights = replacement_gate_weights;
+        target.gate_bias = replacement_gate_bias;
+    }
+};
+
+const BackendTrainingLayer = union(LayerType) {
+    Standard: BackendTrainingStandardLayer,
+    Gated: BackendTrainingGatedLayer,
+
+    fn init(allocator: Allocator, source: LayerVariant, backend_instance: anytype) !BackendTrainingLayer {
+        return switch (source) {
+            .Standard => |layer| .{ .Standard = try BackendTrainingStandardLayer.init(allocator, layer, backend_instance) },
+            .Gated => |layer| .{ .Gated = try BackendTrainingGatedLayer.init(allocator, layer, backend_instance) },
+        };
+    }
+
+    fn deinit(self: *BackendTrainingLayer) void {
+        switch (self.*) {
+            .Standard => |*layer| layer.deinit(),
+            .Gated => |*layer| layer.deinit(),
+        }
+    }
+
+    fn clearCaches(self: *BackendTrainingLayer) void {
+        switch (self.*) {
+            .Standard => |*layer| layer.clearCaches(),
+            .Gated => |*layer| layer.clearCaches(),
+        }
+    }
+
+    fn forwardInference(self: BackendTrainingLayer, input: *const BackendMatrix, allocator: Allocator) !*BackendMatrix {
+        return switch (self) {
+            .Standard => |layer| layer.forwardInference(input, allocator),
+            .Gated => |layer| layer.forwardInference(input, allocator),
+        };
+    }
+
+    fn forwardTrain(self: *BackendTrainingLayer, input: *const BackendMatrix, allocator: Allocator) !*BackendMatrix {
+        return switch (self.*) {
+            .Standard => |*layer| layer.forwardTrain(input, allocator),
+            .Gated => |*layer| layer.forwardTrain(input, allocator),
+        };
+    }
+
+    fn backward(self: *BackendTrainingLayer, output_gradient: *const BackendMatrix, learning_rate: f64, allocator: Allocator) !*BackendMatrix {
+        return switch (self.*) {
+            .Standard => |*layer| layer.backward(output_gradient, learning_rate, allocator),
+            .Gated => |*layer| layer.backward(output_gradient, learning_rate, allocator),
+        };
+    }
+
+    fn syncToLayer(self: BackendTrainingLayer, target: LayerVariant, allocator: Allocator) !void {
+        switch (self) {
+            .Standard => |layer| switch (target) {
+                .Standard => |target_layer| try layer.syncToLayer(target_layer, allocator),
+                .Gated => return error.LayerTypeMismatch,
+            },
+            .Gated => |layer| switch (target) {
+                .Standard => return error.LayerTypeMismatch,
+                .Gated => |target_layer| try layer.syncToLayer(target_layer, allocator),
+            },
+        }
+    }
+};
+
+/// BackendTrainer owns backend-side trainable parameters for network layers.
 ///
 /// This is the persistent-parameter training path: parameters are copied to the
 /// backend once, updated on the backend across batches, and copied back to a CPU
-/// `Network` only when `syncToNetwork` is called. Gated-layer training still
-/// uses the existing `Network.trainBatchBackend` path.
+/// `Network` only when `syncToNetwork` is called.
 pub const BackendTrainer = struct {
     allocator: Allocator,
     backend_type: backend_mod.BackendType,
     learning_rate: f64,
     loss_function: LossFunction,
-    layers: ArrayList(BackendTrainingStandardLayer),
+    layers: ArrayList(BackendTrainingLayer),
 
     pub fn init(allocator: Allocator, source: Network, backend_instance: anytype) !BackendTrainer {
         var trainer = BackendTrainer{
@@ -682,16 +986,11 @@ pub const BackendTrainer = struct {
         errdefer trainer.deinit();
 
         for (source.layers.items) |layer| {
-            switch (layer) {
-                .Standard => |standard_layer| {
-                    var backend_layer = try BackendTrainingStandardLayer.init(allocator, standard_layer, backend_instance);
-                    trainer.layers.append(allocator, backend_layer) catch |err| {
-                        backend_layer.deinit();
-                        return err;
-                    };
-                },
-                .Gated => return error.UnsupportedLayerType,
-            }
+            var backend_layer = try BackendTrainingLayer.init(allocator, layer, backend_instance);
+            trainer.layers.append(allocator, backend_layer) catch |err| {
+                backend_layer.deinit();
+                return err;
+            };
         }
 
         return trainer;
@@ -807,10 +1106,7 @@ pub const BackendTrainer = struct {
         }
 
         for (self.layers.items, target.layers.items) |backend_layer, target_layer| {
-            switch (target_layer) {
-                .Standard => |standard_layer| try backend_layer.syncToLayer(standard_layer, self.allocator),
-                .Gated => return error.UnsupportedLayerType,
-            }
+            try backend_layer.syncToLayer(target_layer, self.allocator);
         }
     }
 };
@@ -1350,7 +1646,7 @@ pub const Network = struct {
         return BackendNetwork.init(self.allocator, self, backend_instance);
     }
 
-    /// Creates a backend-owned trainer for standard-layer networks.
+    /// Creates a backend-owned trainer for this network.
     ///
     /// The trainer keeps parameters on the backend across training batches and
     /// can copy them back into this Network with `BackendTrainer.syncToNetwork`.
@@ -1930,18 +2226,66 @@ test "backend trainer keeps standard parameters on backend until sync" {
     try testing.expect((try cpu_after_sync.get(2, 0)) > (try cpu_still_unsynced.get(2, 0)) + 1.0);
 }
 
-test "backend trainer rejects gated layers until persistent gated training is implemented" {
+test "backend trainer keeps gated parameters on backend until sync" {
     const allocator = testing.allocator;
 
-    var network = Network.init(allocator, 0.1, .MeanSquaredError);
+    var network = Network.init(allocator, 0.05, .MeanSquaredError);
     defer network.deinit();
-    try network.addLayer(2, 2, Activation.relu, Activation.relu_derivative);
-    try network.addGatedLayer(2, 1, false);
+    try network.addGatedLayer(1, 1, false);
+
+    const layer = network.layers.items[0].Gated;
+    layer.linear_weights.fill(0.0);
+    layer.linear_bias.fill(0.0);
+    layer.gate_weights.fill(0.0);
+    layer.gate_bias.fill(0.0);
+
+    var inputs = try Matrix.init(allocator, 4, 1);
+    defer inputs.deinit();
+    var targets = try Matrix.init(allocator, 4, 1);
+    defer targets.deinit();
+
+    for (0..4) |row| {
+        const x = @as(f64, @floatFromInt(row));
+        try inputs.set(row, 0, x);
+        try targets.set(row, 0, x * 2.0);
+    }
 
     var backend_instance = try backend_mod.createBackend(allocator, .CPU);
     defer backend_instance.deinit();
 
-    try testing.expectError(error.UnsupportedLayerType, network.backendTrainer(backend_instance));
+    const backend_inputs = try BackendMatrix.fromMatrix(backend_instance, inputs, allocator);
+    defer backend_inputs.deinit();
+    const backend_targets = try BackendMatrix.fromMatrix(backend_instance, targets, allocator);
+    defer backend_targets.deinit();
+
+    var trainer = try network.backendTrainer(backend_instance);
+    defer trainer.deinit();
+
+    const before_predictions = try trainer.predict(backend_inputs);
+    defer before_predictions.deinit();
+    const before_loss = try trainer.calculateLoss(before_predictions, backend_targets);
+
+    var cpu_before_sync = try network.predict(inputs);
+    defer cpu_before_sync.deinit();
+
+    for (0..32) |_| {
+        _ = try trainer.trainBatch(backend_inputs, backend_targets);
+    }
+
+    const after_predictions = try trainer.predict(backend_inputs);
+    defer after_predictions.deinit();
+    const after_loss = try trainer.calculateLoss(after_predictions, backend_targets);
+    try testing.expect(after_loss < before_loss);
+
+    var cpu_still_unsynced = try network.predict(inputs);
+    defer cpu_still_unsynced.deinit();
+    try testing.expectApproxEqAbs(try cpu_before_sync.get(2, 0), try cpu_still_unsynced.get(2, 0), 1e-12);
+
+    try trainer.syncToNetwork(&network);
+
+    var cpu_after_sync = try network.predict(inputs);
+    defer cpu_after_sync.deinit();
+    try testing.expect((try cpu_after_sync.get(2, 0)) > (try cpu_still_unsynced.get(2, 0)) + 1.0);
 }
 
 test "loss calculation" {

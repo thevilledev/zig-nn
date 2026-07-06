@@ -49,17 +49,17 @@ Two main layer types:
   backend-aware training against `BackendMatrix` inputs and targets
 - `BackendNetwork` snapshots mirror network parameters once for repeated
   backend inference
-- `BackendTrainer` keeps standard-layer trainable parameters on the backend
-  across batches, then syncs them back to a CPU `Network` explicitly
+- `BackendTrainer` keeps standard and gated trainable parameters on the
+  backend across batches, then syncs them back to a CPU `Network` explicitly
 
 The default high-level `Network.forward`, `Network.trainBatch`, and
 `Network.train` paths still use the CPU `Matrix` implementation. Backend
 training works through explicit backend methods. Persistent backend training is
-available for standard-layer networks through `BackendTrainer`; mixed or gated
-training still uses CPU-owned network parameters mirrored into backend matrices
-during training calls. GPU support should be verified through backend tests, GPU
-examples, backend training examples, snapshot inference checks, and benchmark
-rows for the target machine.
+available for standard and gated networks through `BackendTrainer`; the
+CPU-owned `Network.trainBatchBackend` and `Network.trainBackend` methods remain
+available for direct backend-aware training calls. GPU support should be
+verified through backend tests, GPU examples, backend training examples,
+snapshot inference checks, and benchmark rows for the target machine.
 
 ### Quantization (`quantization.zig`)
 - Uniform scalar quantization baseline
@@ -117,7 +117,7 @@ Using Zig's error union types for handling:
 
 Areas for potential improvement:
 1. SIMD optimizations
-2. Persistent backend parameters for gated backend training
+2. Optimizer state support for backend trainers
 3. Distributed training support
 4. Additional layer types:
    - Convolutional layers
