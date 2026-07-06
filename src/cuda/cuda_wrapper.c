@@ -383,6 +383,11 @@ static int cuda_compile_module(ZigNNCUDABackend* backend, int compute_major, int
 
     nvrtc_status = nvrtcCompileProgram(program, 3, options);
     if (nvrtc_status != NVRTC_SUCCESS) {
+        if (nvrtc_status == NVRTC_ERROR_INVALID_OPTION && compute_minor != 0) {
+            nvrtcDestroyProgram(&program);
+            return cuda_compile_module(backend, compute_major, 0, error_buffer, error_buffer_len);
+        }
+
         size_t log_size = 0;
         nvrtcGetProgramLogSize(program, &log_size);
         if (log_size > 1) {
