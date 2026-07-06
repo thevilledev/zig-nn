@@ -65,7 +65,7 @@ func Destroy(ctx context.Context, client DestroyClient, opts DestroyOptions) (*D
 		return result, nil
 	}
 	if client == nil {
-		return nil, fmt.Errorf("Verda client is required")
+		return nil, fmt.Errorf("verda client is required")
 	}
 
 	results, err := client.DestroyInstances(ctx, req)
