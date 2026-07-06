@@ -17,15 +17,17 @@ From the repository root:
 
 ```bash
 zig version
-mkdir -p bin
-go build -C nnctl -o ../bin/nnctl ./cmd/nnctl
-./bin/nnctl all
-./bin/nnctl run quick
+go install ./nnctl/cmd/nnctl
+nnctl all
+nnctl run quick
 ```
 
 `nnctl all` builds the library, runs the unit and acceptance tests, and builds
 all examples. `nnctl run quick` runs the quick examples that do not require an
 external data file or a saved model.
+
+`go install` writes the executable to Go's install bin directory. In a standard
+Go setup that directory is already on your `PATH`.
 
 If a GPU toolchain is unavailable on your machine, run individual CPU examples
 from [Examples](examples.md) instead of the full `run-examples` target.
@@ -33,22 +35,22 @@ from [Examples](examples.md) instead of the full `run-examples` target.
 ## Common nnctl Commands
 
 ```bash
-./bin/nnctl build
-./bin/nnctl test
-./bin/nnctl examples
-./bin/nnctl run quick
-./bin/nnctl data tiny-gpt
-./bin/nnctl release
-./bin/nnctl fmt
-./bin/nnctl clean
-./bin/nnctl help
+nnctl build
+nnctl test
+nnctl examples
+nnctl run quick
+nnctl data tiny-gpt
+nnctl release
+nnctl fmt
+nnctl clean
+nnctl help
 ```
 
 You can change the optimization mode used by `nnctl`:
 
 ```bash
-./bin/nnctl build --mode ReleaseFast
-./bin/nnctl release --mode ReleaseFast
+nnctl build --mode ReleaseFast
+nnctl release --mode ReleaseFast
 ```
 
 ## Direct Zig Commands
@@ -80,12 +82,12 @@ zig build test-metal_backend
 Most examples are self-contained. Two examples need local files, and one has
 optional sourced corpora:
 
-- MNIST expects the dataset files. Use `./bin/nnctl data mnist`, then run
-  `./bin/nnctl run mnist`.
+- MNIST expects the dataset files. Use `nnctl data mnist`, then run
+  `nnctl run mnist`.
 - Serving expects a saved model named `xor_model.bin` by default. Create one
-  with `./bin/nnctl run xor-training -- --output=xor_model.bin`, then run
-  `./bin/nnctl run serving`.
+  with `nnctl run xor-training -- --output=xor_model.bin`, then run
+  `nnctl run serving`.
 - Tiny GPT falls back to the checked-in toy corpus by default. To use sourced
-  Tiny Shakespeare or TinyStories corpora, run `./bin/nnctl data tiny-gpt`.
+  Tiny Shakespeare or TinyStories corpora, run `nnctl data tiny-gpt`.
 
 See [Examples](examples.md) for the full example list.

@@ -8,7 +8,7 @@ Transformer-specific code local to the example.
 Run it with:
 
 ```bash
-bin/nnctl run tiny-gpt -- --prompt "to be" --tokens 80 --seed 42
+nnctl run tiny-gpt -- --prompt "to be" --tokens 80 --seed 42
 ```
 
 By default the example uses `--corpus auto`: a prepared TinyStories slice if it
@@ -26,7 +26,7 @@ train/eval split, prints validation loss, embeds run metadata in the checkpoint,
 and can write a JSON summary for comparing runs:
 
 ```bash
-bin/nnctl train tiny-gpt --corpus tinystories --output tiny-gpt.bin \
+nnctl train tiny-gpt --corpus tinystories --output tiny-gpt.bin \
   --steps 5000 --block-size 32 --layers 4 --heads 4 --embd 64 \
   --eval-split 0.05 --lr-schedule cosine --summary-path runs/tiny-gpt.json
 ```
@@ -37,27 +37,27 @@ and expands to a 4-layer, 4-head, 128-channel, 64-character-context model with
 random mini-batches and AdamW:
 
 ```bash
-bin/nnctl data tiny-gpt
-bin/nnctl train tiny-gpt --preset coherent-small --output tiny-gpt.bin
+nnctl data tiny-gpt
+nnctl train tiny-gpt --preset coherent-small --output tiny-gpt.bin
 ```
 
 Resume a checkpoint for more training:
 
 ```bash
-bin/nnctl train tiny-gpt --resume tiny-gpt.bin --steps 2000
+nnctl train tiny-gpt --resume tiny-gpt.bin --steps 2000
 ```
 
 Reload a checkpoint for generation:
 
 ```bash
-bin/nnctl run tiny-gpt -- --load-checkpoint tiny-gpt.bin --no-train \
+nnctl run tiny-gpt -- --load-checkpoint tiny-gpt.bin --no-train \
   --prompt "to be" --tokens 120 --no-corpus-prior
 ```
 
 Run the OpenAI-compatible inference service:
 
 ```bash
-bin/nnctl run tiny-gpt-openai -- --model tiny-gpt.bin --port 8080
+nnctl run tiny-gpt-openai -- --model tiny-gpt.bin --port 8080
 ```
 
 The server requires `--model` by default. For quick protocol testing with a
@@ -66,7 +66,7 @@ seeded untrained model, pass `--allow-untrained`.
 Or run the inference server and a small local browser chat app together:
 
 ```bash
-bin/nnctl chat --model tiny-gpt.bin
+nnctl chat --model tiny-gpt.bin
 ```
 
 Then call it with an OpenAI-style non-streaming request:
@@ -80,15 +80,15 @@ curl http://127.0.0.1:8080/v1/chat/completions \
 Prepare the sourced corpora with:
 
 ```bash
-bin/nnctl data tiny-gpt
+nnctl data tiny-gpt
 ```
 
 Then try the progression:
 
 ```bash
-bin/nnctl run tiny-gpt -- --corpus toy --prompt "to be"
-bin/nnctl train tiny-gpt --corpus shakespeare --output shakespeare-gpt.bin
-bin/nnctl train tiny-gpt --corpus tinystories --output tinystories-gpt.bin
+nnctl run tiny-gpt -- --corpus toy --prompt "to be"
+nnctl train tiny-gpt --corpus shakespeare --output shakespeare-gpt.bin
+nnctl train tiny-gpt --corpus tinystories --output tinystories-gpt.bin
 ```
 
 The default model is intentionally small:
@@ -104,7 +104,7 @@ Better checkpoints come from matching capacity, data, and training time:
 
 - increase `--block-size` so the model sees longer context
 - increase `--layers`, `--heads`, and `--embd` for more parameters
-- increase `--train-chars` and use `bin/nnctl data tiny-gpt` for real corpora
+- increase `--train-chars` and use `nnctl data tiny-gpt` for real corpora
 - increase `--steps` and watch both training and validation loss
 - start from `--preset coherent-small` when you want model-only text, not a
   readability prior

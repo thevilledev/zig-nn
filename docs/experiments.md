@@ -21,7 +21,7 @@ Location: [examples/quantization](../examples/quantization/README.md)
 Run:
 
 ```bash
-./bin/nnctl run turboquant
+nnctl run turboquant
 ```
 
 This compares a uniform scalar quantization baseline with a rotated scalar
@@ -35,7 +35,7 @@ Location: [examples/tiny_gpt](../examples/tiny_gpt/README.md)
 Run:
 
 ```bash
-./bin/nnctl run tiny-gpt -- --prompt "to be" --tokens 80 --seed 42
+nnctl run tiny-gpt -- --prompt "to be" --tokens 80 --seed 42
 ```
 
 This is a tiny decoder-only Transformer demo that uses this project's matrix
@@ -49,9 +49,9 @@ then prepared Tiny Shakespeare, then the checked-in toy corpus. Prepare the
 sourced corpora with:
 
 ```bash
-./bin/nnctl data tiny-gpt
-./bin/nnctl train tiny-gpt --preset coherent-small --output tiny-gpt.bin
-./bin/nnctl chat --model tiny-gpt.bin
+nnctl data tiny-gpt
+nnctl train tiny-gpt --preset coherent-small --output tiny-gpt.bin
+nnctl chat --model tiny-gpt.bin
 ```
 
 ## When Adding A New Experiment

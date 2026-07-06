@@ -33,32 +33,31 @@ CUDA-tagged work.
 
 ## Start Here
 
-Make sure Zig `0.16.0` and Go `1.26` or newer are installed. Build `nnctl`
-once, then use it for repo tasks.
+Make sure Zig `0.16.0` and Go `1.26` or newer are installed. From the
+repository root, install `nnctl` once, then use it for repo tasks.
 
 ```bash
-# Build nnctl
-mkdir -p bin
-go build -C nnctl -o ../bin/nnctl ./cmd/nnctl
-./bin/nnctl help
+# Install nnctl
+go install ./nnctl/cmd/nnctl
+nnctl help
 
 # Build, test, and build examples
-./bin/nnctl all
+nnctl all
 
 # Run specific examples
-./bin/nnctl run simple-xor
-./bin/nnctl run tiny-gpt
+nnctl run simple-xor
+nnctl run tiny-gpt
 
 # Download data for examples
-./bin/nnctl data mnist
-./bin/nnctl data tiny-gpt
+nnctl data mnist
+nnctl data tiny-gpt
 
 # Train and serve a TinyGPT checkpoint
-./bin/nnctl train tiny-gpt --preset coherent-small --output tiny-gpt.bin
-./bin/nnctl chat --model tiny-gpt.bin
+nnctl train tiny-gpt --preset coherent-small --output tiny-gpt.bin
+nnctl chat --model tiny-gpt.bin
 
 # Build with a different optimization mode
-./bin/nnctl build --mode ReleaseFast
+nnctl build --mode ReleaseFast
 ```
 
 For setup details and direct `zig build` commands, see
