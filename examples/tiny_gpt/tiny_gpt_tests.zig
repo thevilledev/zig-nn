@@ -204,8 +204,13 @@ test "eval split remains disjoint when train limit covers corpus" {
     try testing.expectEqualStrings("tuvwxyz", eval);
 }
 
+test "perplexity converts next-token loss" {
+    try testing.expectApproxEqAbs(@as(f64, 1.0), cli.perplexityFromLoss(0.0), 1e-12);
+    try testing.expectApproxEqAbs(@as(f64, 10.0), cli.perplexityFromLoss(@log(@as(f64, 10.0))), 1e-12);
+}
+
 test "coherent small preset sets model-only training defaults" {
-    const options = try cli.parseArgs(&.{"--preset", "coherent-small"});
+    const options = try cli.parseArgs(&.{ "--preset", "coherent-small" });
 
     try testing.expect(options.train_full);
     try testing.expect(!options.train_demo_head);
@@ -226,10 +231,10 @@ test "coherent small preset sets model-only training defaults" {
 
 test "explicit args override coherent small preset regardless of order" {
     const options = try cli.parseArgs(&.{
-        "--corpus", "toy",
-        "--block-size", "8",
-        "--preset", "coherent-small",
-        "--top-k", "4",
+        "--corpus",       "toy",
+        "--block-size",   "8",
+        "--preset",       "coherent-small",
+        "--top-k",        "4",
         "--corpus-prior",
     });
 

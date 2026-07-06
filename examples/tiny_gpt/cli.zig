@@ -200,6 +200,11 @@ pub fn validationCorpus(text: []const u8, train_limit: usize, validation_chars: 
     return text[start..end];
 }
 
+pub fn perplexityFromLoss(loss: f64) f64 {
+    if (loss >= @log(std.math.floatMax(f64))) return std.math.inf(f64);
+    return std.math.exp(loss);
+}
+
 fn applyTrainingPreset(options: *CliOptions, preset: TrainingPreset) void {
     switch (preset) {
         .none => {},
@@ -544,6 +549,14 @@ fn writeOptionalJsonFloat(writer: anytype, value: ?f64) !void {
     }
 }
 
+fn writeOptionalJsonPerplexity(writer: anytype, loss: ?f64) !void {
+    if (loss) |value| {
+        try writer.print("{d:.6}", .{perplexityFromLoss(value)});
+    } else {
+        try writer.writeAll("null");
+    }
+}
+
 fn runSummaryJson(
     allocator: std.mem.Allocator,
     model: *const TinyGPT,
@@ -627,6 +640,28 @@ fn runSummaryJson(
     } else if (training_stats) |stats| {
         try writer.print("    \"train_initial\": {d:.6},\n", .{stats.initial_loss});
         try writer.print("    \"train_final\": {d:.6},\n", .{stats.final_loss});
+        try writer.writeAll("    \"eval_initial\": null,\n");
+        try writer.writeAll("    \"eval_final\": null\n");
+    } else {
+        try writer.writeAll("    \"train_initial\": null,\n");
+        try writer.writeAll("    \"train_final\": null,\n");
+        try writer.writeAll("    \"eval_initial\": null,\n");
+        try writer.writeAll("    \"eval_final\": null\n");
+    }
+    try writer.writeAll("  },\n");
+
+    try writer.writeAll("  \"perplexity\": {\n");
+    if (full_training_stats) |stats| {
+        try writer.print("    \"train_initial\": {d:.6},\n", .{perplexityFromLoss(stats.initial_loss)});
+        try writer.print("    \"train_final\": {d:.6},\n", .{perplexityFromLoss(stats.final_loss)});
+        try writer.writeAll("    \"eval_initial\": ");
+        try writeOptionalJsonPerplexity(writer, stats.validation_initial_loss);
+        try writer.writeAll(",\n    \"eval_final\": ");
+        try writeOptionalJsonPerplexity(writer, stats.validation_final_loss);
+        try writer.writeByte('\n');
+    } else if (training_stats) |stats| {
+        try writer.print("    \"train_initial\": {d:.6},\n", .{perplexityFromLoss(stats.initial_loss)});
+        try writer.print("    \"train_final\": {d:.6},\n", .{perplexityFromLoss(stats.final_loss)});
         try writer.writeAll("    \"eval_initial\": null,\n");
         try writer.writeAll("    \"eval_final\": null\n");
     } else {
@@ -833,12 +868,20 @@ pub fn main(init: std.process.Init) !void {
             stats.learning_rate_final,
         });
         try stdout.print("Full training loss: {d:.4} -> {d:.4}\n", .{ stats.initial_loss, stats.final_loss });
+        try stdout.print("Full training perplexity: {d:.2} -> {d:.2}\n", .{
+            perplexityFromLoss(stats.initial_loss),
+            perplexityFromLoss(stats.final_loss),
+        });
         if (stats.validation_initial_loss) |initial_validation| {
             if (stats.validation_final_loss) |final_validation| {
                 try stdout.print("Validation loss: {d:.4} -> {d:.4} ({} sampled windows)\n", .{
                     initial_validation,
                     final_validation,
                     stats.eval_windows,
+                });
+                try stdout.print("Validation perplexity: {d:.2} -> {d:.2}\n", .{
+                    perplexityFromLoss(initial_validation),
+                    perplexityFromLoss(final_validation),
                 });
             }
         } else {
@@ -851,6 +894,10 @@ pub fn main(init: std.process.Init) !void {
             training_corpus.len,
         });
         try stdout.print("Demo training loss: {d:.4} -> {d:.4}\n", .{ stats.initial_loss, stats.final_loss });
+        try stdout.print("Demo training perplexity: {d:.2} -> {d:.2}\n", .{
+            perplexityFromLoss(stats.initial_loss),
+            perplexityFromLoss(stats.final_loss),
+        });
     } else {
         try stdout.print("Demo training: skipped, output head remains random\n", .{});
     }

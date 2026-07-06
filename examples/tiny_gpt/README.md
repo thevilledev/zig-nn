@@ -22,8 +22,8 @@ untrained architecture sample, pass `--no-train --no-corpus-prior`.
 For an end-to-end training pass over all Transformer weights, embeddings, layer
 norms, and the output head, use `nnctl train tiny-gpt`. This trains multiple
 next-token context windows per step, uses AdamW by default, applies a repeatable
-train/eval split, prints validation loss, embeds run metadata in the checkpoint,
-and can write a JSON summary for comparing runs:
+train/eval split, prints validation loss and perplexity, embeds run metadata in
+the checkpoint, and can write a JSON summary for comparing runs:
 
 ```bash
 nnctl train tiny-gpt --corpus tinystories --output tiny-gpt.bin \
