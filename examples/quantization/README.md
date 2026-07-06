@@ -29,6 +29,13 @@ baseline is compared against the rotated 4-bit variant on high-dimensional
 sparse-outlier vectors. That benchmark is meant to show whether the rotated
 method can win on quality while using fewer payload bits.
 
+The repository benchmark suite also includes KV-cache-shaped TurboQuant rows
+that quantize deterministic per-head key/value vectors. Run them with:
+
+```bash
+zig build benchmark -- --filter quantization
+```
+
 The current example implements:
 
 - uniform scalar quantization baseline

@@ -115,7 +115,7 @@ fn printHelp() void {
         \\  layer_norm    CPU LayerNorm forward passes
         \\  training      CPU Network.trainBatch loops
         \\  tiny_gpt      CPU TinyGPT forward passes
-        \\  quantization  CPU uniform and TurboQuant encode/decode/error loops
+        \\  quantization  CPU uniform, TurboQuant, and KV-cache-shaped quantization loops
         \\
     , .{});
 }
@@ -793,7 +793,7 @@ fn timeTinyGptForward(
 }
 
 fn benchmarkQuantization(allocator: Allocator, options: Options) !void {
-    const cases = [_]struct {
+    const vector_cases = [_]struct {
         name: []const u8,
         op: QuantizationOp,
         len: usize,
@@ -805,8 +805,20 @@ fn benchmarkQuantization(allocator: Allocator, options: Options) !void {
         .{ .name = "turbo_8bit_4096", .op = .turbo, .len = 4096, .bits = 8, .warmups = 1, .iterations = 6 },
         .{ .name = "turbo_8bit_16384", .op = .turbo, .len = 16_384, .bits = 8, .warmups = 1, .iterations = 4 },
     };
+    const kv_cases = [_]struct {
+        name: []const u8,
+        tokens: usize,
+        heads: usize,
+        head_dim: usize,
+        bits: u8,
+        warmups: usize,
+        iterations: usize,
+    }{
+        .{ .name = "kv_cache_turbo4_64t4h32d", .tokens = 64, .heads = 4, .head_dim = 32, .bits = 4, .warmups = 1, .iterations = 4 },
+        .{ .name = "kv_cache_turbo4_128t8h64d", .tokens = 128, .heads = 8, .head_dim = 64, .bits = 4, .warmups = 1, .iterations = 2 },
+    };
 
-    for (cases, 0..) |case, index| {
+    for (vector_cases, 0..) |case, index| {
         if (options.quick and index > 0) break;
 
         const input = try allocator.alloc(f64, case.len);
@@ -821,6 +833,36 @@ fn benchmarkQuantization(allocator: Allocator, options: Options) !void {
             case.op,
             input,
             query,
+            case.bits,
+            quickCount(options, case.warmups),
+            quickCount(options, case.iterations),
+        );
+        printResult("quantization", case.name, "cpu", timing, 0.0, "ok");
+        printSkipped("quantization", case.name, "metal", timing.warmups, timing.iterations, "skipped_cpu_only_path");
+        printSkipped("quantization", case.name, "cuda", timing.warmups, timing.iterations, "skipped_cpu_only_path");
+    }
+
+    for (kv_cases, 0..) |case, index| {
+        if (options.quick and index > 0) break;
+
+        const len = case.tokens * case.heads * case.head_dim;
+        const keys = try allocator.alloc(f64, len);
+        defer allocator.free(keys);
+        const values = try allocator.alloc(f64, len);
+        defer allocator.free(values);
+        const query = try allocator.alloc(f64, len);
+        defer allocator.free(query);
+        fillKVCache(keys, case.heads, case.head_dim, 1_211);
+        fillKVCache(values, case.heads, case.head_dim, 1_619);
+        fillKVCache(query, case.heads, case.head_dim, 2_023);
+
+        const timing = try timeKVCacheQuantization(
+            allocator,
+            keys,
+            values,
+            query,
+            case.heads,
+            case.head_dim,
             case.bits,
             quickCount(options, case.warmups),
             quickCount(options, case.iterations),
@@ -902,6 +944,92 @@ fn runQuantization(
     }
 }
 
+fn timeKVCacheQuantization(
+    allocator: Allocator,
+    keys: []const f64,
+    values: []const f64,
+    query: []const f64,
+    heads: usize,
+    head_dim: usize,
+    bits: u8,
+    warmups: usize,
+    iterations: usize,
+) !Timing {
+    for (0..warmups) |_| {
+        _ = try runKVCacheQuantization(allocator, keys, values, query, heads, head_dim, bits);
+    }
+
+    var total_ns: f64 = 0.0;
+    var min_ns: f64 = std.math.inf(f64);
+    var max_ns: f64 = 0.0;
+    var checksum: f64 = 0.0;
+
+    for (0..iterations) |_| {
+        const start = nowNs();
+        const metric = try runKVCacheQuantization(allocator, keys, values, query, heads, head_dim, bits);
+        const elapsed = nowNs() - start;
+        checksum += metric;
+
+        const elapsed_ns = @as(f64, @floatFromInt(elapsed));
+        total_ns += elapsed_ns;
+        min_ns = @min(min_ns, elapsed_ns);
+        max_ns = @max(max_ns, elapsed_ns);
+    }
+
+    return .{
+        .warmups = warmups,
+        .iterations = iterations,
+        .average_ns = total_ns / @as(f64, @floatFromInt(iterations)),
+        .min_ns = min_ns,
+        .max_ns = max_ns,
+        .checksum = checksum,
+    };
+}
+
+fn runKVCacheQuantization(
+    allocator: Allocator,
+    keys: []const f64,
+    values: []const f64,
+    query: []const f64,
+    heads: usize,
+    head_dim: usize,
+    bits: u8,
+) !f64 {
+    if (head_dim == 0 or heads == 0) return error.InvalidKVCacheShape;
+    if (keys.len != values.len or keys.len != query.len) return error.InvalidKVCacheShape;
+    if (keys.len % (heads * head_dim) != 0) return error.InvalidKVCacheShape;
+
+    const vector_count = keys.len / head_dim;
+    var checksum: f64 = 0.0;
+    for (0..vector_count) |vector_index| {
+        const start = vector_index * head_dim;
+        const end = start + head_dim;
+        const seed = 0x91e1_0da5_0000_0000 + @as(u64, @intCast(vector_index));
+
+        checksum += try quantizeKVVector(allocator, keys[start..end], query[start..end], bits, seed);
+        checksum += try quantizeKVVector(allocator, values[start..end], query[start..end], bits, seed ^ 0xa5a5_5a5a_f0f0_0f0f);
+    }
+
+    return checksum / @as(f64, @floatFromInt(vector_count * 2));
+}
+
+fn quantizeKVVector(
+    allocator: Allocator,
+    input: []const f64,
+    query: []const f64,
+    bits: u8,
+    seed: u64,
+) !f64 {
+    const encoded = try nn.Quantization.encodeTurboQuant(allocator, input, bits, seed);
+    defer encoded.deinit();
+
+    const decoded = try encoded.decode(allocator);
+    defer allocator.free(decoded);
+
+    const metrics = try nn.Quantization.measureVectorError(input, decoded, query, encoded.payloadBits());
+    return metrics.mse + metrics.max_abs_error + metrics.inner_product_error * 1e-6;
+}
+
 fn quickCount(options: Options, count: usize) usize {
     if (!options.quick) return count;
     return @min(count, 1);
@@ -926,6 +1054,17 @@ fn fillCpuMatrix(matrix: *Matrix, salt: usize) void {
 fn fillVector(values: []f64, salt: usize) void {
     for (values, 0..) |*value, index| {
         value.* = deterministicValue(index, index * 3 + 1, salt);
+    }
+}
+
+fn fillKVCache(values: []f64, heads: usize, head_dim: usize, salt: usize) void {
+    for (values, 0..) |*value, index| {
+        const token = index / (heads * head_dim);
+        const head = (index / head_dim) % heads;
+        const dim = index % head_dim;
+        const base = deterministicValue(token, dim, salt + head * 31);
+        const head_scale = 1.0 + @as(f64, @floatFromInt(head)) * 0.05;
+        value.* = base * head_scale;
     }
 }
 

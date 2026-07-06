@@ -75,7 +75,8 @@ zig build benchmark -- --filter quantization
 - `tiny_gpt`: CPU TinyGPT forward passes through the example model. TinyGPT also
   uses the learning-oriented `Matrix` path today.
 - `quantization`: CPU uniform scalar quantization and TurboQuant encode,
-  decode, and error measurement.
+  decode, error measurement, and KV-cache-shaped TurboQuant loops over
+  per-head key/value vectors.
 
 GPU rows include `sample_error`, sampled against the CPU result. The Metal and
 CUDA kernels currently use f32 buffers, so small non-zero errors are expected.
