@@ -1,6 +1,7 @@
 .zig-cache
 zig-out
 bin/
+node_modules/
 plan.md
 .cursor
 data

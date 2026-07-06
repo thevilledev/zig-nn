@@ -69,6 +69,28 @@ nnctl benchmark
 For setup details and direct `zig build` commands, see
 [Getting Started](docs/getting-started.md).
 
+## Development Hooks
+
+Install Node dependencies, then install the local Git hooks with `prek`:
+
+```bash
+npm install
+npm run hooks:install
+```
+
+Run the same checks across the repository with:
+
+```bash
+npm run prek:all
+```
+
+Update hook revisions with the same seven-day cooldown used for dependency
+updates:
+
+```bash
+npm run prek:update
+```
+
 ## Guide
 
 - [Getting Started](docs/getting-started.md) - prerequisites, build commands,

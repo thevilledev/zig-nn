@@ -1,0 +1,15 @@
+{
+  "name": "zig-nn",
+  "private": true,
+  "scripts": {
+    "hooks:install": "prek install -f",
+    "prek": "prek",
+    "prek:all": "prek run --all-files",
+    "prek:update": "prek auto-update --cooldown-days 7"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^21.1.0",
+    "@commitlint/config-conventional": "^21.1.0",
+    "@j178/prek": "^0.4.5"
+  }
+}
