@@ -55,6 +55,20 @@ nnctl benchmark --quick --csv > baseline.csv
 nnctl benchmark --quick --compare baseline.csv
 ```
 
+Deploy a clean git snapshot to a remote benchmark host:
+
+```bash
+./bin/nnctl deploy user@gpu1:/srv/zig-nn --delete
+ssh user@gpu1 'cd /srv/zig-nn && zig build benchmark -Dgpu=cuda'
+```
+
+`nnctl deploy` uses `git archive` to materialize the selected ref in a temporary
+directory, then rsyncs that snapshot to the target. Local build artifacts,
+dependency folders, and `.git` metadata are not copied. The default ref is
+`HEAD`; pass `--ref <tree-ish>` for another branch, tag, or commit. The command
+refuses to run with uncommitted changes unless `--ignore-dirty` is set, so
+benchmark runs are easy to tie back to a reproducible source snapshot.
+
 Run one suite:
 
 ```bash

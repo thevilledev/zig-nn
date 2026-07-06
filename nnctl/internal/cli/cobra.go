@@ -67,6 +67,7 @@ func (a *App) newRootCommand() *cobra.Command {
 		a.newReleaseCommand(withRepo),
 		a.newTestCommand(withRepo),
 		a.newBenchmarkCommand(withRepo),
+		a.newDeployCommand(withRepo),
 		a.newCloudCommand(),
 		a.newExamplesCommand(withRepo),
 		a.newRunCommand(withRepo),
@@ -193,6 +194,39 @@ raw CSV file to print current-vs-baseline deltas.`,
 	cmd.Flags().BoolVar(&opts.debug, "debug", opts.debug, "run benchmark-debug instead of ReleaseFast benchmark")
 	cmd.Flags().BoolVar(&opts.csv, "csv", opts.csv, "print raw CSV output")
 	cmd.Flags().StringVar(&opts.compare, "compare", opts.compare, "compare current results against a raw benchmark CSV file")
+	cmd.Flags().SortFlags = false
+	return cmd
+}
+
+func (a *App) newDeployCommand(withRepo repoRunner) *cobra.Command {
+	opts := defaultDeployOptions()
+	cmd := &cobra.Command{
+		Use:   "deploy TARGET",
+		Short: "Deploy a git snapshot with rsync",
+		Long: `Creates a git archive for the selected ref, extracts it into a temporary
+snapshot directory, and rsyncs that clean tree to TARGET. Build artifacts,
+dependency folders, and .git metadata are not copied.
+
+By default nnctl refuses to deploy when the working tree has uncommitted
+changes, so remote benchmark runs can be tied back to a specific git ref.`,
+		Example: `  nnctl deploy gpu1:~/zig-nn
+  nnctl deploy user@gpu1:/srv/zig-nn --delete
+  nnctl deploy gpu1:~/zig-nn --ref feature/fast-matmul
+  nnctl deploy gpu1:~/zig-nn --dry-run`,
+		Args: cobra.ExactArgs(1),
+		RunE: withRepo(func(ctx context.Context, cmd *cobra.Command, args []string) error {
+			opts.target = args[0]
+			return a.runDeploy(ctx, opts)
+		}),
+	}
+	cmd.Flags().StringVar(&opts.ref, "ref", opts.ref, "git ref or tree-ish to archive")
+	cmd.Flags().BoolVar(&opts.delete, "delete", opts.delete, "delete target files missing from the snapshot")
+	cmd.Flags().BoolVar(&opts.dryRun, "dry-run", opts.dryRun, "ask rsync to show changes without updating the target")
+	cmd.Flags().BoolVar(&opts.ignoreDirty, "ignore-dirty", opts.ignoreDirty, "deploy --ref even when the working tree has uncommitted changes")
+	cmd.Flags().StringVar(&opts.ssh, "ssh", opts.ssh, "ssh command passed to rsync -e")
+	cmd.Flags().StringVar(&opts.git, "git", opts.git, "Git executable")
+	cmd.Flags().StringVar(&opts.tar, "tar", opts.tar, "tar executable")
+	cmd.Flags().StringVar(&opts.rsync, "rsync", opts.rsync, "rsync executable")
 	cmd.Flags().SortFlags = false
 	return cmd
 }
