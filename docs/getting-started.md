@@ -8,6 +8,8 @@ This project targets Zig `0.16.0`. The package records that requirement in
 - Zig `0.16.0`
 - Go `1.26` or newer, for `nnctl`
 - macOS, only if you want to run the Metal backend checks
+- Linux with NVIDIA drivers and CUDA toolkit, only if you want to run the CUDA
+  backend checks
 
 The core build has no third-party package dependencies.
 
@@ -75,6 +77,7 @@ zig build test-quantization
 zig build test-backend
 zig build test-cpu_backend
 zig build test-metal_backend
+zig build test-cuda_backend
 ```
 
 ## Data And Model Files

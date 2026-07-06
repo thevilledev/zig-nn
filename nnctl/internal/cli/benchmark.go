@@ -39,7 +39,7 @@ type benchmarkRow struct {
 
 func defaultBenchmarkOptions() benchmarkOptions {
 	return benchmarkOptions{
-		gpu: "metal",
+		gpu: "auto",
 	}
 }
 
@@ -189,6 +189,7 @@ func printBenchmarkReport(dst interface{ Write([]byte) (int, error) }, rows []be
 	type pair struct {
 		cpu   *benchmarkRow
 		metal *benchmarkRow
+		cuda  *benchmarkRow
 	}
 
 	suiteOrder := make([]string, 0)
@@ -211,6 +212,8 @@ func printBenchmarkReport(dst interface{ Write([]byte) (int, error) }, rows []be
 			pairs[row.Suite][row.Case].cpu = row
 		case "metal":
 			pairs[row.Suite][row.Case].metal = row
+		case "cuda":
+			pairs[row.Suite][row.Case].cuda = row
 		}
 	}
 
@@ -218,19 +221,22 @@ func printBenchmarkReport(dst interface{ Write([]byte) (int, error) }, rows []be
 		fmt.Fprintf(dst, "%s\n", suite)
 		var table bytes.Buffer
 		tw := tabwriter.NewWriter(&table, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(tw, "case\tcpu avg\tmetal avg\tdiff\tspeedup\terror\tstatus")
+		fmt.Fprintln(tw, "case\tcpu avg\tmetal avg\tmetal diff\tmetal speedup\tcuda avg\tcuda diff\tcuda speedup\terror\tstatus")
 		for _, caseName := range caseOrder[suite] {
 			pair := pairs[suite][caseName]
 			fmt.Fprintf(
 				tw,
-				"%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				"%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 				caseName,
 				formatBenchmarkTime(pair.cpu),
 				formatBenchmarkTime(pair.metal),
 				formatBenchmarkDiff(pair.cpu, pair.metal),
 				formatBenchmarkSpeedup(pair.cpu, pair.metal),
-				formatBenchmarkError(pair.metal),
-				formatBenchmarkStatus(pair.cpu, pair.metal),
+				formatBenchmarkTime(pair.cuda),
+				formatBenchmarkDiff(pair.cpu, pair.cuda),
+				formatBenchmarkSpeedup(pair.cpu, pair.cuda),
+				formatBenchmarkErrors(pair.metal, pair.cuda),
+				formatBenchmarkStatus(pair.cpu, pair.metal, pair.cuda),
 			)
 		}
 		_ = tw.Flush()
@@ -271,18 +277,38 @@ func formatBenchmarkError(row *benchmarkRow) string {
 	return fmt.Sprintf("%.2e", row.SampleError)
 }
 
-func formatBenchmarkStatus(cpu, metal *benchmarkRow) string {
-	if cpu == nil && metal == nil {
+func formatBenchmarkErrors(metal, cuda *benchmarkRow) string {
+	metalError := formatBenchmarkError(metal)
+	cudaError := formatBenchmarkError(cuda)
+
+	switch {
+	case metalError == "-" && cudaError == "-":
+		return "-"
+	case cudaError == "-":
+		return metalError
+	case metalError == "-":
+		return cudaError
+	default:
+		return fmt.Sprintf("metal=%s cuda=%s", metalError, cudaError)
+	}
+}
+
+func formatBenchmarkStatus(cpu, metal, cuda *benchmarkRow) string {
+	if cpu == nil && metal == nil && cuda == nil {
 		return "missing"
 	}
 	if cpu != nil && cpu.Status != "ok" {
 		return "cpu: " + cpu.Status
 	}
-	if metal == nil {
-		return "metal: missing"
+	statuses := make([]string, 0, 2)
+	if metal != nil && metal.Status != "ok" {
+		statuses = append(statuses, "metal: "+metal.Status)
 	}
-	if metal.Status != "ok" {
-		return "metal: " + metal.Status
+	if cuda != nil && cuda.Status != "ok" {
+		statuses = append(statuses, "cuda: "+cuda.Status)
+	}
+	if len(statuses) > 0 {
+		return strings.Join(statuses, ", ")
 	}
 	return "ok"
 }

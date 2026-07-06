@@ -3,6 +3,7 @@
 //! start with main.zig instead.
 const std = @import("std");
 const testing = std.testing;
+const build_options = @import("build_options");
 
 // Import the modules
 const matrix_mod = @import("matrix.zig");
@@ -15,6 +16,7 @@ const visualiser_mod = @import("visualiser.zig");
 const backend_mod = @import("backend.zig");
 const cpu_backend_mod = @import("cpu_backend.zig");
 const metal_backend_mod = @import("metal_backend.zig");
+const cuda_backend_mod = @import("cuda_backend.zig");
 const quantization_mod = @import("quantization.zig");
 
 /// Library usage example:
@@ -59,16 +61,19 @@ pub const Quantization = quantization_mod;
 // Export backend interface types
 pub const BackendMatrix = backend_mod.Matrix;
 pub const BackendType = backend_mod.BackendType;
+pub const enable_metal = build_options.enable_metal;
+pub const enable_cuda = build_options.enable_cuda;
 
 // Export concrete backend types
 pub const CPUBackend = cpu_backend_mod.CPUBackend;
 pub const MetalBackend = metal_backend_mod.MetalBackend;
+pub const CUDABackend = cuda_backend_mod.CUDABackend;
 
 // Define the BackendInstance tagged union using *anyopaque
 pub const BackendInstance = union(BackendType) {
     CPU: *anyopaque,
     Metal: *anyopaque,
-    CUDA: *anyopaque, // Will be a CPU backend that acts as a fallback
+    CUDA: *anyopaque,
 
     // --- Mirrored Interface Methods ---
 
@@ -81,7 +86,7 @@ pub const BackendInstance = union(BackendType) {
         const matrix = try switch (self) {
             .CPU => |ptr| CPUBackend.initMatrix(ptr, allocator, rows, cols),
             .Metal => |ptr| MetalBackend.initMatrix(ptr, allocator, rows, cols),
-            .CUDA => |ptr| CPUBackend.initMatrix(ptr, allocator, rows, cols), // Use CPU as fallback
+            .CUDA => |ptr| CUDABackend.initMatrix(ptr, allocator, rows, cols),
         };
         return self.attachBackend(matrix);
     }
@@ -90,7 +95,7 @@ pub const BackendInstance = union(BackendType) {
         switch (self) {
             .CPU => |ptr| CPUBackend.deinitMatrix(ptr, matrix),
             .Metal => |ptr| MetalBackend.deinitMatrix(ptr, matrix),
-            .CUDA => |ptr| CPUBackend.deinitMatrix(ptr, matrix), // Use CPU as fallback
+            .CUDA => |ptr| CUDABackend.deinitMatrix(ptr, matrix),
         }
     }
 
@@ -98,7 +103,7 @@ pub const BackendInstance = union(BackendType) {
         const matrix = try switch (self) {
             .CPU => |ptr| CPUBackend.copyMatrix(ptr, source, allocator),
             .Metal => |ptr| MetalBackend.copyMatrix(ptr, source, allocator),
-            .CUDA => |ptr| CPUBackend.copyMatrix(ptr, source, allocator), // Use CPU as fallback
+            .CUDA => |ptr| CUDABackend.copyMatrix(ptr, source, allocator),
         };
         return self.attachBackend(matrix);
     }
@@ -107,7 +112,7 @@ pub const BackendInstance = union(BackendType) {
         return switch (self) {
             .CPU => |ptr| CPUBackend.getMatrixElement(ptr, matrix, row, col),
             .Metal => |ptr| MetalBackend.getMatrixElement(ptr, matrix, row, col),
-            .CUDA => |ptr| CPUBackend.getMatrixElement(ptr, matrix, row, col), // Use CPU as fallback
+            .CUDA => |ptr| CUDABackend.getMatrixElement(ptr, matrix, row, col),
         };
     }
 
@@ -115,7 +120,7 @@ pub const BackendInstance = union(BackendType) {
         switch (self) {
             .CPU => |ptr| CPUBackend.setMatrixElement(ptr, matrix, row, col, value),
             .Metal => |ptr| MetalBackend.setMatrixElement(ptr, matrix, row, col, value),
-            .CUDA => |ptr| CPUBackend.setMatrixElement(ptr, matrix, row, col, value), // Use CPU as fallback
+            .CUDA => |ptr| CUDABackend.setMatrixElement(ptr, matrix, row, col, value),
         }
     }
 
@@ -123,7 +128,7 @@ pub const BackendInstance = union(BackendType) {
         switch (self) {
             .CPU => |ptr| CPUBackend.fillMatrix(ptr, matrix, value),
             .Metal => |ptr| MetalBackend.fillMatrix(ptr, matrix, value),
-            .CUDA => |ptr| CPUBackend.fillMatrix(ptr, matrix, value), // Use CPU as fallback
+            .CUDA => |ptr| CUDABackend.fillMatrix(ptr, matrix, value),
         }
     }
 
@@ -131,7 +136,7 @@ pub const BackendInstance = union(BackendType) {
         const matrix = try switch (self) {
             .CPU => |ptr| CPUBackend.dotProduct(ptr, a, b, allocator),
             .Metal => |ptr| MetalBackend.dotProduct(ptr, a, b, allocator),
-            .CUDA => |ptr| CPUBackend.dotProduct(ptr, a, b, allocator), // Use CPU as fallback
+            .CUDA => |ptr| CUDABackend.dotProduct(ptr, a, b, allocator),
         };
         return self.attachBackend(matrix);
     }
@@ -140,7 +145,7 @@ pub const BackendInstance = union(BackendType) {
         const matrix = try switch (self) {
             .CPU => |ptr| CPUBackend.add(ptr, a, b, allocator),
             .Metal => |ptr| MetalBackend.add(ptr, a, b, allocator),
-            .CUDA => |ptr| CPUBackend.add(ptr, a, b, allocator), // Use CPU as fallback
+            .CUDA => |ptr| CUDABackend.add(ptr, a, b, allocator),
         };
         return self.attachBackend(matrix);
     }
@@ -149,7 +154,7 @@ pub const BackendInstance = union(BackendType) {
         const matrix = try switch (self) {
             .CPU => |ptr| CPUBackend.subtract(ptr, a, b, allocator),
             .Metal => |ptr| MetalBackend.subtract(ptr, a, b, allocator),
-            .CUDA => |ptr| CPUBackend.subtract(ptr, a, b, allocator), // Use CPU as fallback
+            .CUDA => |ptr| CUDABackend.subtract(ptr, a, b, allocator),
         };
         return self.attachBackend(matrix);
     }
@@ -158,7 +163,7 @@ pub const BackendInstance = union(BackendType) {
         const matrix = try switch (self) {
             .CPU => |ptr| CPUBackend.elementWiseMultiply(ptr, a, b, allocator),
             .Metal => |ptr| MetalBackend.elementWiseMultiply(ptr, a, b, allocator),
-            .CUDA => |ptr| CPUBackend.elementWiseMultiply(ptr, a, b, allocator), // Use CPU as fallback
+            .CUDA => |ptr| CUDABackend.elementWiseMultiply(ptr, a, b, allocator),
         };
         return self.attachBackend(matrix);
     }
@@ -167,7 +172,7 @@ pub const BackendInstance = union(BackendType) {
         const result = try switch (self) {
             .CPU => |ptr| CPUBackend.scale(ptr, matrix, scalar, allocator),
             .Metal => |ptr| MetalBackend.scale(ptr, matrix, scalar, allocator),
-            .CUDA => |ptr| CPUBackend.scale(ptr, matrix, scalar, allocator), // Use CPU as fallback
+            .CUDA => |ptr| CUDABackend.scale(ptr, matrix, scalar, allocator),
         };
         return self.attachBackend(result);
     }
@@ -176,7 +181,7 @@ pub const BackendInstance = union(BackendType) {
         const result = try switch (self) {
             .CPU => |ptr| CPUBackend.sumRows(ptr, matrix, allocator),
             .Metal => |ptr| MetalBackend.sumRows(ptr, matrix, allocator),
-            .CUDA => |ptr| CPUBackend.sumRows(ptr, matrix, allocator), // Use CPU as fallback
+            .CUDA => |ptr| CUDABackend.sumRows(ptr, matrix, allocator),
         };
         return self.attachBackend(result);
     }
@@ -185,7 +190,7 @@ pub const BackendInstance = union(BackendType) {
         const result = try switch (self) {
             .CPU => |ptr| CPUBackend.transpose(ptr, matrix, allocator),
             .Metal => |ptr| MetalBackend.transpose(ptr, matrix, allocator),
-            .CUDA => |ptr| CPUBackend.transpose(ptr, matrix, allocator), // Use CPU as fallback
+            .CUDA => |ptr| CUDABackend.transpose(ptr, matrix, allocator),
         };
         return self.attachBackend(result);
     }
@@ -194,7 +199,7 @@ pub const BackendInstance = union(BackendType) {
         const result = try switch (self) {
             .CPU => |ptr| CPUBackend.extractBatch(ptr, matrix, start, end, allocator),
             .Metal => |ptr| MetalBackend.extractBatch(ptr, matrix, start, end, allocator),
-            .CUDA => |ptr| CPUBackend.extractBatch(ptr, matrix, start, end, allocator), // Use CPU as fallback
+            .CUDA => |ptr| CUDABackend.extractBatch(ptr, matrix, start, end, allocator),
         };
         return self.attachBackend(result);
     }
@@ -203,7 +208,7 @@ pub const BackendInstance = union(BackendType) {
         switch (self) {
             .CPU => |ptr| CPUBackend.randomize(ptr, matrix, min, max),
             .Metal => |ptr| MetalBackend.randomize(ptr, matrix, min, max),
-            .CUDA => |ptr| CPUBackend.randomize(ptr, matrix, min, max), // Use CPU as fallback
+            .CUDA => |ptr| CUDABackend.randomize(ptr, matrix, min, max),
         }
     }
 
@@ -211,7 +216,7 @@ pub const BackendInstance = union(BackendType) {
         const result = try switch (self) {
             .CPU => |ptr| CPUBackend.applyActivation(ptr, matrix, activation_fn, allocator),
             .Metal => |ptr| MetalBackend.applyActivation(ptr, matrix, activation_fn, allocator),
-            .CUDA => |ptr| CPUBackend.applyActivation(ptr, matrix, activation_fn, allocator), // Use CPU as fallback
+            .CUDA => |ptr| CUDABackend.applyActivation(ptr, matrix, activation_fn, allocator),
         };
         return self.attachBackend(result);
     }
@@ -220,7 +225,7 @@ pub const BackendInstance = union(BackendType) {
         const result = try switch (self) {
             .CPU => |ptr| CPUBackend.applySoftmax(ptr, matrix, allocator),
             .Metal => |ptr| MetalBackend.applySoftmax(ptr, matrix, allocator),
-            .CUDA => |ptr| CPUBackend.applySoftmax(ptr, matrix, allocator), // Use CPU as fallback
+            .CUDA => |ptr| CUDABackend.applySoftmax(ptr, matrix, allocator),
         };
         return self.attachBackend(result);
     }
@@ -229,7 +234,7 @@ pub const BackendInstance = union(BackendType) {
         const result = try switch (self) {
             .CPU => |ptr| CPUBackend.applyGLU(ptr, linear_part, gating_part, allocator),
             .Metal => |ptr| MetalBackend.applyGLU(ptr, linear_part, gating_part, allocator),
-            .CUDA => |ptr| CPUBackend.applyGLU(ptr, linear_part, gating_part, allocator), // Use CPU as fallback
+            .CUDA => |ptr| CUDABackend.applyGLU(ptr, linear_part, gating_part, allocator),
         };
         return self.attachBackend(result);
     }
@@ -238,7 +243,7 @@ pub const BackendInstance = union(BackendType) {
         const result = try switch (self) {
             .CPU => |ptr| CPUBackend.applySwiGLU(ptr, linear_part, gating_part, allocator),
             .Metal => |ptr| MetalBackend.applySwiGLU(ptr, linear_part, gating_part, allocator),
-            .CUDA => |ptr| CPUBackend.applySwiGLU(ptr, linear_part, gating_part, allocator), // Use CPU as fallback
+            .CUDA => |ptr| CUDABackend.applySwiGLU(ptr, linear_part, gating_part, allocator),
         };
         return self.attachBackend(result);
     }
@@ -255,7 +260,7 @@ pub const BackendInstance = union(BackendType) {
         switch (self) {
             .CPU => |ptr| @as(*cpu_backend_mod.CPUBackend, @ptrCast(@alignCast(ptr))).deinit(),
             .Metal => |ptr| @as(*metal_backend_mod.MetalBackend, @ptrCast(@alignCast(ptr))).deinit(),
-            .CUDA => |ptr| @as(*cpu_backend_mod.CPUBackend, @ptrCast(@alignCast(ptr))).deinit(), // Use CPU as fallback
+            .CUDA => |ptr| @as(*cuda_backend_mod.CUDABackend, @ptrCast(@alignCast(ptr))).deinit(),
         }
     }
 };
@@ -263,5 +268,6 @@ pub const BackendInstance = union(BackendType) {
 // Export backend creation functions that return *anyopaque or the union
 pub const createCPUBackend = cpu_backend_mod.createCPUBackend;
 pub const createMetalBackend = metal_backend_mod.createMetalBackend;
+pub const createCUDABackend = cuda_backend_mod.createCUDABackend;
 // Keep the generic createBackend that returns the union
 pub const createBackend = backend_mod.createBackend;

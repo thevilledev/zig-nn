@@ -57,14 +57,16 @@ pub fn main(init: std.process.Init) !void {
 
     const metal = createMetalBackend(allocator);
     defer if (metal) |backend| backend.deinit();
+    const cuda = createCUDABackend(allocator);
+    defer if (cuda) |backend| backend.deinit();
 
-    printHeader(options, metal != null);
+    printHeader(options, metal != null, cuda != null);
 
     if (shouldRun(options, "matmul")) {
-        try benchmarkMatmul(allocator, cpu, metal, options);
+        try benchmarkMatmul(allocator, cpu, metal, cuda, options);
     }
     if (shouldRun(options, "activation")) {
-        try benchmarkActivations(allocator, cpu, metal, options);
+        try benchmarkActivations(allocator, cpu, metal, cuda, options);
     }
     if (shouldRun(options, "layer_norm")) {
         try benchmarkLayerNorm(allocator, options);
@@ -128,9 +130,14 @@ fn createMetalBackend(allocator: Allocator) ?BackendInstance {
     return BackendInstance{ .Metal = ptr };
 }
 
-fn printHeader(options: Options, metal_available: bool) void {
+fn createCUDABackend(allocator: Allocator) ?BackendInstance {
+    const ptr = nn.createCUDABackend(allocator) catch return null;
+    return BackendInstance{ .CUDA = ptr };
+}
+
+fn printHeader(options: Options, metal_available: bool, cuda_available: bool) void {
     std.debug.print("# zig-nn benchmark suite\n", .{});
-    std.debug.print("# mode={s} quick={} metal_available={}\n", .{ modeName(), options.quick, metal_available });
+    std.debug.print("# mode={s} quick={} metal_available={} cuda_available={}\n", .{ modeName(), options.quick, metal_available, cuda_available });
     std.debug.print("# repeatability: fixed shapes, fixed seeds, deterministic data, warmups excluded\n", .{});
     std.debug.print(
         "suite,case,backend,mode,warmups,iterations,avg_ns,min_ns,max_ns,checksum,sample_error,status\n",
@@ -151,6 +158,7 @@ fn benchmarkMatmul(
     allocator: Allocator,
     cpu: BackendInstance,
     metal: ?BackendInstance,
+    cuda: ?BackendInstance,
     options: Options,
 ) !void {
     const cases = [_]struct {
@@ -197,6 +205,21 @@ fn benchmarkMatmul(
             printResult("matmul", case_name, "metal", metal_timing, sample_error, "ok");
         } else {
             printSkipped("matmul", case_name, "metal", warmups, iterations, "skipped_metal_unavailable");
+        }
+
+        if (cuda) |cuda_backend| {
+            var cuda_a = try BackendMatrix.init(cuda_backend, allocator, case.m, case.k);
+            defer cuda_a.deinit();
+            var cuda_b = try BackendMatrix.init(cuda_backend, allocator, case.k, case.n);
+            defer cuda_b.deinit();
+            fillBackendMatrix(cuda_a, 11);
+            fillBackendMatrix(cuda_b, 29);
+
+            const cuda_timing = try timeMatmul(allocator, cuda_a, cuda_b, warmups, iterations);
+            const sample_error = try compareMatmul(allocator, cpu_a, cpu_b, cuda_a, cuda_b);
+            printResult("matmul", case_name, "cuda", cuda_timing, sample_error, "ok");
+        } else {
+            printSkipped("matmul", case_name, "cuda", warmups, iterations, "skipped_cuda_unavailable");
         }
     }
 }
@@ -259,6 +282,7 @@ fn benchmarkActivations(
     allocator: Allocator,
     cpu: BackendInstance,
     metal: ?BackendInstance,
+    cuda: ?BackendInstance,
     options: Options,
 ) !void {
     const cases = [_]struct {
@@ -306,6 +330,21 @@ fn benchmarkActivations(
             printResult("activation", case.name, "metal", metal_timing, sample_error, "ok");
         } else {
             printSkipped("activation", case.name, "metal", warmups, iterations, "skipped_metal_unavailable");
+        }
+
+        if (cuda) |cuda_backend| {
+            var cuda_input = try BackendMatrix.init(cuda_backend, allocator, case.rows, case.cols);
+            defer cuda_input.deinit();
+            var cuda_gate = try BackendMatrix.init(cuda_backend, allocator, case.rows, case.cols);
+            defer cuda_gate.deinit();
+            fillBackendMatrix(cuda_input, 43);
+            fillBackendMatrix(cuda_gate, 71);
+
+            const cuda_timing = try timeActivation(allocator, case.op, cuda_input, cuda_gate, warmups, iterations);
+            const sample_error = try compareActivation(allocator, case.op, cpu_input, cpu_gate, cuda_input, cuda_gate);
+            printResult("activation", case.name, "cuda", cuda_timing, sample_error, "ok");
+        } else {
+            printSkipped("activation", case.name, "cuda", warmups, iterations, "skipped_cuda_unavailable");
         }
     }
 }
@@ -415,6 +454,7 @@ fn benchmarkLayerNorm(allocator: Allocator, options: Options) !void {
         );
         printResult("layer_norm", case.name, "cpu", timing, 0.0, "ok");
         printSkipped("layer_norm", case.name, "metal", timing.warmups, timing.iterations, "skipped_cpu_only_path");
+        printSkipped("layer_norm", case.name, "cuda", timing.warmups, timing.iterations, "skipped_cpu_only_path");
     }
 }
 
@@ -495,6 +535,7 @@ fn benchmarkTraining(allocator: Allocator, options: Options) !void {
         );
         printResult("training", case.name, "cpu", timing, 0.0, "ok");
         printSkipped("training", case.name, "metal", timing.warmups, timing.iterations, "skipped_cpu_only_path");
+        printSkipped("training", case.name, "cuda", timing.warmups, timing.iterations, "skipped_cpu_only_path");
     }
 }
 
@@ -617,6 +658,7 @@ fn benchmarkTinyGpt(allocator: Allocator, options: Options) !void {
         );
         printResult("tiny_gpt", case.name, "cpu", timing, 0.0, "ok");
         printSkipped("tiny_gpt", case.name, "metal", timing.warmups, timing.iterations, "skipped_cpu_only_path");
+        printSkipped("tiny_gpt", case.name, "cuda", timing.warmups, timing.iterations, "skipped_cpu_only_path");
     }
 }
 
@@ -694,6 +736,7 @@ fn benchmarkQuantization(allocator: Allocator, options: Options) !void {
         );
         printResult("quantization", case.name, "cpu", timing, 0.0, "ok");
         printSkipped("quantization", case.name, "metal", timing.warmups, timing.iterations, "skipped_cpu_only_path");
+        printSkipped("quantization", case.name, "cuda", timing.warmups, timing.iterations, "skipped_cpu_only_path");
     }
 }
 

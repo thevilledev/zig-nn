@@ -1,6 +1,7 @@
 const std = @import("std");
 const nn = @import("nn");
 
+const BackendType = nn.BackendType;
 const BackendInstance = nn.BackendInstance;
 const BackendMatrix = nn.BackendMatrix;
 
@@ -32,13 +33,15 @@ pub fn main() !void {
     var cpu = try nn.createBackend(allocator, .CPU);
     defer cpu.deinit();
 
-    var metal = try nn.createBackend(allocator, .Metal);
-    defer metal.deinit();
+    const requested_backend: BackendType = if (nn.enable_cuda) .CUDA else .Metal;
+    const gpu_name = if (requested_backend == .CUDA) "cuda" else "metal";
+    var gpu = try nn.createBackend(allocator, requested_backend);
+    defer gpu.deinit();
 
-    if (metal.getBackendType() != .Metal) {
+    if (gpu.getBackendType() != requested_backend) {
         std.debug.print(
-            "Metal backend is unavailable. Run on macOS with -Dgpu=metal.\n",
-            .{},
+            "{s} backend is unavailable. Run with matching -Dgpu={s} support.\n",
+            .{ gpu_name, gpu_name },
         );
         return;
     }
@@ -47,20 +50,21 @@ pub fn main() !void {
     std.debug.print("Build tip: use -Doptimize=ReleaseFast for timing.\n\n", .{});
     std.debug.print(
         "{s: >6} {s: >6} {s: >12} {s: >12} {s: >10} {s: >12}\n",
-        .{ "size", "runs", "cpu ms", "metal ms", "speedup", "sample err" },
+        .{ "size", "runs", "cpu ms", "gpu ms", "speedup", "sample err" },
     );
 
     for (cases) |case| {
-        const result = try benchmarkCase(allocator, cpu, metal, case);
+        const result = try benchmarkCase(allocator, cpu, gpu, case);
         std.debug.print(
-            "{d: >6} {d: >6} {d: >12.3} {d: >12.3} {d: >9.2}x {d: >12.6}\n",
+            "{d: >6} {d: >6} {d: >12.3} {d: >12.3} {d: >9.2}x {d: >12.6} ({s})\n",
             .{
                 case.size,
                 case.trials,
                 result.cpu.average_ns / 1_000_000.0,
-                result.metal.average_ns / 1_000_000.0,
-                result.cpu.average_ns / result.metal.average_ns,
-                result.metal.sample_error,
+                result.gpu.average_ns / 1_000_000.0,
+                result.cpu.average_ns / result.gpu.average_ns,
+                result.gpu.sample_error,
+                gpu_name,
             },
         );
     }
@@ -68,42 +72,42 @@ pub fn main() !void {
 
 const CaseComparison = struct {
     cpu: BenchmarkResult,
-    metal: BenchmarkResult,
+    gpu: BenchmarkResult,
 };
 
 fn benchmarkCase(
     allocator: std.mem.Allocator,
     cpu: BackendInstance,
-    metal: BackendInstance,
+    gpu: BackendInstance,
     case: BenchmarkCase,
 ) !CaseComparison {
     var cpu_a = try BackendMatrix.init(cpu, allocator, case.size, case.size);
     defer cpu_a.deinit();
     var cpu_b = try BackendMatrix.init(cpu, allocator, case.size, case.size);
     defer cpu_b.deinit();
-    var metal_a = try BackendMatrix.init(metal, allocator, case.size, case.size);
-    defer metal_a.deinit();
-    var metal_b = try BackendMatrix.init(metal, allocator, case.size, case.size);
-    defer metal_b.deinit();
+    var gpu_a = try BackendMatrix.init(gpu, allocator, case.size, case.size);
+    defer gpu_a.deinit();
+    var gpu_b = try BackendMatrix.init(gpu, allocator, case.size, case.size);
+    defer gpu_b.deinit();
 
-    fillInputs(cpu_a, cpu_b, metal_a, metal_b);
+    fillInputs(cpu_a, cpu_b, gpu_a, gpu_b);
 
     const cpu_result = try timeDotProduct(allocator, cpu_a, cpu_b, case.trials);
-    const metal_result = try timeDotProduct(allocator, metal_a, metal_b, case.trials);
+    const gpu_result = try timeDotProduct(allocator, gpu_a, gpu_b, case.trials);
 
     const cpu_reference = try cpu_a.dotProduct(cpu_b, allocator);
     defer cpu_reference.deinit();
-    const metal_reference = try metal_a.dotProduct(metal_b, allocator);
-    defer metal_reference.deinit();
+    const gpu_reference = try gpu_a.dotProduct(gpu_b, allocator);
+    defer gpu_reference.deinit();
 
     return .{
         .cpu = .{
             .average_ns = cpu_result,
             .sample_error = 0.0,
         },
-        .metal = .{
-            .average_ns = metal_result,
-            .sample_error = sampleMaxAbsDiff(cpu_reference, metal_reference),
+        .gpu = .{
+            .average_ns = gpu_result,
+            .sample_error = sampleMaxAbsDiff(cpu_reference, gpu_reference),
         },
     };
 }
@@ -130,8 +134,8 @@ fn timeDotProduct(
 fn fillInputs(
     cpu_a: *BackendMatrix,
     cpu_b: *BackendMatrix,
-    metal_a: *BackendMatrix,
-    metal_b: *BackendMatrix,
+    gpu_a: *BackendMatrix,
+    gpu_b: *BackendMatrix,
 ) void {
     for (0..cpu_a.rows) |row| {
         for (0..cpu_a.cols) |col| {
@@ -139,8 +143,8 @@ fn fillInputs(
             const b_value = deterministicValue(row, col, 13, 29);
             cpu_a.set(row, col, a_value);
             cpu_b.set(row, col, b_value);
-            metal_a.set(row, col, a_value);
-            metal_b.set(row, col, b_value);
+            gpu_a.set(row, col, a_value);
+            gpu_b.set(row, col, b_value);
         }
     }
 }
@@ -150,7 +154,7 @@ fn deterministicValue(row: usize, col: usize, row_mul: usize, col_mul: usize) f6
     return @as(f64, @floatFromInt(mixed)) / 997.0 - 0.5;
 }
 
-fn sampleMaxAbsDiff(cpu: *const BackendMatrix, metal: *const BackendMatrix) f64 {
+fn sampleMaxAbsDiff(cpu: *const BackendMatrix, gpu: *const BackendMatrix) f64 {
     var max_abs: f64 = 0.0;
     const last_row = cpu.rows - 1;
     const last_col = cpu.cols - 1;
@@ -167,7 +171,7 @@ fn sampleMaxAbsDiff(cpu: *const BackendMatrix, metal: *const BackendMatrix) f64 
     for (samples) |sample| {
         const row = sample[0];
         const col = sample[1];
-        const diff = @abs(cpu.get(row, col) - metal.get(row, col));
+        const diff = @abs(cpu.get(row, col) - gpu.get(row, col));
         max_abs = @max(max_abs, diff);
     }
 

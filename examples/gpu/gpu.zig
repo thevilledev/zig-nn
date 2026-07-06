@@ -2,7 +2,6 @@ const std = @import("std");
 const nn = @import("nn");
 const Matrix = nn.BackendMatrix;
 const BackendType = nn.BackendType;
-const BackendInstance = nn.BackendInstance;
 
 fn nowNs() i96 {
     return std.Io.Clock.awake.now(std.Options.debug_io).toNanoseconds();
@@ -14,7 +13,8 @@ pub fn main() !void {
     defer _ = gpa.deinit();
 
     std.debug.print("Creating requested GPU backend...\n", .{});
-    var backend_instance = try nn.createBackend(allocator, .Metal);
+    const requested_backend: BackendType = if (nn.enable_cuda) .CUDA else .Metal;
+    var backend_instance = try nn.createBackend(allocator, requested_backend);
     defer backend_instance.deinit();
 
     // Print the backend type

@@ -23,13 +23,11 @@ The repo has two matrix paths:
 - `Matrix` is the learning-oriented path used by the default `Network`,
   `Layer`, examples, and training code.
 - `BackendMatrix` is the backend-aware path that can run operations through CPU
-  or Metal implementations.
+  Metal, or CUDA implementations.
 
-Metal support currently applies to backend matrix operations, GPU examples, and
-backend-aware `Network.forwardBackend` / `Network.predictBackend` inference.
-The higher-level training path is still CPU-only. CUDA is present as an
-enum/build option, but the library backend currently falls back to CPU for
-CUDA-tagged work.
+Metal and CUDA support currently applies to backend matrix operations, GPU
+examples, and backend-aware `Network.forwardBackend` / `Network.predictBackend`
+inference. The higher-level training path is still CPU-only.
 
 ## Start Here
 
@@ -72,12 +70,12 @@ For setup details and direct `zig build` commands, see
   tests, and common development tasks
 - [Examples](docs/examples.md) - runnable demos and what each one is meant to
   show
-- [Benchmarks](docs/benchmarks.md) - repeatable CPU, Metal, and release-mode
+- [Benchmarks](docs/benchmarks.md) - repeatable CPU, GPU, and release-mode
   benchmark commands
 - [Experiments](docs/experiments.md) - research-style probes, metrics, and
   current experiment notes
-- [GPU and Backend Notes](docs/gpu.md) - current backend boundaries, Metal
-  verification, and CUDA status
+- [GPU and Backend Notes](docs/gpu.md) - current backend boundaries, Metal and
+  CUDA verification
 - [Neural Network Architecture](docs/architecture.md) - design principles and
   component overview
 - [Advanced Activation Functions](docs/activation_functions.md) - Swish, GLU,

@@ -12,9 +12,9 @@ Run the human-readable `nnctl` report:
 ./bin/nnctl benchmark
 ```
 
-That command runs the ReleaseFast benchmark with Metal enabled by default,
-groups results by suite, and shows CPU vs Metal timing deltas where both
-backends are available. Use `--csv` to print the raw benchmark CSV.
+That command runs the ReleaseFast benchmark with GPU auto-detection enabled,
+groups results by suite, and shows CPU vs Metal and CPU vs CUDA timing deltas
+where those backends are available. Use `--csv` to print the raw benchmark CSV.
 
 Run the default release-mode suite. The `benchmark` step pins the benchmark
 binary and its `nn` module import to `ReleaseFast` so timings are not
@@ -28,6 +28,12 @@ Run the same suite with Metal backend cases enabled on macOS:
 
 ```bash
 zig build benchmark -Dgpu=metal
+```
+
+Run the same suite with CUDA backend cases enabled on Linux:
+
+```bash
+zig build benchmark -Dgpu=cuda
 ```
 
 Run Debug-mode timings for comparison:
@@ -54,15 +60,16 @@ zig build benchmark -- --filter quantization
 
 ## Coverage
 
-- `matmul`: backend-aware `BackendMatrix.dotProduct` on CPU and Metal.
+- `matmul`: backend-aware `BackendMatrix.dotProduct` on CPU, Metal, and CUDA.
 - `activation`: backend-aware ReLU, tanh, Swish, softmax, GLU, and SwiGLU on
-  CPU and Metal.
+  CPU, Metal, and CUDA.
 - `training`: CPU `Network.trainBatch` loops. The current training path uses
-  the learning-oriented `Matrix`, so Metal rows are marked `skipped_cpu_only_path`.
+  the learning-oriented `Matrix`, so GPU rows are marked
+  `skipped_cpu_only_path`.
 - `tiny_gpt`: CPU TinyGPT forward passes through the example model. TinyGPT also
   uses the learning-oriented `Matrix` path today.
 - `quantization`: CPU uniform scalar quantization and TurboQuant encode,
   decode, and error measurement.
 
-Metal rows include `sample_error`, sampled against the CPU result. The Metal
-kernels currently use f32 buffers, so small non-zero errors are expected.
+GPU rows include `sample_error`, sampled against the CPU result. The Metal and
+CUDA kernels currently use f32 buffers, so small non-zero errors are expected.

@@ -21,15 +21,21 @@ pub fn build(b: *std.Build) void {
         "gpu",
         "GPU backend to use: auto, metal, cuda, or none (default: none)",
     ) orelse "none";
+    const cuda_path = b.option(
+        []const u8,
+        "cuda-path",
+        "CUDA toolkit root used for headers and NVRTC libraries (default: /usr/local/cuda)",
+    ) orelse "/usr/local/cuda";
 
     // Determine enabled GPU backends based on target and option
     const enable_gpu = !std.mem.eql(u8, gpu_option, "none");
     const is_macos = target.result.os.tag == .macos;
+    const is_linux = target.result.os.tag == .linux;
 
     const enable_metal = is_macos and (std.mem.eql(u8, gpu_option, "metal") or
         std.mem.eql(u8, gpu_option, "auto"));
 
-    const enable_cuda = !is_macos and (std.mem.eql(u8, gpu_option, "cuda") or
+    const enable_cuda = is_linux and (std.mem.eql(u8, gpu_option, "cuda") or
         std.mem.eql(u8, gpu_option, "auto"));
 
     // Build options
@@ -55,15 +61,7 @@ pub fn build(b: *std.Build) void {
     lib_mod.addOptions("build_options", build_options);
 
     addMetalSupport(b, lib_mod, enable_metal, true);
-
-    // Handle CUDA if enabled
-    // REMOVED CUDA linking from lib_mod (if any existed)
-    // if (enable_cuda) {
-    //     // TODO: Add CUDA support
-    //     // Check for CUDA toolkit installation
-    //     // Link CUDA libraries
-    //     // Add compilation step for CUDA kernels
-    // }
+    addCudaSupport(b, lib_mod, enable_cuda, true, cuda_path);
 
     // Now, we will create a static library based on the module we created above.
     // This creates a `std.Build.Step.Compile`, which is the build step responsible
@@ -125,13 +123,7 @@ pub fn build(b: *std.Build) void {
                 addMetalSupport(b, exe_mod, enable_metal, false);
             }
             if (enable_cuda) {
-                // Link necessary CUDA libraries
-                // Common libraries include 'cuda' and 'cudart'
-                // Adjust these based on actual CUDA toolkit requirements
-                exe_mod.linkSystemLibrary("cuda", .{});
-                exe_mod.linkSystemLibrary("cudart", .{});
-                // Add C library if needed (often required with CUDA)
-                exe_mod.linkSystemLibrary("c", .{});
+                addCudaSupport(b, exe_mod, enable_cuda, false, cuda_path);
             }
         }
 
@@ -161,20 +153,24 @@ pub fn build(b: *std.Build) void {
         target,
         build_options,
         enable_metal,
+        enable_cuda,
+        cuda_path,
         .ReleaseFast,
         "zig_nn_benchmark",
         "benchmark",
-        "Run repeatable ReleaseFast CPU/Metal benchmark suite",
+        "Run repeatable ReleaseFast CPU/GPU benchmark suite",
     );
     addBenchmarkStep(
         b,
         target,
         build_options,
         enable_metal,
+        enable_cuda,
+        cuda_path,
         .Debug,
         "zig_nn_benchmark_debug",
         "benchmark-debug",
-        "Run repeatable Debug CPU/Metal benchmark suite",
+        "Run repeatable Debug CPU/GPU benchmark suite",
     );
 
     // Main test step that will run all tests
@@ -182,19 +178,20 @@ pub fn build(b: *std.Build) void {
 
     // Create individual test steps for each source file
     // Run them in a logical order: matrix -> activation -> layer -> network
-    var prev_step = addTestStep(b, test_step, "matrix", "src/matrix.zig", null, target, optimize, build_options, enable_metal, null);
-    prev_step = addTestStep(b, test_step, "activation", "src/activation.zig", prev_step, target, optimize, build_options, enable_metal, null);
-    prev_step = addTestStep(b, test_step, "layer", "src/layer.zig", prev_step, target, optimize, build_options, enable_metal, null);
-    prev_step = addTestStep(b, test_step, "layer_norm", "src/layer_norm.zig", prev_step, target, optimize, build_options, enable_metal, null);
-    prev_step = addTestStep(b, test_step, "network", "src/network.zig", prev_step, target, optimize, build_options, enable_metal, null);
-    prev_step = addTestStep(b, test_step, "inference_service", "src/inference_service.zig", prev_step, target, optimize, build_options, enable_metal, null);
-    prev_step = addTestStep(b, test_step, "visualiser", "src/visualiser.zig", prev_step, target, optimize, build_options, enable_metal, null);
-    prev_step = addTestStep(b, test_step, "quantization", "src/quantization.zig", prev_step, target, optimize, build_options, enable_metal, null);
+    var prev_step = addTestStep(b, test_step, "matrix", "src/matrix.zig", null, target, optimize, build_options, enable_metal, enable_cuda, cuda_path, null);
+    prev_step = addTestStep(b, test_step, "activation", "src/activation.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, cuda_path, null);
+    prev_step = addTestStep(b, test_step, "layer", "src/layer.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, cuda_path, null);
+    prev_step = addTestStep(b, test_step, "layer_norm", "src/layer_norm.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, cuda_path, null);
+    prev_step = addTestStep(b, test_step, "network", "src/network.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, cuda_path, null);
+    prev_step = addTestStep(b, test_step, "inference_service", "src/inference_service.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, cuda_path, null);
+    prev_step = addTestStep(b, test_step, "visualiser", "src/visualiser.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, cuda_path, null);
+    prev_step = addTestStep(b, test_step, "quantization", "src/quantization.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, cuda_path, null);
 
     // Add backend-related tests
-    prev_step = addTestStep(b, test_step, "backend", "src/backend.zig", prev_step, target, optimize, build_options, enable_metal, null);
-    prev_step = addTestStep(b, test_step, "cpu_backend", "src/cpu_backend.zig", prev_step, target, optimize, build_options, enable_metal, null);
-    _ = addTestStep(b, test_step, "metal_backend", "src/metal_backend.zig", prev_step, target, optimize, build_options, enable_metal, null);
+    prev_step = addTestStep(b, test_step, "backend", "src/backend.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, cuda_path, null);
+    prev_step = addTestStep(b, test_step, "cpu_backend", "src/cpu_backend.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, cuda_path, null);
+    prev_step = addTestStep(b, test_step, "metal_backend", "src/metal_backend.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, cuda_path, null);
+    _ = addTestStep(b, test_step, "cuda_backend", "src/cuda_backend.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, cuda_path, null);
 
     // Create a step for running acceptance tests from examples
     const acceptance_test_step = b.step("test-acceptance", "Run all example acceptance tests");
@@ -220,7 +217,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "tiny_gpt", .path = "examples/tiny_gpt/tiny_gpt.zig" },
         .{ .name = "tiny_gpt_openai", .path = "examples/tiny_gpt/openai_server.zig" },
     }) |example| {
-        example_prev_step = addTestStep(b, acceptance_test_step, example.name, example.path, example_prev_step, target, optimize, build_options, enable_metal, lib_mod);
+        example_prev_step = addTestStep(b, acceptance_test_step, example.name, example.path, example_prev_step, target, optimize, build_options, enable_metal, enable_cuda, cuda_path, lib_mod);
     }
 }
 
@@ -229,6 +226,8 @@ fn addBenchmarkStep(
     target: std.Build.ResolvedTarget,
     build_options: *std.Build.Step.Options,
     enable_metal: bool,
+    enable_cuda: bool,
+    cuda_path: []const u8,
     benchmark_optimize: std.builtin.OptimizeMode,
     exe_name: []const u8,
     step_name: []const u8,
@@ -241,6 +240,7 @@ fn addBenchmarkStep(
     });
     bench_nn_mod.addOptions("build_options", build_options);
     addMetalSupport(b, bench_nn_mod, enable_metal, true);
+    addCudaSupport(b, bench_nn_mod, enable_cuda, true, cuda_path);
 
     const bench_mod = b.createModule(.{
         .root_source_file = b.path("benchmarks/benchmark.zig"),
@@ -259,6 +259,9 @@ fn addBenchmarkStep(
 
     if (enable_metal) {
         addMetalSupport(b, bench_mod, enable_metal, false);
+    }
+    if (enable_cuda) {
+        addCudaSupport(b, bench_mod, enable_cuda, false, cuda_path);
     }
 
     const exe = b.addExecutable(.{
@@ -295,6 +298,30 @@ fn addMetalSupport(b: *std.Build, mod: *std.Build.Module, enable_metal: bool, in
     mod.addIncludePath(b.path("src/metal"));
 }
 
+fn addCudaSupport(b: *std.Build, mod: *std.Build.Module, enable_cuda: bool, include_wrapper: bool, cuda_path: []const u8) void {
+    if (!enable_cuda) return;
+
+    const include_path = b.fmt("{s}/include", .{cuda_path});
+    const lib_path = b.fmt("{s}/lib64", .{cuda_path});
+    const stub_lib_path = b.fmt("{s}/lib64/stubs", .{cuda_path});
+
+    mod.addIncludePath(b.path("src/cuda"));
+    mod.addSystemIncludePath(.{ .cwd_relative = include_path });
+    mod.addLibraryPath(.{ .cwd_relative = lib_path });
+    mod.addLibraryPath(.{ .cwd_relative = stub_lib_path });
+    mod.addRPath(.{ .cwd_relative = lib_path });
+    mod.linkSystemLibrary("cuda", .{});
+    mod.linkSystemLibrary("nvrtc", .{});
+    mod.linkSystemLibrary("c", .{});
+
+    if (include_wrapper) {
+        mod.addCSourceFile(.{
+            .file = b.path("src/cuda/cuda_wrapper.c"),
+            .flags = &.{ "-Wall", "-Wextra" },
+        });
+    }
+}
+
 // Helper function to create a test step for a specific file
 fn addTestStep(
     b: *std.Build,
@@ -306,6 +333,8 @@ fn addTestStep(
     optimize: std.builtin.OptimizeMode,
     build_options: *std.Build.Step.Options,
     enable_metal: bool,
+    enable_cuda: bool,
+    cuda_path: []const u8,
     nn_mod: ?*std.Build.Module,
 ) *std.Build.Step {
     const test_mod = b.createModule(.{
@@ -318,6 +347,7 @@ fn addTestStep(
         test_mod.addImport("nn", module);
     }
     addMetalSupport(b, test_mod, enable_metal, nn_mod == null);
+    addCudaSupport(b, test_mod, enable_cuda, nn_mod == null, cuda_path);
 
     const test_artifact = b.addTest(.{
         .root_module = test_mod,

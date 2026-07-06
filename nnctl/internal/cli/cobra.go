@@ -168,9 +168,10 @@ func (a *App) newBenchmarkCommand(withRepo repoRunner) *cobra.Command {
 	opts := defaultBenchmarkOptions()
 	cmd := &cobra.Command{
 		Use:   "benchmark",
-		Short: "Run benchmarks with a readable CPU/Metal comparison",
+		Short: "Run benchmarks with readable CPU/GPU comparisons",
 		Long: `Runs the Zig benchmark suite and renders the CSV as grouped tables.
-The default uses ReleaseFast and Metal so CPU and Metal rows can be compared.
+The default uses ReleaseFast and GPU auto-detection so CPU, Metal, and CUDA rows
+can be compared where those backends are available.
 Use --csv to print the raw benchmark CSV instead.`,
 		Example: `  nnctl benchmark
   nnctl benchmark --quick

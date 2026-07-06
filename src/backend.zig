@@ -3,10 +3,12 @@ const Allocator = std.mem.Allocator;
 const testing = std.testing;
 const cpu_backend_mod = @import("cpu_backend.zig");
 const metal_backend_mod = @import("metal_backend.zig"); // Ensure this import exists
+const cuda_backend_mod = @import("cuda_backend.zig");
 const matrix_mod = @import("matrix.zig");
 const root = @import("root.zig");
 const BackendInstance = root.BackendInstance;
 const CpuMatrix = matrix_mod.Matrix;
+const build_options = @import("build_options");
 
 /// BackendType enum represents the available computation backends
 pub const BackendType = enum {
@@ -301,15 +303,16 @@ pub fn createBackend(allocator: Allocator, backend_type: BackendType) !BackendIn
             std.debug.print("Metal backend requested but not available on this OS, falling back to CPU\n", .{});
         }
     } else if (backend_type == .CUDA) {
-        if (comptime @hasDecl(@import("root"), "enable_cuda") and @import("root").enable_cuda) {
-            std.debug.print("CUDA backend requested but not implemented, falling back to CPU\n", .{});
+        if (build_options.enable_cuda) {
+            std.debug.print("CUDA backend requested. Attempting to create...\n", .{});
+            const cuda_ptr = cuda_backend_mod.createCUDABackend(allocator) catch |err| {
+                std.debug.print("Failed to create CUDA backend: {}, falling back to CPU\n", .{err});
+                return BackendInstance{ .CPU = try cpu_backend_mod.createCPUBackend(allocator) };
+            };
+            return BackendInstance{ .CUDA = cuda_ptr };
         } else {
             std.debug.print("CUDA backend requested but not enabled in build, falling back to CPU\n", .{});
         }
-
-        // Create a CPU backend but use the CUDA tag
-        const cpu_ptr = try cpu_backend_mod.createCPUBackend(allocator);
-        return BackendInstance{ .CUDA = cpu_ptr };
     }
 
     // Default to CPU backend
