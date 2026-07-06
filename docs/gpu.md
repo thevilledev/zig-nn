@@ -80,6 +80,10 @@ backend creation falls back to CPU.
 
 ## Working On Backends
 
+Use `nnctl doctor` to print local tool versions, platform-specific backend
+availability, and the exact Metal/CUDA verification commands for the current
+machine.
+
 Use `BackendMatrix` when testing backend behavior directly. Use
 `Network.forwardBackend`, `Network.predictBackend`, `Network.trainBatchBackend`,
 or `Network.trainBackend` when testing backend-aware network execution. Use

@@ -451,7 +451,7 @@ func (a *App) newDoctorCommand(withRepo repoRunner) *cobra.Command {
 	return &cobra.Command{
 		Use:     "doctor",
 		Aliases: []string{"env"},
-		Short:   "Check local tool versions",
+		Short:   "Check local tools and backend support",
 		Args:    cobra.NoArgs,
 		RunE: withRepo(func(ctx context.Context, cmd *cobra.Command, args []string) error {
 			return a.runDoctor(ctx)

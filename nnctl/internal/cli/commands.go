@@ -132,9 +132,42 @@ func (a *App) runClean(includeTool bool) error {
 func (a *App) runDoctor(ctx context.Context) error {
 	fmt.Fprintf(a.stdout(), "repo: %s\n", a.repoRoot)
 	fmt.Fprintf(a.stdout(), "nnctl: %s\n", runtime.Version())
+	fmt.Fprintf(a.stdout(), "platform: %s/%s\n", runtime.GOOS, runtime.GOARCH)
 	a.printToolVersion(ctx, "go", "version")
 	a.printToolVersion(ctx, a.zig, "version")
+	a.printBackendDoctor()
 	return nil
+}
+
+func (a *App) printBackendDoctor() {
+	cudaPath := getenvDefault("CUDA_PATH", "/usr/local/cuda")
+	fmt.Fprintf(a.stdout(), "metal: %s\n", metalDoctorStatus(runtime.GOOS))
+	fmt.Fprintf(a.stdout(), "cuda: %s\n", cudaDoctorStatus(runtime.GOOS, cudaPath, pathExists))
+	fmt.Fprintf(a.stdout(), "verify metal: zig build -Dgpu=metal test-metal_backend --summary all\n")
+	fmt.Fprintf(a.stdout(), "verify cuda: zig build -Dgpu=cuda -Dcuda-path=%s test-cuda_backend --summary all\n", cudaPath)
+	fmt.Fprintf(a.stdout(), "benchmark gpu: nnctl benchmark --gpu auto --quick\n")
+}
+
+func metalDoctorStatus(goos string) string {
+	if goos == "darwin" {
+		return "available through -Dgpu=metal"
+	}
+	return "unavailable on this OS; Metal requires macOS"
+}
+
+func cudaDoctorStatus(goos, cudaPath string, exists func(string) bool) string {
+	if goos != "linux" {
+		return "build option unavailable on this OS; CUDA backend currently targets Linux"
+	}
+	if exists(cudaPath) {
+		return fmt.Sprintf("toolkit candidate found at %s", cudaPath)
+	}
+	return fmt.Sprintf("toolkit not found at %s; pass -Dcuda-path or set CUDA_PATH", cudaPath)
+}
+
+func pathExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 func (a *App) printToolVersion(ctx context.Context, name string, args ...string) {
