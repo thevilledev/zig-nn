@@ -24,6 +24,35 @@ fn addBackendBias(weighted_sum: *const BackendMatrix, bias: *const BackendMatrix
     return weighted_sum.add(broadcast_bias, allocator);
 }
 
+fn replaceCpuMatrixFromBackend(target: *Matrix, source: *const BackendMatrix, allocator: std.mem.Allocator) !void {
+    const replacement = try source.toMatrix(allocator);
+    target.deinit();
+    target.* = replacement;
+}
+
+fn softmaxWeightedGradientBackend(output_gradient: *const BackendMatrix, output: *const BackendMatrix, allocator: std.mem.Allocator) !*BackendMatrix {
+    if (output_gradient.rows != output.rows or output_gradient.cols != output.cols) {
+        return error.DimensionMismatch;
+    }
+
+    const result = try BackendMatrix.init(output_gradient.backend, allocator, output_gradient.rows, output_gradient.cols);
+    errdefer result.deinit();
+
+    for (0..output_gradient.rows) |row| {
+        var weighted_dot: f64 = 0.0;
+        for (0..output_gradient.cols) |col| {
+            weighted_dot += output_gradient.get(row, col) * output.get(row, col);
+        }
+        for (0..output_gradient.cols) |col| {
+            const y = output.get(row, col);
+            const g = output_gradient.get(row, col);
+            result.set(row, col, y * (g - weighted_dot));
+        }
+    }
+
+    return result;
+}
+
 /// Neural network layer implementation supporting both standard and gated architectures
 /// This module provides two types of layers:
 /// 1. Layer: Standard neural network layer with weights, biases, and activation function
@@ -50,6 +79,9 @@ pub const Layer = struct {
     last_input: ?Matrix, // Input x
     last_output: ?Matrix, // Output y = σ(W·x + b)
     last_weighted_sum: ?Matrix, // Pre-activation z = W·x + b
+    last_backend_input: ?*BackendMatrix,
+    last_backend_output: ?*BackendMatrix,
+    last_backend_weighted_sum: ?*BackendMatrix,
 
     /// Initializes a new fully connected layer
     /// Mathematical initialization:
@@ -117,7 +149,25 @@ pub const Layer = struct {
             .last_input = null,
             .last_output = null,
             .last_weighted_sum = null,
+            .last_backend_input = null,
+            .last_backend_output = null,
+            .last_backend_weighted_sum = null,
         };
+    }
+
+    fn clearBackendCaches(self: *Layer) void {
+        if (self.last_backend_input) |input| {
+            input.deinit();
+            self.last_backend_input = null;
+        }
+        if (self.last_backend_output) |output| {
+            output.deinit();
+            self.last_backend_output = null;
+        }
+        if (self.last_backend_weighted_sum) |weighted_sum| {
+            weighted_sum.deinit();
+            self.last_backend_weighted_sum = null;
+        }
     }
 
     /// Frees all allocated memory
@@ -135,6 +185,15 @@ pub const Layer = struct {
             output.deinit();
         }
         if (self.last_weighted_sum) |weighted_sum| {
+            weighted_sum.deinit();
+        }
+        if (self.last_backend_input) |input| {
+            input.deinit();
+        }
+        if (self.last_backend_output) |output| {
+            output.deinit();
+        }
+        if (self.last_backend_weighted_sum) |weighted_sum| {
             weighted_sum.deinit();
         }
     }
@@ -227,6 +286,38 @@ pub const Layer = struct {
         }
 
         return biased.applyActivation(self.activation_fn, self.allocator);
+    }
+
+    /// Performs backend-aware forward propagation and stores backend caches for training.
+    pub fn forwardBackendTrain(self: *Layer, input: *const BackendMatrix) !*BackendMatrix {
+        if (input.cols != self.getInputSize()) {
+            return error.InvalidInputDimensions;
+        }
+
+        self.clearBackendCaches();
+        errdefer self.clearBackendCaches();
+
+        const backend_instance = input.backend;
+        self.last_backend_input = try input.copy(self.allocator);
+
+        const weights = try BackendMatrix.fromMatrix(backend_instance, self.weights, self.allocator);
+        defer weights.deinit();
+        const bias = try BackendMatrix.fromMatrix(backend_instance, self.bias, self.allocator);
+        defer bias.deinit();
+
+        self.last_backend_weighted_sum = try input.dotProduct(weights, self.allocator);
+
+        const biased = try addBackendBias(self.last_backend_weighted_sum.?, bias, self.allocator);
+        defer biased.deinit();
+
+        const output = if (self.activation_fn == Activation.softmax)
+            try biased.applySoftmax(self.allocator)
+        else
+            try biased.applyActivation(self.activation_fn, self.allocator);
+        errdefer output.deinit();
+
+        self.last_backend_output = try output.copy(self.allocator);
+        return output;
     }
 
     /// Performs backpropagation through the layer
@@ -328,6 +419,61 @@ pub const Layer = struct {
         return input_gradient;
     }
 
+    /// Performs backend-aware backpropagation and writes updated parameters back to CPU storage.
+    pub fn backwardBackend(self: *Layer, output_gradient: *const BackendMatrix, learning_rate: f64) !*BackendMatrix {
+        if (self.last_backend_input == null or self.last_backend_output == null or self.last_backend_weighted_sum == null) {
+            return error.NoForwardPassPerformed;
+        }
+        defer self.clearBackendCaches();
+
+        const backend_instance = output_gradient.backend;
+
+        const weighted_sum_gradient = if (self.activation_fn == Activation.softmax) blk: {
+            break :blk try softmaxWeightedGradientBackend(output_gradient, self.last_backend_output.?, self.allocator);
+        } else blk: {
+            const activation_derivative = try self.last_backend_weighted_sum.?.applyActivation(self.activation_derivative_fn, self.allocator);
+            defer activation_derivative.deinit();
+            break :blk try output_gradient.elementWiseMultiply(activation_derivative, self.allocator);
+        };
+        defer weighted_sum_gradient.deinit();
+
+        const weights = try BackendMatrix.fromMatrix(backend_instance, self.weights, self.allocator);
+        defer weights.deinit();
+        const bias = try BackendMatrix.fromMatrix(backend_instance, self.bias, self.allocator);
+        defer bias.deinit();
+
+        const transposed_input = try self.last_backend_input.?.transpose(self.allocator);
+        defer transposed_input.deinit();
+
+        const weights_gradient = try transposed_input.dotProduct(weighted_sum_gradient, self.allocator);
+        defer weights_gradient.deinit();
+
+        const bias_gradient = try weighted_sum_gradient.sumRows(self.allocator);
+        defer bias_gradient.deinit();
+
+        const transposed_weights = try weights.transpose(self.allocator);
+        defer transposed_weights.deinit();
+
+        const input_gradient = try weighted_sum_gradient.dotProduct(transposed_weights, self.allocator);
+        errdefer input_gradient.deinit();
+
+        const scaled_weights_gradient = try weights_gradient.scale(learning_rate, self.allocator);
+        defer scaled_weights_gradient.deinit();
+
+        const new_weights = try weights.subtract(scaled_weights_gradient, self.allocator);
+        defer new_weights.deinit();
+        try replaceCpuMatrixFromBackend(&self.weights, new_weights, self.allocator);
+
+        const scaled_bias_gradient = try bias_gradient.scale(learning_rate, self.allocator);
+        defer scaled_bias_gradient.deinit();
+
+        const new_bias = try bias.subtract(scaled_bias_gradient, self.allocator);
+        defer new_bias.deinit();
+        try replaceCpuMatrixFromBackend(&self.bias, new_bias, self.allocator);
+
+        return input_gradient;
+    }
+
     /// Returns the number of input features the layer accepts
     pub fn getInputSize(self: Layer) usize {
         return self.weights.rows;
@@ -364,6 +510,10 @@ pub const GatedLayer = struct {
     last_linear_output: ?Matrix, // Linear part: W₁·x + b₁
     last_gate_output: ?Matrix, // Gate part: W₂·x + b₂
     last_output: ?Matrix, // Final output
+    last_backend_input: ?*BackendMatrix,
+    last_backend_linear_output: ?*BackendMatrix,
+    last_backend_gate_output: ?*BackendMatrix,
+    last_backend_output: ?*BackendMatrix,
 
     /// Initializes a new gated layer (GLU or SwiGLU)
     /// Mathematical initialization:
@@ -432,7 +582,30 @@ pub const GatedLayer = struct {
             .last_linear_output = null,
             .last_gate_output = null,
             .last_output = null,
+            .last_backend_input = null,
+            .last_backend_linear_output = null,
+            .last_backend_gate_output = null,
+            .last_backend_output = null,
         };
+    }
+
+    fn clearBackendCaches(self: *GatedLayer) void {
+        if (self.last_backend_input) |input| {
+            input.deinit();
+            self.last_backend_input = null;
+        }
+        if (self.last_backend_linear_output) |output| {
+            output.deinit();
+            self.last_backend_linear_output = null;
+        }
+        if (self.last_backend_gate_output) |output| {
+            output.deinit();
+            self.last_backend_gate_output = null;
+        }
+        if (self.last_backend_output) |output| {
+            output.deinit();
+            self.last_backend_output = null;
+        }
     }
 
     /// Frees all allocated memory
@@ -455,6 +628,18 @@ pub const GatedLayer = struct {
             output.deinit();
         }
         if (self.last_output) |output| {
+            output.deinit();
+        }
+        if (self.last_backend_input) |input| {
+            input.deinit();
+        }
+        if (self.last_backend_linear_output) |output| {
+            output.deinit();
+        }
+        if (self.last_backend_gate_output) |output| {
+            output.deinit();
+        }
+        if (self.last_backend_output) |output| {
             output.deinit();
         }
     }
@@ -563,6 +748,45 @@ pub const GatedLayer = struct {
         }
 
         return linear_biased.applyGLU(gate_biased, self.allocator);
+    }
+
+    /// Performs backend-aware gated forward propagation and stores backend caches for training.
+    pub fn forwardBackendTrain(self: *GatedLayer, input: *const BackendMatrix) !*BackendMatrix {
+        if (input.cols != self.getInputSize()) {
+            return error.InvalidInputDimensions;
+        }
+
+        self.clearBackendCaches();
+        errdefer self.clearBackendCaches();
+
+        const backend_instance = input.backend;
+        self.last_backend_input = try input.copy(self.allocator);
+
+        const linear_weights = try BackendMatrix.fromMatrix(backend_instance, self.linear_weights, self.allocator);
+        defer linear_weights.deinit();
+        const linear_bias = try BackendMatrix.fromMatrix(backend_instance, self.linear_bias, self.allocator);
+        defer linear_bias.deinit();
+        const gate_weights = try BackendMatrix.fromMatrix(backend_instance, self.gate_weights, self.allocator);
+        defer gate_weights.deinit();
+        const gate_bias = try BackendMatrix.fromMatrix(backend_instance, self.gate_bias, self.allocator);
+        defer gate_bias.deinit();
+
+        const linear_weighted_sum = try input.dotProduct(linear_weights, self.allocator);
+        defer linear_weighted_sum.deinit();
+        self.last_backend_linear_output = try addBackendBias(linear_weighted_sum, linear_bias, self.allocator);
+
+        const gate_weighted_sum = try input.dotProduct(gate_weights, self.allocator);
+        defer gate_weighted_sum.deinit();
+        self.last_backend_gate_output = try addBackendBias(gate_weighted_sum, gate_bias, self.allocator);
+
+        const output = if (self.use_swiglu)
+            try self.last_backend_linear_output.?.applySwiGLU(self.last_backend_gate_output.?, self.allocator)
+        else
+            try self.last_backend_linear_output.?.applyGLU(self.last_backend_gate_output.?, self.allocator);
+        errdefer output.deinit();
+
+        self.last_backend_output = try output.copy(self.allocator);
+        return output;
     }
 
     /// Backpropagation through the gated layer
@@ -686,6 +910,120 @@ pub const GatedLayer = struct {
         const new_gate_bias = try self.gate_bias.subtract(scaled_gate_bias_gradient, self.allocator);
         self.gate_bias.deinit();
         self.gate_bias = new_gate_bias;
+
+        return input_gradient;
+    }
+
+    /// Performs backend-aware gated backpropagation and writes updated parameters back to CPU storage.
+    pub fn backwardBackend(self: *GatedLayer, output_gradient: *const BackendMatrix, learning_rate: f64) !*BackendMatrix {
+        if (self.last_backend_input == null or self.last_backend_linear_output == null or
+            self.last_backend_gate_output == null or self.last_backend_output == null)
+        {
+            return error.NoForwardPassPerformed;
+        }
+        defer self.clearBackendCaches();
+
+        const backend_instance = output_gradient.backend;
+
+        var linear_gradient: *BackendMatrix = undefined;
+        var gate_gradient: *BackendMatrix = undefined;
+
+        if (self.use_swiglu) {
+            const swish_gate = try self.last_backend_gate_output.?.applyActivation(Activation.swish, self.allocator);
+            defer swish_gate.deinit();
+
+            const swish_derivative = try self.last_backend_gate_output.?.applyActivation(Activation.swish_derivative, self.allocator);
+            defer swish_derivative.deinit();
+
+            linear_gradient = try swish_gate.elementWiseMultiply(output_gradient, self.allocator);
+
+            const linear_times_gradient = try self.last_backend_linear_output.?.elementWiseMultiply(output_gradient, self.allocator);
+            defer linear_times_gradient.deinit();
+
+            gate_gradient = try linear_times_gradient.elementWiseMultiply(swish_derivative, self.allocator);
+        } else {
+            const sigmoid_gate = try self.last_backend_gate_output.?.applyActivation(Activation.sigmoid, self.allocator);
+            defer sigmoid_gate.deinit();
+
+            const sigmoid_derivative = try self.last_backend_gate_output.?.applyActivation(Activation.sigmoid_derivative, self.allocator);
+            defer sigmoid_derivative.deinit();
+
+            linear_gradient = try sigmoid_gate.elementWiseMultiply(output_gradient, self.allocator);
+
+            const linear_times_gradient = try self.last_backend_linear_output.?.elementWiseMultiply(output_gradient, self.allocator);
+            defer linear_times_gradient.deinit();
+
+            gate_gradient = try linear_times_gradient.elementWiseMultiply(sigmoid_derivative, self.allocator);
+        }
+        defer linear_gradient.deinit();
+        defer gate_gradient.deinit();
+
+        const transposed_input = try self.last_backend_input.?.transpose(self.allocator);
+        defer transposed_input.deinit();
+
+        const linear_weights_gradient = try transposed_input.dotProduct(linear_gradient, self.allocator);
+        defer linear_weights_gradient.deinit();
+
+        const gate_weights_gradient = try transposed_input.dotProduct(gate_gradient, self.allocator);
+        defer gate_weights_gradient.deinit();
+
+        const linear_bias_gradient = try linear_gradient.sumRows(self.allocator);
+        defer linear_bias_gradient.deinit();
+
+        const gate_bias_gradient = try gate_gradient.sumRows(self.allocator);
+        defer gate_bias_gradient.deinit();
+
+        const linear_weights = try BackendMatrix.fromMatrix(backend_instance, self.linear_weights, self.allocator);
+        defer linear_weights.deinit();
+        const linear_bias = try BackendMatrix.fromMatrix(backend_instance, self.linear_bias, self.allocator);
+        defer linear_bias.deinit();
+        const gate_weights = try BackendMatrix.fromMatrix(backend_instance, self.gate_weights, self.allocator);
+        defer gate_weights.deinit();
+        const gate_bias = try BackendMatrix.fromMatrix(backend_instance, self.gate_bias, self.allocator);
+        defer gate_bias.deinit();
+
+        const transposed_linear_weights = try linear_weights.transpose(self.allocator);
+        defer transposed_linear_weights.deinit();
+
+        const transposed_gate_weights = try gate_weights.transpose(self.allocator);
+        defer transposed_gate_weights.deinit();
+
+        const linear_input_gradient = try linear_gradient.dotProduct(transposed_linear_weights, self.allocator);
+        defer linear_input_gradient.deinit();
+
+        const gate_input_gradient = try gate_gradient.dotProduct(transposed_gate_weights, self.allocator);
+        defer gate_input_gradient.deinit();
+
+        const input_gradient = try linear_input_gradient.add(gate_input_gradient, self.allocator);
+        errdefer input_gradient.deinit();
+
+        const scaled_linear_weights_gradient = try linear_weights_gradient.scale(learning_rate, self.allocator);
+        defer scaled_linear_weights_gradient.deinit();
+
+        const scaled_gate_weights_gradient = try gate_weights_gradient.scale(learning_rate, self.allocator);
+        defer scaled_gate_weights_gradient.deinit();
+
+        const scaled_linear_bias_gradient = try linear_bias_gradient.scale(learning_rate, self.allocator);
+        defer scaled_linear_bias_gradient.deinit();
+
+        const scaled_gate_bias_gradient = try gate_bias_gradient.scale(learning_rate, self.allocator);
+        defer scaled_gate_bias_gradient.deinit();
+
+        const new_linear_weights = try linear_weights.subtract(scaled_linear_weights_gradient, self.allocator);
+        defer new_linear_weights.deinit();
+        try replaceCpuMatrixFromBackend(&self.linear_weights, new_linear_weights, self.allocator);
+
+        const new_gate_weights = try gate_weights.subtract(scaled_gate_weights_gradient, self.allocator);
+        defer new_gate_weights.deinit();
+        try replaceCpuMatrixFromBackend(&self.gate_weights, new_gate_weights, self.allocator);
+
+        const new_linear_bias = try linear_bias.subtract(scaled_linear_bias_gradient, self.allocator);
+        defer new_linear_bias.deinit();
+        try replaceCpuMatrixFromBackend(&self.linear_bias, new_linear_bias, self.allocator);
+
+        const new_gate_bias = try gate_bias.subtract(scaled_gate_bias_gradient, self.allocator);
+        defer new_gate_bias.deinit();
+        try replaceCpuMatrixFromBackend(&self.gate_bias, new_gate_bias, self.allocator);
 
         return input_gradient;
     }

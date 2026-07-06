@@ -76,6 +76,14 @@ pub const LayerVariant = union(LayerType) {
         };
     }
 
+    /// Performs backend-aware forward propagation and stores training caches.
+    pub fn forwardBackendTrain(self: LayerVariant, input: *const BackendMatrix) !*BackendMatrix {
+        return switch (self) {
+            .Standard => |layer| layer.forwardBackendTrain(input),
+            .Gated => |layer| layer.forwardBackendTrain(input),
+        };
+    }
+
     /// Performs backward propagation through the layer
     /// Updates layer parameters using gradient descent
     /// Returns: Gradient for backpropagation to previous layer
@@ -83,6 +91,14 @@ pub const LayerVariant = union(LayerType) {
         return switch (self) {
             .Standard => |layer| layer.backward(output_gradient, learning_rate),
             .Gated => |layer| layer.backward(output_gradient, learning_rate),
+        };
+    }
+
+    /// Performs backend-aware backward propagation through the layer.
+    pub fn backwardBackend(self: LayerVariant, output_gradient: *const BackendMatrix, learning_rate: f64) !*BackendMatrix {
+        return switch (self) {
+            .Standard => |layer| layer.backwardBackend(output_gradient, learning_rate),
+            .Gated => |layer| layer.backwardBackend(output_gradient, learning_rate),
         };
     }
 
@@ -244,6 +260,40 @@ pub const Network = struct {
         return owned_current.?;
     }
 
+    /// Performs backend-aware forward propagation and stores caches for backpropagation.
+    fn forwardBackendTrain(self: *Network, input: *const BackendMatrix) !*BackendMatrix {
+        if (self.layers.items.len == 0) {
+            return error.EmptyNetwork;
+        }
+
+        var current: *const BackendMatrix = input;
+        var owned_current: ?*BackendMatrix = null;
+
+        for (self.layers.items) |layer| {
+            if (current.cols != layer.getInputSize()) {
+                if (owned_current) |owned| {
+                    owned.deinit();
+                }
+                return error.InvalidInputDimensions;
+            }
+
+            const next = layer.forwardBackendTrain(current) catch |err| {
+                if (owned_current) |owned| {
+                    owned.deinit();
+                }
+                return err;
+            };
+
+            if (owned_current) |owned| {
+                owned.deinit();
+            }
+            current = next;
+            owned_current = next;
+        }
+
+        return owned_current.?;
+    }
+
     /// Calculates loss between predicted and target values
     /// Supports three loss functions:
     /// 1. Mean Squared Error (MSE):
@@ -380,6 +430,118 @@ pub const Network = struct {
         return gradient;
     }
 
+    /// Calculates loss for backend-aware predictions and targets.
+    pub fn calculateLossBackend(self: Network, predicted: *const BackendMatrix, target: *const BackendMatrix) !f64 {
+        if (predicted.rows != target.rows or predicted.cols != target.cols) {
+            return error.DimensionMismatch;
+        }
+
+        var total_loss: f64 = 0.0;
+        const n = @as(f64, @floatFromInt(predicted.rows));
+
+        switch (self.loss_function) {
+            .MeanSquaredError => {
+                const diff = try predicted.subtract(target, self.allocator);
+                defer diff.deinit();
+                const squared = try diff.elementWiseMultiply(diff, self.allocator);
+                defer squared.deinit();
+
+                for (0..squared.rows) |row| {
+                    for (0..squared.cols) |col| {
+                        total_loss += squared.get(row, col);
+                    }
+                }
+                total_loss /= n;
+            },
+            .CrossEntropy => {
+                for (0..predicted.rows) |i| {
+                    for (0..predicted.cols) |j| {
+                        const y_true = target.get(i, j);
+                        var y_pred = predicted.get(i, j);
+
+                        if (y_true > 0.0) {
+                            if (y_pred < 1e-15) y_pred = 1e-15;
+                            total_loss -= y_true * @log(y_pred);
+                        }
+                    }
+                }
+                total_loss /= n;
+            },
+            .BinaryCrossEntropy => {
+                for (0..predicted.rows) |i| {
+                    for (0..predicted.cols) |j| {
+                        const y_true = target.get(i, j);
+                        var y_pred = predicted.get(i, j);
+
+                        if (y_pred < 1e-15) y_pred = 1e-15;
+                        if (y_pred > 1.0 - 1e-15) y_pred = 1.0 - 1e-15;
+
+                        total_loss -= y_true * @log(y_pred) +
+                            (1.0 - y_true) * @log(1.0 - y_pred);
+                    }
+                }
+                total_loss /= n;
+            },
+        }
+
+        return total_loss;
+    }
+
+    /// Calculates the gradient of loss with respect to backend-aware network outputs.
+    pub fn calculateLossGradientBackend(self: Network, predicted: *const BackendMatrix, target: *const BackendMatrix) !*BackendMatrix {
+        if (predicted.rows != target.rows or predicted.cols != target.cols) {
+            return error.DimensionMismatch;
+        }
+
+        const n = @as(f64, @floatFromInt(predicted.rows));
+
+        switch (self.loss_function) {
+            .MeanSquaredError => {
+                const diff = try predicted.subtract(target, self.allocator);
+                defer diff.deinit();
+                return diff.scale(2.0 / n, self.allocator);
+            },
+            .CrossEntropy => {
+                const gradient = try BackendMatrix.init(predicted.backend, self.allocator, predicted.rows, predicted.cols);
+                errdefer gradient.deinit();
+
+                for (0..predicted.rows) |i| {
+                    for (0..predicted.cols) |j| {
+                        const y_true = target.get(i, j);
+                        if (y_true == 0.0) {
+                            gradient.set(i, j, 0.0);
+                            continue;
+                        }
+
+                        var y_pred = predicted.get(i, j);
+                        if (y_pred < 1e-15) y_pred = 1e-15;
+                        gradient.set(i, j, -y_true / y_pred / n);
+                    }
+                }
+
+                return gradient;
+            },
+            .BinaryCrossEntropy => {
+                const gradient = try BackendMatrix.init(predicted.backend, self.allocator, predicted.rows, predicted.cols);
+                errdefer gradient.deinit();
+
+                for (0..predicted.rows) |i| {
+                    for (0..predicted.cols) |j| {
+                        const y_true = target.get(i, j);
+                        var y_pred = predicted.get(i, j);
+
+                        if (y_pred < 1e-15) y_pred = 1e-15;
+                        if (y_pred > 1.0 - 1e-15) y_pred = 1.0 - 1e-15;
+
+                        gradient.set(i, j, (-y_true / y_pred + (1.0 - y_true) / (1.0 - y_pred)) / n);
+                    }
+                }
+
+                return gradient;
+            },
+        }
+    }
+
     /// Performs backward propagation through the network
     /// Updates all layer parameters using gradient descent
     /// Process:
@@ -414,6 +576,28 @@ pub const Network = struct {
         }
     }
 
+    /// Performs backend-aware backward propagation through the network.
+    pub fn backwardBackend(self: *Network, predicted: *const BackendMatrix, target: *const BackendMatrix) !void {
+        if (self.layers.items.len == 0) {
+            return error.EmptyNetwork;
+        }
+
+        var gradient = try self.calculateLossGradientBackend(predicted, target);
+        errdefer gradient.deinit();
+
+        var i = self.layers.items.len;
+        while (i > 0) {
+            i -= 1;
+            const new_gradient = try self.layers.items[i].backwardBackend(gradient, self.learning_rate);
+            gradient.deinit();
+            if (i > 0) {
+                gradient = new_gradient;
+            } else {
+                new_gradient.deinit();
+            }
+        }
+    }
+
     /// Train the network on a single batch of data
     pub fn trainBatch(self: *Network, inputs: Matrix, targets: Matrix) !f64 {
         // Forward pass
@@ -425,6 +609,17 @@ pub const Network = struct {
 
         // Backward pass
         try self.backward(predictions, targets);
+
+        return loss;
+    }
+
+    /// Train the network on a single backend-aware batch of data.
+    pub fn trainBatchBackend(self: *Network, inputs: *const BackendMatrix, targets: *const BackendMatrix) !f64 {
+        const predictions = try self.forwardBackendTrain(inputs);
+        defer predictions.deinit();
+
+        const loss = try self.calculateLossBackend(predictions, targets);
+        try self.backwardBackend(predictions, targets);
 
         return loss;
     }
@@ -488,6 +683,65 @@ pub const Network = struct {
             // Calculate average loss for the epoch
             epoch_loss /= @as(f64, @floatFromInt(num_samples));
             loss_history[epoch] = epoch_loss;
+        }
+
+        return loss_history;
+    }
+
+    /// Train the network using backend-aware matrices for mini-batch work.
+    pub fn trainBackend(self: *Network, inputs: *const BackendMatrix, targets: *const BackendMatrix, epochs: usize, batch_size: usize) ![]f64 {
+        if (inputs.rows != targets.rows) {
+            return error.DimensionMismatch;
+        }
+
+        const num_samples = inputs.rows;
+        const num_batches = (num_samples + batch_size - 1) / batch_size;
+
+        var loss_history = try self.allocator.alloc(f64, epochs);
+        errdefer self.allocator.free(loss_history);
+
+        var prng = std.Random.DefaultPrng.init(matrix_mod.randomSeed());
+        const rand = prng.random();
+
+        for (0..epochs) |epoch| {
+            var epoch_loss: f64 = 0.0;
+
+            var indices = try self.allocator.alloc(usize, num_samples);
+            errdefer self.allocator.free(indices);
+            for (0..num_samples) |i| {
+                indices[i] = i;
+            }
+            rand.shuffle(usize, indices);
+
+            for (0..num_batches) |batch| {
+                const start_idx = batch * batch_size;
+                const end_idx = @min(start_idx + batch_size, num_samples);
+                const current_batch_size = end_idx - start_idx;
+
+                const batch_inputs = try BackendMatrix.init(inputs.backend, self.allocator, current_batch_size, inputs.cols);
+                errdefer batch_inputs.deinit();
+                const batch_targets = try BackendMatrix.init(targets.backend, self.allocator, current_batch_size, targets.cols);
+                errdefer batch_targets.deinit();
+
+                for (0..current_batch_size) |i| {
+                    const sample_idx = indices[start_idx + i];
+                    for (0..inputs.cols) |j| {
+                        batch_inputs.set(i, j, inputs.get(sample_idx, j));
+                    }
+                    for (0..targets.cols) |j| {
+                        batch_targets.set(i, j, targets.get(sample_idx, j));
+                    }
+                }
+
+                const batch_loss = try self.trainBatchBackend(batch_inputs, batch_targets);
+                epoch_loss += batch_loss * @as(f64, @floatFromInt(current_batch_size));
+                batch_targets.deinit();
+                batch_inputs.deinit();
+            }
+
+            epoch_loss /= @as(f64, @floatFromInt(num_samples));
+            loss_history[epoch] = epoch_loss;
+            self.allocator.free(indices);
         }
 
         return loss_history;
@@ -1069,6 +1323,125 @@ test "softmax cross entropy training step reduces loss" {
 
     try testing.expect(after_loss < before_loss);
     try testing.expect((try after.get(0, 0)) > (try before.get(0, 0)));
+}
+
+test "backend train batch matches cpu train batch on cpu backend" {
+    const allocator = testing.allocator;
+
+    var cpu_network = Network.init(allocator, 0.05, .MeanSquaredError);
+    defer cpu_network.deinit();
+    try cpu_network.addLayer(2, 2, Activation.relu, Activation.relu_derivative);
+    try cpu_network.addLayer(2, 1, Activation.linear, Activation.linear_derivative);
+
+    var backend_network = Network.init(allocator, 0.05, .MeanSquaredError);
+    defer backend_network.deinit();
+    try backend_network.addLayer(2, 2, Activation.relu, Activation.relu_derivative);
+    try backend_network.addLayer(2, 1, Activation.linear, Activation.linear_derivative);
+
+    const cpu_hidden = cpu_network.layers.items[0].Standard;
+    const backend_hidden = backend_network.layers.items[0].Standard;
+    try cpu_hidden.weights.set(0, 0, 0.2);
+    try backend_hidden.weights.set(0, 0, 0.2);
+    try cpu_hidden.weights.set(0, 1, -0.3);
+    try backend_hidden.weights.set(0, 1, -0.3);
+    try cpu_hidden.weights.set(1, 0, 0.4);
+    try backend_hidden.weights.set(1, 0, 0.4);
+    try cpu_hidden.weights.set(1, 1, 0.1);
+    try backend_hidden.weights.set(1, 1, 0.1);
+    try cpu_hidden.bias.set(0, 0, 0.05);
+    try backend_hidden.bias.set(0, 0, 0.05);
+    try cpu_hidden.bias.set(0, 1, -0.02);
+    try backend_hidden.bias.set(0, 1, -0.02);
+
+    const cpu_output = cpu_network.layers.items[1].Standard;
+    const backend_output = backend_network.layers.items[1].Standard;
+    try cpu_output.weights.set(0, 0, 0.7);
+    try backend_output.weights.set(0, 0, 0.7);
+    try cpu_output.weights.set(1, 0, -0.5);
+    try backend_output.weights.set(1, 0, -0.5);
+    try cpu_output.bias.set(0, 0, 0.1);
+    try backend_output.bias.set(0, 0, 0.1);
+
+    var inputs = try Matrix.init(allocator, 2, 2);
+    defer inputs.deinit();
+    try inputs.set(0, 0, 1.0);
+    try inputs.set(0, 1, -0.5);
+    try inputs.set(1, 0, 0.25);
+    try inputs.set(1, 1, 0.75);
+
+    var targets = try Matrix.init(allocator, 2, 1);
+    defer targets.deinit();
+    try targets.set(0, 0, 0.3);
+    try targets.set(1, 0, -0.2);
+
+    var backend_instance = try backend_mod.createBackend(allocator, .CPU);
+    defer backend_instance.deinit();
+
+    const backend_inputs = try BackendMatrix.fromMatrix(backend_instance, inputs, allocator);
+    defer backend_inputs.deinit();
+    const backend_targets = try BackendMatrix.fromMatrix(backend_instance, targets, allocator);
+    defer backend_targets.deinit();
+
+    const cpu_loss = try cpu_network.trainBatch(inputs, targets);
+    const backend_loss = try backend_network.trainBatchBackend(backend_inputs, backend_targets);
+    try testing.expectApproxEqAbs(cpu_loss, backend_loss, 1e-12);
+
+    for (cpu_network.layers.items, backend_network.layers.items) |cpu_layer, backend_layer| {
+        switch (cpu_layer) {
+            .Standard => |cpu_standard| {
+                const backend_standard = backend_layer.Standard;
+                for (0..cpu_standard.weights.data.len) |i| {
+                    try testing.expectApproxEqAbs(cpu_standard.weights.data[i], backend_standard.weights.data[i], 1e-12);
+                }
+                for (0..cpu_standard.bias.data.len) |i| {
+                    try testing.expectApproxEqAbs(cpu_standard.bias.data[i], backend_standard.bias.data[i], 1e-12);
+                }
+            },
+            .Gated => unreachable,
+        }
+    }
+}
+
+test "backend train batch reduces simple linear loss" {
+    const allocator = testing.allocator;
+
+    var network = Network.init(allocator, 0.1, .MeanSquaredError);
+    defer network.deinit();
+    try network.addLayer(1, 1, Activation.linear, Activation.linear_derivative);
+
+    const layer = network.layers.items[0].Standard;
+    layer.weights.fill(0.0);
+    layer.bias.fill(0.0);
+
+    var inputs = try Matrix.init(allocator, 2, 1);
+    defer inputs.deinit();
+    try inputs.set(0, 0, 1.0);
+    try inputs.set(1, 0, 2.0);
+
+    var targets = try Matrix.init(allocator, 2, 1);
+    defer targets.deinit();
+    try targets.set(0, 0, 1.0);
+    try targets.set(1, 0, 2.0);
+
+    var backend_instance = try backend_mod.createBackend(allocator, .CPU);
+    defer backend_instance.deinit();
+
+    const backend_inputs = try BackendMatrix.fromMatrix(backend_instance, inputs, allocator);
+    defer backend_inputs.deinit();
+    const backend_targets = try BackendMatrix.fromMatrix(backend_instance, targets, allocator);
+    defer backend_targets.deinit();
+
+    const before_predictions = try network.predictBackend(backend_inputs);
+    defer before_predictions.deinit();
+    const before_loss = try network.calculateLossBackend(before_predictions, backend_targets);
+
+    _ = try network.trainBatchBackend(backend_inputs, backend_targets);
+
+    const after_predictions = try network.predictBackend(backend_inputs);
+    defer after_predictions.deinit();
+    const after_loss = try network.calculateLossBackend(after_predictions, backend_targets);
+
+    try testing.expect(after_loss < before_loss);
 }
 
 test "model persistence" {

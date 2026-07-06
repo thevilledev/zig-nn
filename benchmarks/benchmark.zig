@@ -72,7 +72,7 @@ pub fn main(init: std.process.Init) !void {
         try benchmarkLayerNorm(allocator, options);
     }
     if (shouldRun(options, "training")) {
-        try benchmarkTraining(allocator, options);
+        try benchmarkTraining(allocator, metal, cuda, options);
     }
     if (shouldRun(options, "tiny_gpt")) {
         try benchmarkTinyGpt(allocator, options);
@@ -497,7 +497,12 @@ fn timeLayerNormForward(
     };
 }
 
-fn benchmarkTraining(allocator: Allocator, options: Options) !void {
+fn benchmarkTraining(
+    allocator: Allocator,
+    metal: ?BackendInstance,
+    cuda: ?BackendInstance,
+    options: Options,
+) !void {
     const cases = [_]struct {
         name: []const u8,
         samples: usize,
@@ -515,15 +520,15 @@ fn benchmarkTraining(allocator: Allocator, options: Options) !void {
     for (cases, 0..) |case, index| {
         if (options.quick and index > 0) break;
 
-        var network = try makeTrainingNetwork(allocator, case.input_size, case.hidden_size, case.output_size);
-        defer network.deinit();
-
         var inputs = try Matrix.init(allocator, case.samples, case.input_size);
         defer inputs.deinit();
         var targets = try Matrix.init(allocator, case.samples, case.output_size);
         defer targets.deinit();
         fillCpuMatrix(&inputs, 101);
         fillCpuMatrix(&targets, 137);
+
+        var network = try makeTrainingNetwork(allocator, case.input_size, case.hidden_size, case.output_size);
+        defer network.deinit();
 
         const timing = try timeTrainingLoop(
             &network,
@@ -534,8 +539,50 @@ fn benchmarkTraining(allocator: Allocator, options: Options) !void {
             quickCount(options, case.iterations),
         );
         printResult("training", case.name, "cpu", timing, 0.0, "ok");
-        printSkipped("training", case.name, "metal", timing.warmups, timing.iterations, "skipped_cpu_only_path");
-        printSkipped("training", case.name, "cuda", timing.warmups, timing.iterations, "skipped_cpu_only_path");
+
+        if (metal) |metal_backend| {
+            var metal_network = try makeTrainingNetwork(allocator, case.input_size, case.hidden_size, case.output_size);
+            defer metal_network.deinit();
+
+            const metal_inputs = try BackendMatrix.fromMatrix(metal_backend, inputs, allocator);
+            defer metal_inputs.deinit();
+            const metal_targets = try BackendMatrix.fromMatrix(metal_backend, targets, allocator);
+            defer metal_targets.deinit();
+
+            const metal_timing = try timeTrainingLoopBackend(
+                &metal_network,
+                metal_inputs,
+                metal_targets,
+                case.steps,
+                quickCount(options, case.warmups),
+                quickCount(options, case.iterations),
+            );
+            printResult("training", case.name, "metal", metal_timing, @abs(timing.checksum - metal_timing.checksum), "ok");
+        } else {
+            printSkipped("training", case.name, "metal", timing.warmups, timing.iterations, "skipped_metal_unavailable");
+        }
+
+        if (cuda) |cuda_backend| {
+            var cuda_network = try makeTrainingNetwork(allocator, case.input_size, case.hidden_size, case.output_size);
+            defer cuda_network.deinit();
+
+            const cuda_inputs = try BackendMatrix.fromMatrix(cuda_backend, inputs, allocator);
+            defer cuda_inputs.deinit();
+            const cuda_targets = try BackendMatrix.fromMatrix(cuda_backend, targets, allocator);
+            defer cuda_targets.deinit();
+
+            const cuda_timing = try timeTrainingLoopBackend(
+                &cuda_network,
+                cuda_inputs,
+                cuda_targets,
+                case.steps,
+                quickCount(options, case.warmups),
+                quickCount(options, case.iterations),
+            );
+            printResult("training", case.name, "cuda", cuda_timing, @abs(timing.checksum - cuda_timing.checksum), "ok");
+        } else {
+            printSkipped("training", case.name, "cuda", timing.warmups, timing.iterations, "skipped_cuda_unavailable");
+        }
     }
 }
 
@@ -596,6 +643,50 @@ fn timeTrainingLoop(
         var last_loss: f64 = 0.0;
         for (0..steps) |_| {
             last_loss = try network.trainBatch(inputs, targets);
+        }
+        const elapsed = nowNs() - start;
+        checksum += last_loss;
+
+        const elapsed_ns = @as(f64, @floatFromInt(elapsed));
+        total_ns += elapsed_ns;
+        min_ns = @min(min_ns, elapsed_ns);
+        max_ns = @max(max_ns, elapsed_ns);
+    }
+
+    return .{
+        .warmups = warmups,
+        .iterations = iterations,
+        .average_ns = total_ns / @as(f64, @floatFromInt(iterations)),
+        .min_ns = min_ns,
+        .max_ns = max_ns,
+        .checksum = checksum,
+    };
+}
+
+fn timeTrainingLoopBackend(
+    network: *nn.Network,
+    inputs: *const BackendMatrix,
+    targets: *const BackendMatrix,
+    steps: usize,
+    warmups: usize,
+    iterations: usize,
+) !Timing {
+    for (0..warmups) |_| {
+        for (0..steps) |_| {
+            _ = try network.trainBatchBackend(inputs, targets);
+        }
+    }
+
+    var total_ns: f64 = 0.0;
+    var min_ns: f64 = std.math.inf(f64);
+    var max_ns: f64 = 0.0;
+    var checksum: f64 = 0.0;
+
+    for (0..iterations) |_| {
+        const start = nowNs();
+        var last_loss: f64 = 0.0;
+        for (0..steps) |_| {
+            last_loss = try network.trainBatchBackend(inputs, targets);
         }
         const elapsed = nowNs() - start;
         checksum += last_loss;

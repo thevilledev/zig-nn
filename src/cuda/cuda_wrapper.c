@@ -23,10 +23,16 @@ typedef struct ZigNNCUDABackend {
     CUfunction matrix_transpose;
     CUfunction matrix_sum_rows;
     CUfunction matrix_extract_batch;
+    CUfunction apply_linear;
+    CUfunction apply_linear_derivative;
     CUfunction apply_sigmoid;
+    CUfunction apply_sigmoid_derivative;
     CUfunction apply_relu;
+    CUfunction apply_relu_derivative;
     CUfunction apply_tanh;
+    CUfunction apply_tanh_derivative;
     CUfunction apply_swish;
+    CUfunction apply_swish_derivative;
     CUfunction softmax_rows;
     CUfunction apply_glu;
     CUfunction apply_swiglu;
@@ -148,6 +154,26 @@ static const char* cuda_kernel_source =
 "    B[row * cols + col] = A[(start + row) * cols + col];\n"
 "}\n"
 "\n"
+"extern \"C\" __global__ void apply_linear(\n"
+"    const float* A,\n"
+"    float* B,\n"
+"    unsigned int size\n"
+") {\n"
+"    unsigned int index = blockIdx.x * blockDim.x + threadIdx.x;\n"
+"    if (index >= size) return;\n"
+"    B[index] = A[index];\n"
+"}\n"
+"\n"
+"extern \"C\" __global__ void apply_linear_derivative(\n"
+"    const float* A,\n"
+"    float* B,\n"
+"    unsigned int size\n"
+") {\n"
+"    unsigned int index = blockIdx.x * blockDim.x + threadIdx.x;\n"
+"    if (index >= size) return;\n"
+"    B[index] = 1.0f;\n"
+"}\n"
+"\n"
 "extern \"C\" __global__ void apply_sigmoid(\n"
 "    const float* A,\n"
 "    float* B,\n"
@@ -156,6 +182,17 @@ static const char* cuda_kernel_source =
 "    unsigned int index = blockIdx.x * blockDim.x + threadIdx.x;\n"
 "    if (index >= size) return;\n"
 "    B[index] = 1.0f / (1.0f + __expf(-A[index]));\n"
+"}\n"
+"\n"
+"extern \"C\" __global__ void apply_sigmoid_derivative(\n"
+"    const float* A,\n"
+"    float* B,\n"
+"    unsigned int size\n"
+") {\n"
+"    unsigned int index = blockIdx.x * blockDim.x + threadIdx.x;\n"
+"    if (index >= size) return;\n"
+"    float sigmoid = 1.0f / (1.0f + __expf(-A[index]));\n"
+"    B[index] = sigmoid * (1.0f - sigmoid);\n"
 "}\n"
 "\n"
 "extern \"C\" __global__ void apply_relu(\n"
@@ -169,6 +206,16 @@ static const char* cuda_kernel_source =
 "    B[index] = value > 0.0f ? value : 0.0f;\n"
 "}\n"
 "\n"
+"extern \"C\" __global__ void apply_relu_derivative(\n"
+"    const float* A,\n"
+"    float* B,\n"
+"    unsigned int size\n"
+") {\n"
+"    unsigned int index = blockIdx.x * blockDim.x + threadIdx.x;\n"
+"    if (index >= size) return;\n"
+"    B[index] = A[index] > 0.0f ? 1.0f : 0.0f;\n"
+"}\n"
+"\n"
 "extern \"C\" __global__ void apply_tanh(\n"
 "    const float* A,\n"
 "    float* B,\n"
@@ -177,6 +224,17 @@ static const char* cuda_kernel_source =
 "    unsigned int index = blockIdx.x * blockDim.x + threadIdx.x;\n"
 "    if (index >= size) return;\n"
 "    B[index] = tanhf(A[index]);\n"
+"}\n"
+"\n"
+"extern \"C\" __global__ void apply_tanh_derivative(\n"
+"    const float* A,\n"
+"    float* B,\n"
+"    unsigned int size\n"
+") {\n"
+"    unsigned int index = blockIdx.x * blockDim.x + threadIdx.x;\n"
+"    if (index >= size) return;\n"
+"    float tanh_value = tanhf(A[index]);\n"
+"    B[index] = 1.0f - tanh_value * tanh_value;\n"
 "}\n"
 "\n"
 "extern \"C\" __global__ void apply_swish(\n"
@@ -188,6 +246,18 @@ static const char* cuda_kernel_source =
 "    if (index >= size) return;\n"
 "    float sigmoid = 1.0f / (1.0f + __expf(-A[index]));\n"
 "    B[index] = A[index] * sigmoid;\n"
+"}\n"
+"\n"
+"extern \"C\" __global__ void apply_swish_derivative(\n"
+"    const float* A,\n"
+"    float* B,\n"
+"    unsigned int size\n"
+") {\n"
+"    unsigned int index = blockIdx.x * blockDim.x + threadIdx.x;\n"
+"    if (index >= size) return;\n"
+"    float value = A[index];\n"
+"    float sigmoid = 1.0f / (1.0f + __expf(-value));\n"
+"    B[index] = sigmoid + value * sigmoid * (1.0f - sigmoid);\n"
 "}\n"
 "\n"
 "extern \"C\" __global__ void apply_glu(\n"
@@ -382,10 +452,16 @@ static int cuda_load_functions(ZigNNCUDABackend* backend, char* error_buffer, un
         cuda_get_function(backend->module, &backend->matrix_transpose, "matrix_transpose", error_buffer, error_buffer_len) &&
         cuda_get_function(backend->module, &backend->matrix_sum_rows, "matrix_sum_rows", error_buffer, error_buffer_len) &&
         cuda_get_function(backend->module, &backend->matrix_extract_batch, "matrix_extract_batch", error_buffer, error_buffer_len) &&
+        cuda_get_function(backend->module, &backend->apply_linear, "apply_linear", error_buffer, error_buffer_len) &&
+        cuda_get_function(backend->module, &backend->apply_linear_derivative, "apply_linear_derivative", error_buffer, error_buffer_len) &&
         cuda_get_function(backend->module, &backend->apply_sigmoid, "apply_sigmoid", error_buffer, error_buffer_len) &&
+        cuda_get_function(backend->module, &backend->apply_sigmoid_derivative, "apply_sigmoid_derivative", error_buffer, error_buffer_len) &&
         cuda_get_function(backend->module, &backend->apply_relu, "apply_relu", error_buffer, error_buffer_len) &&
+        cuda_get_function(backend->module, &backend->apply_relu_derivative, "apply_relu_derivative", error_buffer, error_buffer_len) &&
         cuda_get_function(backend->module, &backend->apply_tanh, "apply_tanh", error_buffer, error_buffer_len) &&
+        cuda_get_function(backend->module, &backend->apply_tanh_derivative, "apply_tanh_derivative", error_buffer, error_buffer_len) &&
         cuda_get_function(backend->module, &backend->apply_swish, "apply_swish", error_buffer, error_buffer_len) &&
+        cuda_get_function(backend->module, &backend->apply_swish_derivative, "apply_swish_derivative", error_buffer, error_buffer_len) &&
         cuda_get_function(backend->module, &backend->softmax_rows, "softmax_rows", error_buffer, error_buffer_len) &&
         cuda_get_function(backend->module, &backend->apply_glu, "apply_glu", error_buffer, error_buffer_len) &&
         cuda_get_function(backend->module, &backend->apply_swiglu, "apply_swiglu", error_buffer, error_buffer_len);
@@ -415,6 +491,18 @@ static CUfunction cuda_function_for_kernel_id(ZigNNCUDABackend* backend, int ker
             return backend->apply_glu;
         case ZIG_NN_CUDA_KERNEL_APPLY_SWIGLU:
             return backend->apply_swiglu;
+        case ZIG_NN_CUDA_KERNEL_APPLY_LINEAR:
+            return backend->apply_linear;
+        case ZIG_NN_CUDA_KERNEL_APPLY_LINEAR_DERIVATIVE:
+            return backend->apply_linear_derivative;
+        case ZIG_NN_CUDA_KERNEL_APPLY_SIGMOID_DERIVATIVE:
+            return backend->apply_sigmoid_derivative;
+        case ZIG_NN_CUDA_KERNEL_APPLY_RELU_DERIVATIVE:
+            return backend->apply_relu_derivative;
+        case ZIG_NN_CUDA_KERNEL_APPLY_TANH_DERIVATIVE:
+            return backend->apply_tanh_derivative;
+        case ZIG_NN_CUDA_KERNEL_APPLY_SWISH_DERIVATIVE:
+            return backend->apply_swish_derivative;
         default:
             return NULL;
     }

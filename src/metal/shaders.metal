@@ -183,6 +183,34 @@ kernel void matrix_extract_batch(
 
 // Sigmoid activation function
 // B[i] = 1 / (1 + exp(-A[i]))
+kernel void apply_linear(
+    device const float* A [[buffer(0)]],
+    device float* B [[buffer(1)]],
+    constant uint& size [[buffer(2)]],
+    uint position [[thread_position_in_grid]]
+) {
+    if (position >= size) {
+        return;
+    }
+
+    B[position] = A[position];
+}
+
+// Linear derivative
+// B[i] = 1
+kernel void apply_linear_derivative(
+    device const float* A [[buffer(0)]],
+    device float* B [[buffer(1)]],
+    constant uint& size [[buffer(2)]],
+    uint position [[thread_position_in_grid]]
+) {
+    if (position >= size) {
+        return;
+    }
+
+    B[position] = 1.0f;
+}
+
 kernel void apply_sigmoid(
     device const float* A [[buffer(0)]],
     device float* B [[buffer(1)]],
@@ -196,6 +224,22 @@ kernel void apply_sigmoid(
     
     // Apply sigmoid
     B[position] = 1.0f / (1.0f + exp(-A[position]));
+}
+
+// Sigmoid derivative
+// B[i] = sigmoid(A[i]) * (1 - sigmoid(A[i]))
+kernel void apply_sigmoid_derivative(
+    device const float* A [[buffer(0)]],
+    device float* B [[buffer(1)]],
+    constant uint& size [[buffer(2)]],
+    uint position [[thread_position_in_grid]]
+) {
+    if (position >= size) {
+        return;
+    }
+
+    float sigmoid_val = 1.0f / (1.0f + exp(-A[position]));
+    B[position] = sigmoid_val * (1.0f - sigmoid_val);
 }
 
 // ReLU activation function
@@ -215,6 +259,21 @@ kernel void apply_relu(
     B[position] = max(0.0f, A[position]);
 }
 
+// ReLU derivative
+// B[i] = A[i] > 0 ? 1 : 0
+kernel void apply_relu_derivative(
+    device const float* A [[buffer(0)]],
+    device float* B [[buffer(1)]],
+    constant uint& size [[buffer(2)]],
+    uint position [[thread_position_in_grid]]
+) {
+    if (position >= size) {
+        return;
+    }
+
+    B[position] = A[position] > 0.0f ? 1.0f : 0.0f;
+}
+
 // Tanh activation function
 // B[i] = tanh(A[i])
 kernel void apply_tanh(
@@ -230,6 +289,22 @@ kernel void apply_tanh(
     
     // Apply tanh
     B[position] = tanh(A[position]);
+}
+
+// Tanh derivative
+// B[i] = 1 - tanh(A[i])^2
+kernel void apply_tanh_derivative(
+    device const float* A [[buffer(0)]],
+    device float* B [[buffer(1)]],
+    constant uint& size [[buffer(2)]],
+    uint position [[thread_position_in_grid]]
+) {
+    if (position >= size) {
+        return;
+    }
+
+    float tanh_val = tanh(A[position]);
+    B[position] = 1.0f - tanh_val * tanh_val;
 }
 
 // Swish activation function
@@ -248,6 +323,23 @@ kernel void apply_swish(
     // Apply Swish
     float sigmoid_val = 1.0f / (1.0f + exp(-A[position]));
     B[position] = A[position] * sigmoid_val;
+}
+
+// Swish derivative
+// B[i] = sigmoid(A[i]) + A[i] * sigmoid(A[i]) * (1 - sigmoid(A[i]))
+kernel void apply_swish_derivative(
+    device const float* A [[buffer(0)]],
+    device float* B [[buffer(1)]],
+    constant uint& size [[buffer(2)]],
+    uint position [[thread_position_in_grid]]
+) {
+    if (position >= size) {
+        return;
+    }
+
+    float value = A[position];
+    float sigmoid_val = 1.0f / (1.0f + exp(-value));
+    B[position] = sigmoid_val + value * sigmoid_val * (1.0f - sigmoid_val);
 }
 
 // Gated Linear Unit

@@ -41,6 +41,12 @@ const CUDA = if (enable_cuda) struct {
         apply_swish = c.ZIG_NN_CUDA_KERNEL_APPLY_SWISH,
         apply_glu = c.ZIG_NN_CUDA_KERNEL_APPLY_GLU,
         apply_swiglu = c.ZIG_NN_CUDA_KERNEL_APPLY_SWIGLU,
+        apply_linear = c.ZIG_NN_CUDA_KERNEL_APPLY_LINEAR,
+        apply_linear_derivative = c.ZIG_NN_CUDA_KERNEL_APPLY_LINEAR_DERIVATIVE,
+        apply_sigmoid_derivative = c.ZIG_NN_CUDA_KERNEL_APPLY_SIGMOID_DERIVATIVE,
+        apply_relu_derivative = c.ZIG_NN_CUDA_KERNEL_APPLY_RELU_DERIVATIVE,
+        apply_tanh_derivative = c.ZIG_NN_CUDA_KERNEL_APPLY_TANH_DERIVATIVE,
+        apply_swish_derivative = c.ZIG_NN_CUDA_KERNEL_APPLY_SWISH_DERIVATIVE,
     };
 
     fn fromC(comptime T: type, value: ?*anyopaque) ?*T {
@@ -143,6 +149,12 @@ const CUDA = if (enable_cuda) struct {
         apply_swish,
         apply_glu,
         apply_swiglu,
+        apply_linear,
+        apply_linear_derivative,
+        apply_sigmoid_derivative,
+        apply_relu_derivative,
+        apply_tanh_derivative,
+        apply_swish_derivative,
     };
 
     pub fn createBackend() ?*Backend {
@@ -766,14 +778,26 @@ pub const CUDABackend = struct {
         const matrix_cuda = getCUDAMatrix(matrix);
         const result_cuda = getCUDAMatrix(result);
 
-        const kernel_id: ?CUDA.KernelId = if (activation == Activation.sigmoid)
+        const kernel_id: ?CUDA.KernelId = if (activation == Activation.linear)
+            .apply_linear
+        else if (activation == Activation.linear_derivative)
+            .apply_linear_derivative
+        else if (activation == Activation.sigmoid)
             .apply_sigmoid
+        else if (activation == Activation.sigmoid_derivative)
+            .apply_sigmoid_derivative
         else if (activation == Activation.relu)
             .apply_relu
+        else if (activation == Activation.relu_derivative)
+            .apply_relu_derivative
         else if (activation == Activation.tanh)
             .apply_tanh
+        else if (activation == Activation.tanh_derivative)
+            .apply_tanh_derivative
         else if (activation == Activation.swish)
             .apply_swish
+        else if (activation == Activation.swish_derivative)
+            .apply_swish_derivative
         else
             null;
 

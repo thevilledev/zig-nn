@@ -330,10 +330,16 @@ pub const MetalBackend = struct {
     matrix_extract_batch_pipeline: ?*Metal.ComputePipelineState,
 
     // Activation function pipelines
+    linear_pipeline: ?*Metal.ComputePipelineState,
+    linear_derivative_pipeline: ?*Metal.ComputePipelineState,
     sigmoid_pipeline: ?*Metal.ComputePipelineState,
+    sigmoid_derivative_pipeline: ?*Metal.ComputePipelineState,
     relu_pipeline: ?*Metal.ComputePipelineState,
+    relu_derivative_pipeline: ?*Metal.ComputePipelineState,
     tanh_pipeline: ?*Metal.ComputePipelineState,
+    tanh_derivative_pipeline: ?*Metal.ComputePipelineState,
     swish_pipeline: ?*Metal.ComputePipelineState,
+    swish_derivative_pipeline: ?*Metal.ComputePipelineState,
 
     // Softmax pipelines
     softmax_find_max_pipeline: ?*Metal.ComputePipelineState,
@@ -371,10 +377,16 @@ pub const MetalBackend = struct {
             .matrix_transpose_pipeline = null,
             .matrix_sum_rows_pipeline = null,
             .matrix_extract_batch_pipeline = null,
+            .linear_pipeline = null,
+            .linear_derivative_pipeline = null,
             .sigmoid_pipeline = null,
+            .sigmoid_derivative_pipeline = null,
             .relu_pipeline = null,
+            .relu_derivative_pipeline = null,
             .tanh_pipeline = null,
+            .tanh_derivative_pipeline = null,
             .swish_pipeline = null,
+            .swish_derivative_pipeline = null,
             .softmax_find_max_pipeline = null,
             .softmax_exp_sum_pipeline = null,
             .softmax_normalize_pipeline = null,
@@ -402,10 +414,16 @@ pub const MetalBackend = struct {
         Metal.release(self.matrix_transpose_pipeline);
         Metal.release(self.matrix_sum_rows_pipeline);
         Metal.release(self.matrix_extract_batch_pipeline);
+        Metal.release(self.linear_pipeline);
+        Metal.release(self.linear_derivative_pipeline);
         Metal.release(self.sigmoid_pipeline);
+        Metal.release(self.sigmoid_derivative_pipeline);
         Metal.release(self.relu_pipeline);
+        Metal.release(self.relu_derivative_pipeline);
         Metal.release(self.tanh_pipeline);
+        Metal.release(self.tanh_derivative_pipeline);
         Metal.release(self.swish_pipeline);
+        Metal.release(self.swish_derivative_pipeline);
         Metal.release(self.softmax_find_max_pipeline);
         Metal.release(self.softmax_exp_sum_pipeline);
         Metal.release(self.softmax_normalize_pipeline);
@@ -427,10 +445,16 @@ pub const MetalBackend = struct {
         try self.loadPipeline(&self.matrix_transpose_pipeline, "matrix_transpose");
         try self.loadPipeline(&self.matrix_sum_rows_pipeline, "matrix_sum_rows");
         try self.loadPipeline(&self.matrix_extract_batch_pipeline, "matrix_extract_batch");
+        try self.loadPipeline(&self.linear_pipeline, "apply_linear");
+        try self.loadPipeline(&self.linear_derivative_pipeline, "apply_linear_derivative");
         try self.loadPipeline(&self.sigmoid_pipeline, "apply_sigmoid");
+        try self.loadPipeline(&self.sigmoid_derivative_pipeline, "apply_sigmoid_derivative");
         try self.loadPipeline(&self.relu_pipeline, "apply_relu");
+        try self.loadPipeline(&self.relu_derivative_pipeline, "apply_relu_derivative");
         try self.loadPipeline(&self.tanh_pipeline, "apply_tanh");
+        try self.loadPipeline(&self.tanh_derivative_pipeline, "apply_tanh_derivative");
         try self.loadPipeline(&self.swish_pipeline, "apply_swish");
+        try self.loadPipeline(&self.swish_derivative_pipeline, "apply_swish_derivative");
         try self.loadPipeline(&self.softmax_find_max_pipeline, "softmax_find_max");
         try self.loadPipeline(&self.softmax_exp_sum_pipeline, "softmax_exp_and_sum");
         try self.loadPipeline(&self.softmax_normalize_pipeline, "softmax_normalize");
@@ -1106,14 +1130,26 @@ pub const MetalBackend = struct {
         const matrix_metal = getMetalMatrix(matrix);
         const result_metal = getMetalMatrix(result);
 
-        const pipeline: ?*Metal.ComputePipelineState = if (activation == Activation.sigmoid)
+        const pipeline: ?*Metal.ComputePipelineState = if (activation == Activation.linear)
+            self.linear_pipeline
+        else if (activation == Activation.linear_derivative)
+            self.linear_derivative_pipeline
+        else if (activation == Activation.sigmoid)
             self.sigmoid_pipeline
+        else if (activation == Activation.sigmoid_derivative)
+            self.sigmoid_derivative_pipeline
         else if (activation == Activation.relu)
             self.relu_pipeline
+        else if (activation == Activation.relu_derivative)
+            self.relu_derivative_pipeline
         else if (activation == Activation.tanh)
             self.tanh_pipeline
+        else if (activation == Activation.tanh_derivative)
+            self.tanh_derivative_pipeline
         else if (activation == Activation.swish)
             self.swish_pipeline
+        else if (activation == Activation.swish_derivative)
+            self.swish_derivative_pipeline
         else
             null;
 
@@ -1123,7 +1159,7 @@ pub const MetalBackend = struct {
 
         ensureHostData(matrix_metal);
 
-        // Generic or derivative activations fall back to CPU.
+        // Unknown custom activations fall back to CPU.
         for (0..matrix.rows * matrix.cols) |i| {
             result_metal.host_data[i] = activation(matrix_metal.host_data[i]);
         }
