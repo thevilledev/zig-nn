@@ -51,6 +51,7 @@ pub const Layer = layer_mod.Layer;
 pub const GatedLayer = layer_mod.GatedLayer;
 pub const LayerNorm = layer_norm_mod.LayerNorm;
 pub const Network = network_mod.Network;
+pub const BackendNetwork = network_mod.BackendNetwork;
 pub const LayerType = network_mod.LayerType;
 pub const LayerVariant = network_mod.LayerVariant;
 pub const LossFunction = network_mod.LossFunction;

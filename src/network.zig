@@ -129,6 +129,244 @@ pub const LossFunction = enum {
     BinaryCrossEntropy,
 };
 
+fn addBackendBiasSnapshot(weighted_sum: *const BackendMatrix, bias: *const BackendMatrix, allocator: Allocator) !*BackendMatrix {
+    if (bias.rows != 1 or bias.cols != weighted_sum.cols) {
+        return error.DimensionMismatch;
+    }
+
+    const broadcast_bias = try BackendMatrix.init(weighted_sum.backend, allocator, weighted_sum.rows, weighted_sum.cols);
+    defer broadcast_bias.deinit();
+
+    for (0..weighted_sum.rows) |row| {
+        for (0..weighted_sum.cols) |col| {
+            broadcast_bias.set(row, col, bias.get(0, col));
+        }
+    }
+
+    return weighted_sum.add(broadcast_bias, allocator);
+}
+
+const BackendStandardLayer = struct {
+    weights: *BackendMatrix,
+    bias: *BackendMatrix,
+    activation_fn: *const fn (f64) f64,
+
+    fn init(allocator: Allocator, source: *const Layer, backend_instance: anytype) !BackendStandardLayer {
+        const weights = try BackendMatrix.fromMatrix(backend_instance, source.weights, allocator);
+        errdefer weights.deinit();
+        const bias = try BackendMatrix.fromMatrix(backend_instance, source.bias, allocator);
+        errdefer bias.deinit();
+
+        return .{
+            .weights = weights,
+            .bias = bias,
+            .activation_fn = source.activation_fn,
+        };
+    }
+
+    fn deinit(self: *BackendStandardLayer) void {
+        self.weights.deinit();
+        self.bias.deinit();
+    }
+
+    fn getInputSize(self: BackendStandardLayer) usize {
+        return self.weights.rows;
+    }
+
+    fn getOutputSize(self: BackendStandardLayer) usize {
+        return self.weights.cols;
+    }
+
+    fn forward(self: BackendStandardLayer, input: *const BackendMatrix, allocator: Allocator) !*BackendMatrix {
+        const weighted_sum = try input.dotProduct(self.weights, allocator);
+        defer weighted_sum.deinit();
+
+        const biased = try addBackendBiasSnapshot(weighted_sum, self.bias, allocator);
+        defer biased.deinit();
+
+        if (self.activation_fn == Activation.softmax) {
+            return biased.applySoftmax(allocator);
+        }
+        return biased.applyActivation(self.activation_fn, allocator);
+    }
+};
+
+const BackendGatedLayer = struct {
+    linear_weights: *BackendMatrix,
+    linear_bias: *BackendMatrix,
+    gate_weights: *BackendMatrix,
+    gate_bias: *BackendMatrix,
+    use_swiglu: bool,
+
+    fn init(allocator: Allocator, source: *const GatedLayer, backend_instance: anytype) !BackendGatedLayer {
+        const linear_weights = try BackendMatrix.fromMatrix(backend_instance, source.linear_weights, allocator);
+        errdefer linear_weights.deinit();
+        const linear_bias = try BackendMatrix.fromMatrix(backend_instance, source.linear_bias, allocator);
+        errdefer linear_bias.deinit();
+        const gate_weights = try BackendMatrix.fromMatrix(backend_instance, source.gate_weights, allocator);
+        errdefer gate_weights.deinit();
+        const gate_bias = try BackendMatrix.fromMatrix(backend_instance, source.gate_bias, allocator);
+        errdefer gate_bias.deinit();
+
+        return .{
+            .linear_weights = linear_weights,
+            .linear_bias = linear_bias,
+            .gate_weights = gate_weights,
+            .gate_bias = gate_bias,
+            .use_swiglu = source.use_swiglu,
+        };
+    }
+
+    fn deinit(self: *BackendGatedLayer) void {
+        self.linear_weights.deinit();
+        self.linear_bias.deinit();
+        self.gate_weights.deinit();
+        self.gate_bias.deinit();
+    }
+
+    fn getInputSize(self: BackendGatedLayer) usize {
+        return self.linear_weights.rows;
+    }
+
+    fn getOutputSize(self: BackendGatedLayer) usize {
+        return self.linear_weights.cols;
+    }
+
+    fn forward(self: BackendGatedLayer, input: *const BackendMatrix, allocator: Allocator) !*BackendMatrix {
+        const linear_weighted_sum = try input.dotProduct(self.linear_weights, allocator);
+        defer linear_weighted_sum.deinit();
+        const linear_biased = try addBackendBiasSnapshot(linear_weighted_sum, self.linear_bias, allocator);
+        defer linear_biased.deinit();
+
+        const gate_weighted_sum = try input.dotProduct(self.gate_weights, allocator);
+        defer gate_weighted_sum.deinit();
+        const gate_biased = try addBackendBiasSnapshot(gate_weighted_sum, self.gate_bias, allocator);
+        defer gate_biased.deinit();
+
+        if (self.use_swiglu) {
+            return linear_biased.applySwiGLU(gate_biased, allocator);
+        }
+        return linear_biased.applyGLU(gate_biased, allocator);
+    }
+};
+
+const BackendLayerSnapshot = union(LayerType) {
+    Standard: BackendStandardLayer,
+    Gated: BackendGatedLayer,
+
+    fn init(allocator: Allocator, source: LayerVariant, backend_instance: anytype) !BackendLayerSnapshot {
+        return switch (source) {
+            .Standard => |layer| .{ .Standard = try BackendStandardLayer.init(allocator, layer, backend_instance) },
+            .Gated => |layer| .{ .Gated = try BackendGatedLayer.init(allocator, layer, backend_instance) },
+        };
+    }
+
+    fn deinit(self: *BackendLayerSnapshot) void {
+        switch (self.*) {
+            .Standard => |*layer| layer.deinit(),
+            .Gated => |*layer| layer.deinit(),
+        }
+    }
+
+    fn getInputSize(self: BackendLayerSnapshot) usize {
+        return switch (self) {
+            .Standard => |layer| layer.getInputSize(),
+            .Gated => |layer| layer.getInputSize(),
+        };
+    }
+
+    fn getOutputSize(self: BackendLayerSnapshot) usize {
+        return switch (self) {
+            .Standard => |layer| layer.getOutputSize(),
+            .Gated => |layer| layer.getOutputSize(),
+        };
+    }
+
+    fn forward(self: BackendLayerSnapshot, input: *const BackendMatrix, allocator: Allocator) !*BackendMatrix {
+        return switch (self) {
+            .Standard => |layer| layer.forward(input, allocator),
+            .Gated => |layer| layer.forward(input, allocator),
+        };
+    }
+};
+
+/// BackendNetwork owns a backend-side snapshot of network parameters.
+///
+/// Use it for repeated backend inference when CPU-owned `Network` parameters do
+/// not need to be mirrored on every call. Recreate the snapshot after mutating
+/// or training the source `Network`.
+pub const BackendNetwork = struct {
+    allocator: Allocator,
+    backend_type: backend_mod.BackendType,
+    layers: ArrayList(BackendLayerSnapshot),
+
+    pub fn init(allocator: Allocator, source: Network, backend_instance: anytype) !BackendNetwork {
+        var snapshot = BackendNetwork{
+            .allocator = allocator,
+            .backend_type = backend_instance.getBackendType(),
+            .layers = .empty,
+        };
+        errdefer snapshot.deinit();
+
+        for (source.layers.items) |layer| {
+            var backend_layer = try BackendLayerSnapshot.init(allocator, layer, backend_instance);
+            snapshot.layers.append(allocator, backend_layer) catch |err| {
+                backend_layer.deinit();
+                return err;
+            };
+        }
+
+        return snapshot;
+    }
+
+    pub fn deinit(self: *BackendNetwork) void {
+        for (self.layers.items) |*layer| {
+            layer.deinit();
+        }
+        self.layers.deinit(self.allocator);
+    }
+
+    pub fn forward(self: BackendNetwork, input: *const BackendMatrix) !*BackendMatrix {
+        if (self.layers.items.len == 0) {
+            return error.EmptyNetwork;
+        }
+        if (input.backend.getBackendType() != self.backend_type) {
+            return error.BackendMismatch;
+        }
+
+        var current: *const BackendMatrix = input;
+        var owned_current: ?*BackendMatrix = null;
+
+        for (self.layers.items) |layer| {
+            if (current.cols != layer.getInputSize()) {
+                if (owned_current) |owned| {
+                    owned.deinit();
+                }
+                return error.InvalidInputDimensions;
+            }
+
+            const next = layer.forward(current, self.allocator) catch |err| {
+                if (owned_current) |owned| {
+                    owned.deinit();
+                }
+                return err;
+            };
+
+            if (owned_current) |owned| {
+                owned.deinit();
+            }
+            current = next;
+            owned_current = next;
+        }
+
+        return owned_current.?;
+    }
+
+    pub fn predict(self: BackendNetwork, inputs: *const BackendMatrix) !*BackendMatrix {
+        return self.forward(inputs);
+    }
+};
+
 /// Neural Network implementation
 /// Manages a sequence of layers and provides training functionality
 /// Features:
@@ -757,6 +995,15 @@ pub const Network = struct {
         return self.forwardBackend(inputs);
     }
 
+    /// Creates a backend-owned snapshot of this network's current parameters.
+    ///
+    /// The snapshot can be reused for repeated backend inference without
+    /// copying CPU parameters on every forward pass. Recreate it after mutating
+    /// or training this Network.
+    pub fn backendSnapshot(self: Network, backend_instance: anytype) !BackendNetwork {
+        return BackendNetwork.init(self.allocator, self, backend_instance);
+    }
+
     /// Get the input size required by the network
     pub fn getInputSize(self: Network) !usize {
         if (self.layers.items.len == 0) {
@@ -1206,6 +1453,67 @@ test "network backend inference matches cpu forward for mixed layers" {
 
     try testing.expect(hidden.last_input != null);
     try testing.expectApproxEqAbs(cached_first_input, try hidden.last_input.?.get(0, 0), 1e-12);
+}
+
+test "backend network snapshot keeps persistent inference parameters" {
+    const allocator = testing.allocator;
+
+    var network = Network.init(allocator, 0.1, .MeanSquaredError);
+    defer network.deinit();
+
+    try network.addLayer(2, 2, Activation.relu, Activation.relu_derivative);
+    try network.addGatedLayer(2, 1, false);
+
+    const hidden = network.layers.items[0].Standard;
+    hidden.weights.fill(0.0);
+    try hidden.weights.set(0, 0, 1.0);
+    try hidden.weights.set(1, 1, 1.0);
+    hidden.bias.fill(0.0);
+
+    const gated = network.layers.items[1].Gated;
+    try gated.linear_weights.set(0, 0, 1.0);
+    try gated.linear_weights.set(1, 0, 1.0);
+    gated.linear_bias.fill(0.0);
+    gated.gate_weights.fill(0.0);
+    gated.gate_bias.fill(0.0);
+
+    var input = try Matrix.init(allocator, 1, 2);
+    defer input.deinit();
+    try input.set(0, 0, 1.0);
+    try input.set(0, 1, 1.0);
+
+    var cpu_output = try network.forward(input);
+    defer cpu_output.deinit();
+
+    var backend_instance = try backend_mod.createBackend(allocator, .CPU);
+    defer backend_instance.deinit();
+
+    var snapshot = try network.backendSnapshot(backend_instance);
+    defer snapshot.deinit();
+
+    const backend_input = try BackendMatrix.fromMatrix(backend_instance, input, allocator);
+    defer backend_input.deinit();
+
+    const snapshot_output = try snapshot.predict(backend_input);
+    defer snapshot_output.deinit();
+    var snapshot_cpu_output = try snapshot_output.toMatrix(allocator);
+    defer snapshot_cpu_output.deinit();
+
+    try testing.expectApproxEqAbs(try cpu_output.get(0, 0), try snapshot_cpu_output.get(0, 0), 1e-12);
+
+    try hidden.bias.set(0, 0, 10.0);
+    try hidden.bias.set(0, 1, 10.0);
+
+    var mutated_cpu_output = try network.forward(input);
+    defer mutated_cpu_output.deinit();
+
+    const stable_snapshot_output = try snapshot.predict(backend_input);
+    defer stable_snapshot_output.deinit();
+    var stable_snapshot_cpu_output = try stable_snapshot_output.toMatrix(allocator);
+    defer stable_snapshot_cpu_output.deinit();
+
+    try testing.expect((try mutated_cpu_output.get(0, 0)) > (try cpu_output.get(0, 0)) + 1.0);
+    try testing.expectApproxEqAbs(try cpu_output.get(0, 0), try stable_snapshot_cpu_output.get(0, 0), 1e-12);
 }
 
 test "loss calculation" {
