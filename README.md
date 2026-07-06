@@ -28,10 +28,10 @@ The repo has two matrix paths:
 Metal and CUDA support currently applies to backend matrix operations, GPU
 examples, backend-aware `Network.forwardBackend` / `Network.predictBackend`
 inference, and `Network.trainBatchBackend` / `Network.trainBackend` training.
-Backend training is functional, but network parameters are still CPU-owned and
-mirrored into backend matrices during the current training calls. Persistent
-backend inference is available through `BackendNetwork` snapshots; persistent
-backend training parameters remain the next major performance bridge.
+`BackendNetwork` snapshots provide persistent backend inference parameters, and
+`BackendTrainer` provides persistent backend training parameters for
+standard-layer networks. Mixed or gated backend training still uses the
+CPU-owned `Network.trainBatchBackend` / `Network.trainBackend` path.
 
 ## Start Here
 

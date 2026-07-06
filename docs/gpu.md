@@ -18,11 +18,12 @@ backend-aware matrix path.
   `BackendMatrix` inputs and targets through the selected backend.
 - `BackendNetwork` snapshots can run repeated backend inference without
   re-copying CPU parameters on every forward pass.
+- `BackendTrainer` can train standard-layer networks while keeping trainable
+  parameters on the backend across batches.
 - The default `Network.trainBatch` and `Network.train` methods still use the
   CPU `Matrix` path.
-- Backend training currently mirrors CPU-owned network parameters into backend
-  matrices during training calls. Persistent backend parameters remain future
-  performance work.
+- Mixed or gated backend training currently mirrors CPU-owned network
+  parameters into backend matrices during training calls.
 
 ## Metal Verification
 
@@ -88,9 +89,10 @@ machine.
 
 Use `BackendMatrix` when testing backend behavior directly. Use
 `Network.forwardBackend`, `Network.predictBackend`, `BackendNetwork`,
-`Network.trainBatchBackend`, or `Network.trainBackend` when testing
-backend-aware network execution. Use `Matrix`, `Network.forward`, and the
-default training methods when working on the learning-oriented CPU path.
+`BackendTrainer`, `Network.trainBatchBackend`, or `Network.trainBackend` when
+testing backend-aware network execution. Use `Matrix`, `Network.forward`, and
+the default training methods when working on the learning-oriented CPU path.
 
-The next major bridge is persistent backend parameters for training without
-losing the readability that makes the project useful as a learning repo.
+The next major bridge is extending persistent backend training parameters to
+gated layers without losing the readability that makes the project useful as a
+learning repo.

@@ -63,17 +63,21 @@ fn runBackendTraining(allocator: std.mem.Allocator) !TrainingResult {
     const backend_targets = try BackendMatrix.fromMatrix(backend, targets, allocator);
     defer backend_targets.deinit();
 
-    const before_predictions = try network.predictBackend(backend_inputs);
+    var trainer = try network.backendTrainer(backend);
+    defer trainer.deinit();
+
+    const before_predictions = try trainer.predict(backend_inputs);
     defer before_predictions.deinit();
-    const before_loss = try network.calculateLossBackend(before_predictions, backend_targets);
+    const before_loss = try trainer.calculateLoss(before_predictions, backend_targets);
 
     for (0..32) |_| {
-        _ = try network.trainBatchBackend(backend_inputs, backend_targets);
+        _ = try trainer.trainBatch(backend_inputs, backend_targets);
     }
 
-    const after_predictions = try network.predictBackend(backend_inputs);
+    const after_predictions = try trainer.predict(backend_inputs);
     defer after_predictions.deinit();
-    const after_loss = try network.calculateLossBackend(after_predictions, backend_targets);
+    const after_loss = try trainer.calculateLoss(after_predictions, backend_targets);
+    try trainer.syncToNetwork(&network);
 
     return .{
         .backend_name = backendName(backend.getBackendType()),
