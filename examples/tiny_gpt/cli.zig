@@ -17,12 +17,13 @@ const FullTrainingStats = training.FullTrainingStats;
 const trainOutputHeadOnCorpus = training.trainOutputHeadOnCorpus;
 const trainFullOnCorpus = training.trainFullOnCorpus;
 
-const CliOptions = struct {
+pub const CliOptions = struct {
     prompt: []const u8 = "to be",
     tokens: usize = 80,
     temperature: f64 = 1.0,
     top_k: usize = 8,
     seed: u64 = 42,
+    preset: TrainingPreset = .none,
     model_config: Config = .{},
     config_overridden: bool = false,
     corpus: CorpusPreset = .auto,
@@ -55,7 +56,12 @@ const CliOptions = struct {
     summary_path: ?[]const u8 = null,
 };
 
-const CorpusPreset = enum {
+pub const TrainingPreset = enum {
+    none,
+    coherent_small,
+};
+
+pub const CorpusPreset = enum {
     auto,
     toy,
     shakespeare,
@@ -194,12 +200,72 @@ pub fn validationCorpus(text: []const u8, train_limit: usize, validation_chars: 
     return text[start..end];
 }
 
-fn parseArgs(args: []const [:0]const u8) !CliOptions {
+fn applyTrainingPreset(options: *CliOptions, preset: TrainingPreset) void {
+    switch (preset) {
+        .none => {},
+        .coherent_small => {
+            options.train_full = true;
+            options.train_demo_head = false;
+            options.model_config = .{
+                .block_size = 64,
+                .n_layer = 4,
+                .n_head = 4,
+                .n_embd = 128,
+            };
+            options.config_overridden = true;
+            options.corpus = .tinystories;
+            options.corpus_path = null;
+            options.full_train_steps = 3000;
+            options.full_learning_rate = 0.001;
+            options.min_learning_rate = 0.0001;
+            options.lr_schedule = .cosine;
+            options.warmup_steps = 100;
+            options.full_batch_size = 12;
+            options.full_optimizer = .adamw;
+            options.full_weight_decay = 0.01;
+            options.train_chars = 0;
+            options.eval_split = 0.05;
+            options.eval_windows = 64;
+            options.temperature = 0.8;
+            options.top_k = 16;
+            options.corpus_prior = false;
+        },
+    }
+}
+
+fn parseTrainingPreset(value: []const u8) !TrainingPreset {
+    if (std.mem.eql(u8, value, "none")) return .none;
+    if (std.mem.eql(u8, value, "coherent-small")) return .coherent_small;
+    return error.UnknownTrainingPreset;
+}
+
+fn presetFromArgs(args: []const [:0]const u8) !TrainingPreset {
+    var preset: TrainingPreset = .none;
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        if (std.mem.eql(u8, args[i], "--preset")) {
+            i += 1;
+            if (i >= args.len) return error.MissingArgument;
+            preset = try parseTrainingPreset(args[i]);
+        }
+    }
+    return preset;
+}
+
+pub fn parseArgs(args: []const [:0]const u8) !CliOptions {
     var options: CliOptions = .{};
+    const preset = try presetFromArgs(args);
+    options.preset = preset;
+    applyTrainingPreset(&options, preset);
+
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
         const arg = args[i];
-        if (std.mem.eql(u8, arg, "--prompt")) {
+        if (std.mem.eql(u8, arg, "--preset")) {
+            i += 1;
+            if (i >= args.len) return error.MissingArgument;
+            options.preset = try parseTrainingPreset(args[i]);
+        } else if (std.mem.eql(u8, arg, "--prompt")) {
             i += 1;
             if (i >= args.len) return error.MissingArgument;
             options.prompt = args[i];
@@ -347,6 +413,8 @@ fn parseArgs(args: []const [:0]const u8) !CliOptions {
             i += 1;
             if (i >= args.len) return error.MissingArgument;
             options.prior_chars = try std.fmt.parseInt(usize, args[i], 10);
+        } else if (std.mem.eql(u8, arg, "--corpus-prior")) {
+            options.corpus_prior = true;
         } else if (std.mem.eql(u8, arg, "--no-corpus-prior")) {
             options.corpus_prior = false;
         } else if (std.mem.eql(u8, arg, "--summary-path")) {
@@ -388,6 +456,7 @@ fn printUsage(writer: anytype) !void {
         \\Usage: zig build run_tiny_gpt -- [options]
         \\
         \\Options:
+        \\  --preset <name>          none or coherent-small
         \\  --prompt <text>          Prompt to continue (default: "to be")
         \\  --tokens <n>             Number of new tokens to sample (default: 80)
         \\  --temperature <float>    Sampling temperature (default: 1.0)
@@ -424,6 +493,7 @@ fn printUsage(writer: anytype) !void {
         \\  --eval-split <float>     Eval fraction used when validation chars are 0
         \\  --eval-windows <n>       Windows sampled for train/eval loss (default: 12)
         \\  --prior-chars <n>        Corpus prefix for readable sampling prior (default: 32768)
+        \\  --corpus-prior           Enable the tiny backoff corpus prior
         \\  --no-corpus-prior        Skip the tiny backoff corpus prior used for readable sampling
         \\  --summary-path <path>    Write a deterministic JSON run summary
         \\
@@ -665,6 +735,8 @@ pub fn main(init: std.process.Init) !void {
             .batch_size = options.full_batch_size,
             .optimizer = options.full_optimizer,
             .weight_decay = options.full_weight_decay,
+            .gradient_clip = 1.0,
+            .random_seed = options.seed,
             .adam_beta1 = options.adam_beta1,
             .adam_beta2 = options.adam_beta2,
             .adam_epsilon = options.adam_epsilon,

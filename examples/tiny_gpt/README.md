@@ -12,11 +12,12 @@ bin/nnctl run tiny-gpt -- --prompt "to be" --tokens 80 --seed 42
 ```
 
 By default the example uses `--corpus auto`: a prepared TinyStories slice if it
-exists, then prepared Tiny Shakespeare, then the checked-in toy corpus. It
-trains the output head on a small prefix of that corpus, then samples with a
-small character backoff prior. This keeps the demo fast while making the output
-readable enough to inspect. To see the raw untrained architecture sample, pass
-`--no-train --no-corpus-prior`.
+exists, then prepared Tiny Shakespeare, then the checked-in toy corpus. The fast
+run trains only the output head on a small prefix, then samples with a small
+character backoff prior. That path is an architecture/readability demo, not
+evidence that the model itself has learned coherent language. To inspect the
+model without the readability prior, pass `--no-corpus-prior`; to see the raw
+untrained architecture sample, pass `--no-train --no-corpus-prior`.
 
 For an end-to-end training pass over all Transformer weights, embeddings, layer
 norms, and the output head, use `nnctl train tiny-gpt`. This trains multiple
@@ -28,6 +29,16 @@ and can write a JSON summary for comparing runs:
 bin/nnctl train tiny-gpt --corpus tinystories --output tiny-gpt.bin \
   --steps 5000 --block-size 32 --layers 4 --heads 4 --embd 64 \
   --eval-split 0.05 --lr-schedule cosine --summary-path runs/tiny-gpt.json
+```
+
+For the smallest recommended model-only coherence baseline, prepare TinyStories
+and use the `coherent-small` preset. It disables the corpus prior for the sample
+and expands to a 4-layer, 4-head, 128-channel, 64-character-context model with
+random mini-batches and AdamW:
+
+```bash
+bin/nnctl data tiny-gpt
+bin/nnctl train tiny-gpt --preset coherent-small --output tiny-gpt.bin
 ```
 
 Resume a checkpoint for more training:
@@ -95,6 +106,8 @@ Better checkpoints come from matching capacity, data, and training time:
 - increase `--layers`, `--heads`, and `--embd` for more parameters
 - increase `--train-chars` and use `bin/nnctl data tiny-gpt` for real corpora
 - increase `--steps` and watch both training and validation loss
+- start from `--preset coherent-small` when you want model-only text, not a
+  readability prior
 - keep `--summary-path` outputs when comparing runs
 - try `--lr-schedule cosine --warmup-steps 50 --min-learning-rate 0.001`
 - resume with `--resume` instead of starting from scratch
@@ -114,6 +127,7 @@ Implemented pieces:
 - data presets for toy, Tiny Shakespeare, TinyStories, and custom text files
 - deterministic JSON run summaries for experiment comparison
 - fast demo-corpus output-head training
+- seeded random-window mini-batch training with averaged/clipped gradients
 - OpenAI-compatible non-streaming `/v1/chat/completions`, `/v1/completions`,
   and `/v1/models` serving example
 - readable sampling with a tiny character backoff prior

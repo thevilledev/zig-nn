@@ -54,7 +54,7 @@ go build -C nnctl -o ../bin/nnctl ./cmd/nnctl
 ./bin/nnctl data tiny-gpt
 
 # Train and serve a TinyGPT checkpoint
-./bin/nnctl train tiny-gpt --output tiny-gpt.bin
+./bin/nnctl train tiny-gpt --preset coherent-small --output tiny-gpt.bin
 ./bin/nnctl chat --model tiny-gpt.bin
 
 # Build with a different optimization mode

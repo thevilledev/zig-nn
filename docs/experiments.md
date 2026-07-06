@@ -41,7 +41,8 @@ Run:
 This is a tiny decoder-only Transformer demo that uses this project's matrix
 operations for projections and logits. It includes readable sampling and an
 output-head-only training path, plus full-model educational training for small
-checkpoints.
+checkpoints. Use `--preset coherent-small` when you want the model-only
+coherence baseline with the readability prior disabled.
 
 By default, `--corpus auto` uses a prepared TinyStories slice if it exists,
 then prepared Tiny Shakespeare, then the checked-in toy corpus. Prepare the
@@ -49,7 +50,7 @@ sourced corpora with:
 
 ```bash
 ./bin/nnctl data tiny-gpt
-./bin/nnctl train tiny-gpt --corpus tinystories --output tiny-gpt.bin
+./bin/nnctl train tiny-gpt --preset coherent-small --output tiny-gpt.bin
 ./bin/nnctl chat --model tiny-gpt.bin
 ```
 

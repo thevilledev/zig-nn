@@ -70,6 +70,8 @@ func TestNestedHelpContainsTinyGPTCorpusWorkflow(t *testing.T) {
 		"shakespeare",
 		"tinystories",
 		"--corpus-path",
+		"--preset",
+		"coherent-small",
 		"--eval-split",
 		"--lr-schedule",
 		"--summary-path",

@@ -255,6 +255,7 @@ Corpora:
 
 Use --corpus-path to train on any local UTF-8 text file instead of a preset.`,
 		Example: `  nnctl data tiny-gpt
+  nnctl train tiny-gpt --preset coherent-small --output tiny-gpt.bin
   nnctl train tiny-gpt --corpus toy --output toy-gpt.bin
   nnctl train tiny-gpt --corpus shakespeare --output shakespeare-gpt.bin
   nnctl train tiny-gpt --corpus tinystories --output tinystories-gpt.bin
@@ -264,6 +265,9 @@ Use --corpus-path to train on any local UTF-8 text file instead of a preset.`,
   nnctl chat --model tinystories-gpt.bin`,
 		Args: cobra.NoArgs,
 		RunE: withRepo(func(ctx context.Context, cmd *cobra.Command, args []string) error {
+			if err := applyTinyGPTTrainPreset(&opts, cmd.Flags().Changed); err != nil {
+				return err
+			}
 			if err := prepareTinyGPTResumeOptions(&opts, cmd.Flags().Changed); err != nil {
 				return err
 			}
@@ -432,7 +436,7 @@ func (a *App) newTinyGPTTopicCommand() *cobra.Command {
 Common workflows:
   nnctl data tiny-gpt
   nnctl run tiny-gpt -- --corpus toy --prompt "to be"
-  nnctl train tiny-gpt --corpus tinystories --output tiny-gpt.bin
+  nnctl train tiny-gpt --preset coherent-small --output tiny-gpt.bin
   nnctl chat --model tiny-gpt.bin
 
 Corpora:
@@ -479,6 +483,7 @@ func addTinyGPTTrainFlags(cmd *cobra.Command, opts *tinyGPTTrainOptions) {
 	addModeFlags(cmd, &opts.mode)
 	cmd.Flags().StringVar(&opts.output, "output", opts.output, "checkpoint path to write")
 	cmd.Flags().StringVar(&opts.resume, "resume", opts.resume, "checkpoint path to resume from")
+	cmd.Flags().StringVar(&opts.preset, "preset", opts.preset, "training preset: coherent-small")
 	cmd.Flags().StringVar(&opts.corpus, "corpus", opts.corpus, "auto, toy, shakespeare, or tinystories")
 	cmd.Flags().StringVar(&opts.corpusPath, "corpus-path", opts.corpusPath, "custom UTF-8 text corpus path")
 	cmd.Flags().IntVar(&opts.steps, "steps", opts.steps, "full-model training steps")

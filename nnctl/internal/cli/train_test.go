@@ -54,6 +54,82 @@ func TestTinyGPTTrainArgsFreshCheckpoint(t *testing.T) {
 	}
 }
 
+func TestTinyGPTTrainCoherentSmallPreset(t *testing.T) {
+	opts := defaultTinyGPTTrainOptions()
+	opts.output = "model.bin"
+	opts.preset = "coherent-small"
+
+	if err := applyTinyGPTTrainPreset(&opts, func(string) bool { return false }); err != nil {
+		t.Fatal(err)
+	}
+	got, err := tinyGPTTrainArgs(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wantContains := []string{
+		"--full-train-steps", "3000",
+		"--full-learning-rate", "0.001",
+		"--min-learning-rate", "0.0001",
+		"--lr-schedule", "cosine",
+		"--warmup-steps", "100",
+		"--full-batch-size", "12",
+		"--train-chars", "0",
+		"--eval-split", "0.05",
+		"--eval-windows", "64",
+		"--optimizer", "adamw",
+		"--weight-decay", "0.01",
+		"--temperature", "0.8",
+		"--top-k", "16",
+		"--corpus", "tinystories",
+		"--block-size", "64",
+		"--layers", "4",
+		"--heads", "4",
+		"--embd", "128",
+		"--no-corpus-prior",
+	}
+	if !containsOrdered(got, wantContains) {
+		t.Fatalf("coherent-small args missing expected subsequence\n got: %#v\nwant subsequence: %#v", got, wantContains)
+	}
+}
+
+func TestTinyGPTTrainCoherentSmallPresetAllowsExplicitOverrides(t *testing.T) {
+	opts := defaultTinyGPTTrainOptions()
+	opts.output = "model.bin"
+	opts.preset = "coherent-small"
+	opts.corpus = "toy"
+	opts.batchSize = 2
+	opts.topK = 4
+	opts.corpusPrior = true
+
+	changed := map[string]bool{
+		"corpus":       true,
+		"batch-size":   true,
+		"top-k":        true,
+		"corpus-prior": true,
+	}
+	if err := applyTinyGPTTrainPreset(&opts, func(name string) bool { return changed[name] }); err != nil {
+		t.Fatal(err)
+	}
+	got, err := tinyGPTTrainArgs(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, want := range [][]string{
+		{"--corpus", "toy"},
+		{"--full-batch-size", "2"},
+		{"--top-k", "4"},
+	} {
+		if !containsOrdered(got, want) {
+			t.Fatalf("explicit override missing %v from args: %#v", want, got)
+		}
+	}
+	if containsString(got, "--no-corpus-prior") {
+		t.Fatalf("explicit --corpus-prior override should not emit --no-corpus-prior: %#v", got)
+	}
+}
+
 func TestTinyGPTTrainArgsResumeSavesBackByDefault(t *testing.T) {
 	got, err := tinyGPTTrainArgs(tinyGPTTrainOptions{
 		output:          "model.bin",
@@ -87,6 +163,14 @@ func TestTinyGPTTrainArgsResumeSavesBackByDefault(t *testing.T) {
 	}
 }
 
+func TestTinyGPTTrainPresetRejectsUnknownValue(t *testing.T) {
+	opts := defaultTinyGPTTrainOptions()
+	opts.preset = "large-chaos"
+	if err := applyTinyGPTTrainPreset(&opts, func(string) bool { return false }); err == nil {
+		t.Fatal("expected unknown preset error")
+	}
+}
+
 func TestTinyGPTTrainArgsRejectsMissingOutput(t *testing.T) {
 	_, err := tinyGPTTrainArgs(tinyGPTTrainOptions{
 		steps:        1,
@@ -103,6 +187,15 @@ func TestTinyGPTTrainArgsRejectsMissingOutput(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected missing output error")
 	}
+}
+
+func containsString(items []string, needle string) bool {
+	for _, item := range items {
+		if item == needle {
+			return true
+		}
+	}
+	return false
 }
 
 func containsOrdered(haystack, needle []string) bool {

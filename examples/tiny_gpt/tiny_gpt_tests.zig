@@ -204,6 +204,42 @@ test "eval split remains disjoint when train limit covers corpus" {
     try testing.expectEqualStrings("tuvwxyz", eval);
 }
 
+test "coherent small preset sets model-only training defaults" {
+    const options = try cli.parseArgs(&.{"--preset", "coherent-small"});
+
+    try testing.expect(options.train_full);
+    try testing.expect(!options.train_demo_head);
+    try testing.expect(!options.corpus_prior);
+    try testing.expectEqual(cli.CorpusPreset.tinystories, options.corpus);
+    try testing.expectEqual(@as(usize, 64), options.model_config.block_size);
+    try testing.expectEqual(@as(usize, 4), options.model_config.n_layer);
+    try testing.expectEqual(@as(usize, 4), options.model_config.n_head);
+    try testing.expectEqual(@as(usize, 128), options.model_config.n_embd);
+    try testing.expectEqual(@as(usize, 3000), options.full_train_steps);
+    try testing.expectApproxEqAbs(@as(f64, 0.001), options.full_learning_rate, 1e-12);
+    try testing.expectApproxEqAbs(@as(f64, 0.0001), options.min_learning_rate, 1e-12);
+    try testing.expectEqual(config_mod.LearningRateSchedule.cosine, options.lr_schedule);
+    try testing.expectEqual(config_mod.OptimizerKind.adamw, options.full_optimizer);
+    try testing.expectEqual(@as(usize, 0), options.train_chars);
+    try testing.expectEqual(@as(usize, 64), options.eval_windows);
+}
+
+test "explicit args override coherent small preset regardless of order" {
+    const options = try cli.parseArgs(&.{
+        "--corpus", "toy",
+        "--block-size", "8",
+        "--preset", "coherent-small",
+        "--top-k", "4",
+        "--corpus-prior",
+    });
+
+    try testing.expectEqual(cli.CorpusPreset.toy, options.corpus);
+    try testing.expectEqual(@as(usize, 8), options.model_config.block_size);
+    try testing.expectEqual(@as(usize, 4), options.top_k);
+    try testing.expect(options.corpus_prior);
+    try testing.expect(options.train_full);
+}
+
 test "learning rate schedule reaches warmup peak and final floor" {
     const options: FullTrainingOptions = .{
         .steps = 6,
@@ -237,13 +273,14 @@ test "full transformer training lowers corpus loss" {
         .batch_size = 2,
         .optimizer = .adamw,
         .weight_decay = 0.01,
+        .random_seed = 21,
         .lr_schedule = .cosine,
         .min_learning_rate = 0.01,
         .eval_windows = 4,
     });
 
     try testing.expect(stats.tokens_seen > 0);
-    try testing.expect(stats.updates == stats.steps * stats.batch_size);
+    try testing.expectEqual(stats.steps, stats.updates);
     try testing.expect(stats.final_loss < stats.initial_loss);
     try testing.expect(stats.validation_initial_loss != null);
     try testing.expectEqual(@as(usize, 4), stats.eval_windows);

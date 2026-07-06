@@ -145,6 +145,8 @@ pub const FullTrainingOptions = struct {
     batch_size: usize = 1,
     optimizer: OptimizerKind = .sgd,
     weight_decay: f64 = 0.0,
+    gradient_clip: f64 = 1.0,
+    random_seed: u64 = 0,
     adam_beta1: f64 = 0.9,
     adam_beta2: f64 = 0.999,
     adam_epsilon: f64 = 1e-8,
@@ -255,6 +257,96 @@ const TrainingOptimizer = struct {
             .len = data.len,
             .m = m,
             .v = v,
+        });
+        return &self.states.items[self.states.items.len - 1];
+    }
+};
+
+const ParamGradient = struct {
+    matrix: *Matrix,
+    ptr: [*]f64,
+    len: usize,
+    gradient: []f64,
+    touched: []bool,
+};
+
+const GradientAccumulator = struct {
+    allocator: std.mem.Allocator,
+    states: std.ArrayList(ParamGradient) = .empty,
+
+    fn init(allocator: std.mem.Allocator) GradientAccumulator {
+        return .{ .allocator = allocator };
+    }
+
+    fn deinit(self: *GradientAccumulator) void {
+        for (self.states.items) |state| {
+            self.allocator.free(state.gradient);
+            self.allocator.free(state.touched);
+        }
+        self.states.deinit(self.allocator);
+    }
+
+    fn add(self: *GradientAccumulator, matrix: *Matrix, index: usize, gradient: f64) !void {
+        if (index >= matrix.data.len) return error.DimensionMismatch;
+        const state = try self.stateFor(matrix);
+        state.gradient[index] += gradient;
+        state.touched[index] = true;
+    }
+
+    fn apply(
+        self: *GradientAccumulator,
+        optimizer: *TrainingOptimizer,
+        batch_size: usize,
+        gradient_clip: f64,
+    ) !void {
+        const batch_scale = 1.0 / @as(f64, @floatFromInt(@max(batch_size, @as(usize, 1))));
+        const norm = self.globalNorm(batch_scale);
+        const clip_scale = if (gradient_clip > 0.0 and norm > gradient_clip)
+            gradient_clip / (norm + 1e-12)
+        else
+            1.0;
+        const scale = batch_scale * clip_scale;
+
+        for (self.states.items) |state| {
+            for (state.gradient, 0..) |gradient, index| {
+                if (!state.touched[index]) continue;
+                try optimizer.update(state.matrix, index, gradient * scale);
+            }
+        }
+    }
+
+    fn globalNorm(self: *const GradientAccumulator, scale: f64) f64 {
+        var sum_sq: f64 = 0.0;
+        for (self.states.items) |state| {
+            for (state.gradient, 0..) |gradient, index| {
+                if (!state.touched[index]) continue;
+                const scaled = gradient * scale;
+                sum_sq += scaled * scaled;
+            }
+        }
+        return @sqrt(sum_sq);
+    }
+
+    fn stateFor(self: *GradientAccumulator, matrix: *Matrix) !*ParamGradient {
+        for (self.states.items) |*state| {
+            if (state.ptr == matrix.data.ptr and state.len == matrix.data.len) {
+                return state;
+            }
+        }
+
+        const gradient = try self.allocator.alloc(f64, matrix.data.len);
+        errdefer self.allocator.free(gradient);
+        const touched = try self.allocator.alloc(bool, matrix.data.len);
+        errdefer self.allocator.free(touched);
+        @memset(gradient, 0.0);
+        @memset(touched, false);
+
+        try self.states.append(self.allocator, .{
+            .matrix = matrix,
+            .ptr = matrix.data.ptr,
+            .len = matrix.data.len,
+            .gradient = gradient,
+            .touched = touched,
         });
         return &self.states.items[self.states.items.len - 1];
     }
@@ -375,9 +467,10 @@ pub fn trainFullOnCorpus(
     const stride = @max(options.stride, @as(usize, 1));
     const window_count = tokens.len - context_len;
     if (window_count == 0) return error.SequenceTooShort;
+    const random_window_count = (window_count + stride - 1) / stride;
     const batch_size = @max(options.batch_size, @as(usize, 1));
     const eval_windows = @max(options.eval_windows, @as(usize, 1));
-    const update_count = options.steps * batch_size;
+    const update_count = options.steps;
 
     var validation_tokens: ?[]usize = null;
     defer if (validation_tokens) |items| allocator.free(items);
@@ -394,22 +487,28 @@ pub fn trainFullOnCorpus(
 
     const initial_loss = try averageCorpusLoss(model, tokens, context_len, eval_windows);
     var optimizer_options = options;
-    optimizer_options.learning_rate = options.learning_rate / @as(f64, @floatFromInt(batch_size));
+    optimizer_options.learning_rate = options.learning_rate;
     var optimizer = TrainingOptimizer.init(allocator, optimizer_options);
     defer optimizer.deinit();
 
-    var update_index: usize = 0;
+    var training_prng = std.Random.DefaultPrng.init(options.random_seed);
+    const random = training_prng.random();
+
     for (0..options.steps) |step| {
-        optimizer.learning_rate = scheduledLearningRate(options, step) /
-            @as(f64, @floatFromInt(batch_size));
-        for (0..batch_size) |batch_item| {
-            const start = ((step * batch_size + batch_item) * stride) % window_count;
-            optimizer.beginStep(update_index + 1);
-            update_index += 1;
+        optimizer.learning_rate = scheduledLearningRate(options, step);
+        var gradients = GradientAccumulator.init(allocator);
+        defer gradients.deinit();
+        for (0..batch_size) |_| {
+            const start = if (random_window_count == 1)
+                0
+            else
+                random.uintLessThan(usize, random_window_count) * stride;
             const inputs = tokens[start .. start + context_len];
             const targets = tokens[start + 1 .. start + context_len + 1];
-            _ = try trainFullStep(model, inputs, targets, &optimizer);
+            _ = try trainFullStep(model, inputs, targets, &gradients);
         }
+        optimizer.beginStep(step + 1);
+        try gradients.apply(&optimizer, batch_size, options.gradient_clip);
     }
     const final_loss = try averageCorpusLoss(model, tokens, context_len, eval_windows);
     const validation_final_loss: ?f64 = if (validation_tokens) |items|
@@ -426,7 +525,7 @@ pub fn trainFullOnCorpus(
         .steps = options.steps,
         .updates = update_count,
         .batch_size = batch_size,
-        .tokens_seen = update_count * context_len,
+        .tokens_seen = options.steps * batch_size * context_len,
         .initial_loss = initial_loss,
         .final_loss = final_loss,
         .validation_initial_loss = validation_initial_loss,
@@ -469,7 +568,7 @@ fn trainFullStep(
     model: *TinyGPT,
     inputs: []const usize,
     targets: []const usize,
-    optimizer: *TrainingOptimizer,
+    gradients: *GradientAccumulator,
 ) !f64 {
     if (inputs.len != targets.len) return error.DimensionMismatch;
 
@@ -485,7 +584,7 @@ fn trainFullStep(
         cache.final_norm,
         grad_logits,
         model.allocator,
-        optimizer,
+        gradients,
     );
     defer grad_final_norm.deinit();
 
@@ -494,7 +593,7 @@ fn trainFullStep(
         cache.final_input,
         grad_final_norm,
         model.allocator,
-        optimizer,
+        gradients,
     );
     errdefer grad_current.deinit();
 
@@ -506,13 +605,13 @@ fn trainFullStep(
             &cache.blocks[i],
             grad_current,
             model.allocator,
-            optimizer,
+            gradients,
         );
         grad_current.deinit();
         grad_current = next_grad;
     }
 
-    try applyEmbeddingGradient(model, inputs, grad_current, optimizer);
+    try applyEmbeddingGradient(model, inputs, grad_current, gradients);
     grad_current.deinit();
 
     return loss;
@@ -683,7 +782,7 @@ fn blockBackward(
     cache: *const BlockTrainCache,
     grad_output: Matrix,
     allocator: std.mem.Allocator,
-    optimizer: *TrainingOptimizer,
+    gradients: *GradientAccumulator,
 ) !Matrix {
     var grad_ln2_out = try mlpBackward(
         &block.mlp,
@@ -692,7 +791,7 @@ fn blockBackward(
         cache.mlp_activated,
         grad_output,
         allocator,
-        optimizer,
+        gradients,
     );
     defer grad_ln2_out.deinit();
 
@@ -701,7 +800,7 @@ fn blockBackward(
         cache.with_attention,
         grad_ln2_out,
         allocator,
-        optimizer,
+        gradients,
     );
     defer grad_with_from_ln2.deinit();
 
@@ -716,7 +815,7 @@ fn blockBackward(
         cache.attn_probs,
         grad_with_attention,
         allocator,
-        optimizer,
+        gradients,
     );
     defer grad_ln1_out.deinit();
 
@@ -725,7 +824,7 @@ fn blockBackward(
         cache.input,
         grad_ln1_out,
         allocator,
-        optimizer,
+        gradients,
     );
     defer grad_input_from_ln1.deinit();
 
@@ -739,9 +838,9 @@ fn mlpBackward(
     activated: Matrix,
     grad_output: Matrix,
     allocator: std.mem.Allocator,
-    optimizer: *TrainingOptimizer,
+    gradients: *GradientAccumulator,
 ) !Matrix {
-    var grad_activated = try linearBackward(&mlp.c_proj, activated, grad_output, allocator, optimizer);
+    var grad_activated = try linearBackward(&mlp.c_proj, activated, grad_output, allocator, gradients);
     defer grad_activated.deinit();
 
     var grad_preact = try Matrix.init(allocator, preact.rows, preact.cols);
@@ -750,7 +849,7 @@ fn mlpBackward(
         grad_preact.data[idx] = grad_activated.data[idx] * geluDerivative(value);
     }
 
-    return linearBackward(&mlp.c_fc, input, grad_preact, allocator, optimizer);
+    return linearBackward(&mlp.c_fc, input, grad_preact, allocator, gradients);
 }
 
 fn attentionBackward(
@@ -761,13 +860,13 @@ fn attentionBackward(
     probs: []const f64,
     grad_output: Matrix,
     allocator: std.mem.Allocator,
-    optimizer: *TrainingOptimizer,
+    gradients: *GradientAccumulator,
 ) !Matrix {
     const seq_len = input.rows;
     const head_dim = attn.n_embd / attn.n_head;
     const scale = 1.0 / @sqrt(@as(f64, @floatFromInt(head_dim)));
 
-    var grad_context = try linearBackward(&attn.c_proj, context, grad_output, allocator, optimizer);
+    var grad_context = try linearBackward(&attn.c_proj, context, grad_output, allocator, gradients);
     defer grad_context.deinit();
 
     var grad_qkv = try Matrix.init(allocator, qkv.rows, qkv.cols);
@@ -809,7 +908,7 @@ fn attentionBackward(
         }
     }
 
-    return linearBackward(&attn.c_attn, input, grad_qkv, allocator, optimizer);
+    return linearBackward(&attn.c_attn, input, grad_qkv, allocator, gradients);
 }
 
 fn linearBackward(
@@ -817,7 +916,7 @@ fn linearBackward(
     input: Matrix,
     grad_output: Matrix,
     allocator: std.mem.Allocator,
-    optimizer: *TrainingOptimizer,
+    gradients: *GradientAccumulator,
 ) !Matrix {
     if (input.rows != grad_output.rows or input.cols != linear.weights.rows or grad_output.cols != linear.weights.cols) {
         return error.DimensionMismatch;
@@ -844,7 +943,7 @@ fn linearBackward(
                 grad_sum += input.data[row * input.cols + in_col] *
                     grad_output.data[row * grad_output.cols + out_col];
             }
-            try optimizer.update(&linear.weights, in_col * linear.weights.cols + out_col, grad_sum);
+            try gradients.add(&linear.weights, in_col * linear.weights.cols + out_col, grad_sum);
         }
     }
 
@@ -853,7 +952,7 @@ fn linearBackward(
         for (0..grad_output.rows) |row| {
             grad_sum += grad_output.data[row * grad_output.cols + out_col];
         }
-        try optimizer.update(&linear.bias, out_col, grad_sum);
+        try gradients.add(&linear.bias, out_col, grad_sum);
     }
 
     return grad_input;
@@ -864,7 +963,7 @@ fn layerNormBackward(
     input: Matrix,
     grad_output: Matrix,
     allocator: std.mem.Allocator,
-    optimizer: *TrainingOptimizer,
+    gradients: *GradientAccumulator,
 ) !Matrix {
     if (input.rows != grad_output.rows or input.cols != grad_output.cols or input.cols != layer_norm.weight.cols) {
         return error.DimensionMismatch;
@@ -923,8 +1022,8 @@ fn layerNormBackward(
     }
 
     for (0..input.cols) |col| {
-        try optimizer.update(&layer_norm.weight, col, grad_weight[col]);
-        try optimizer.update(&layer_norm.bias, col, grad_bias[col]);
+        try gradients.add(&layer_norm.weight, col, grad_weight[col]);
+        try gradients.add(&layer_norm.bias, col, grad_bias[col]);
     }
 
     return grad_input;
@@ -967,7 +1066,7 @@ fn applyEmbeddingGradient(
     model: *TinyGPT,
     tokens: []const usize,
     grad_embedding: Matrix,
-    optimizer: *TrainingOptimizer,
+    gradients: *GradientAccumulator,
 ) !void {
     if (tokens.len != grad_embedding.rows or grad_embedding.cols != model.config.n_embd) {
         return error.DimensionMismatch;
@@ -977,8 +1076,8 @@ fn applyEmbeddingGradient(
         if (token >= model.config.vocab_size) return error.TokenOutOfVocabulary;
         for (0..model.config.n_embd) |dim| {
             const grad = grad_embedding.data[pos * grad_embedding.cols + dim];
-            try optimizer.update(&model.token_embedding, token * model.token_embedding.cols + dim, grad);
-            try optimizer.update(&model.position_embedding, pos * model.position_embedding.cols + dim, grad);
+            try gradients.add(&model.token_embedding, token * model.token_embedding.cols + dim, grad);
+            try gradients.add(&model.position_embedding, pos * model.position_embedding.cols + dim, grad);
         }
     }
 }

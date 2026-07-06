@@ -12,6 +12,7 @@ type tinyGPTTrainOptions struct {
 	mode            string
 	output          string
 	resume          string
+	preset          string
 	corpus          string
 	corpusPath      string
 	steps           int
@@ -65,6 +66,54 @@ func defaultTinyGPTTrainOptions() tinyGPTTrainOptions {
 		temperature:     "0.8",
 		topK:            16,
 		seed:            42,
+	}
+}
+
+func applyTinyGPTTrainPreset(opts *tinyGPTTrainOptions, changed func(string) bool) error {
+	switch opts.preset {
+	case "", "none":
+		return nil
+	case "coherent-small":
+		setStringIfUnchanged(&opts.corpus, "tinystories", "corpus", changed)
+		setIntIfUnchanged(&opts.steps, 3000, "steps", changed)
+		setStringIfUnchanged(&opts.learningRate, "0.001", "learning-rate", changed)
+		setStringIfUnchanged(&opts.minLearningRate, "0.0001", "min-learning-rate", changed)
+		setStringIfUnchanged(&opts.lrSchedule, "cosine", "lr-schedule", changed)
+		setIntIfUnchanged(&opts.warmupSteps, 100, "warmup-steps", changed)
+		setIntIfUnchanged(&opts.batchSize, 12, "batch-size", changed)
+		setIntIfUnchanged(&opts.trainChars, 0, "train-chars", changed)
+		setStringIfUnchanged(&opts.evalSplit, "0.05", "eval-split", changed)
+		setIntIfUnchanged(&opts.evalWindows, 64, "eval-windows", changed)
+		setIntIfUnchanged(&opts.blockSize, 64, "block-size", changed)
+		setIntIfUnchanged(&opts.layers, 4, "layers", changed)
+		setIntIfUnchanged(&opts.heads, 4, "heads", changed)
+		setIntIfUnchanged(&opts.embd, 128, "embd", changed)
+		setStringIfUnchanged(&opts.optimizer, "adamw", "optimizer", changed)
+		setStringIfUnchanged(&opts.weightDecay, "0.01", "weight-decay", changed)
+		setStringIfUnchanged(&opts.temperature, "0.8", "temperature", changed)
+		setIntIfUnchanged(&opts.topK, 16, "top-k", changed)
+		setBoolIfUnchanged(&opts.corpusPrior, false, "corpus-prior", changed)
+		return nil
+	default:
+		return fmt.Errorf("unknown TinyGPT preset %q", opts.preset)
+	}
+}
+
+func setStringIfUnchanged(target *string, value, flag string, changed func(string) bool) {
+	if changed == nil || !changed(flag) {
+		*target = value
+	}
+}
+
+func setIntIfUnchanged(target *int, value int, flag string, changed func(string) bool) {
+	if changed == nil || !changed(flag) {
+		*target = value
+	}
+}
+
+func setBoolIfUnchanged(target *bool, value bool, flag string, changed func(string) bool) {
+	if changed == nil || !changed(flag) {
+		*target = value
 	}
 }
 

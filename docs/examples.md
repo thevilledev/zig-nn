@@ -65,6 +65,6 @@ Tiny GPT can run with the checked-in toy corpus, or with sourced corpora:
 
 ```bash
 ./bin/nnctl data tiny-gpt
-./bin/nnctl train tiny-gpt --corpus tinystories --output tiny-gpt.bin
+./bin/nnctl train tiny-gpt --preset coherent-small --output tiny-gpt.bin
 ./bin/nnctl chat --model tiny-gpt.bin
 ```
