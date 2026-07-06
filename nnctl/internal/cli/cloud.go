@@ -1,0 +1,295 @@
+package cli
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"sort"
+	"strings"
+	"text/tabwriter"
+
+	verdacloud "nnctl/internal/cloud/verda"
+)
+
+type cloudDeployOptions struct {
+	verdacloud.DeployOptions
+	userDataFile string
+	jsonOutput   bool
+}
+
+type cloudSSHKeysOptions struct {
+	baseURL    string
+	jsonOutput bool
+}
+
+type cloudListOptions struct {
+	baseURL    string
+	status     string
+	all        bool
+	jsonOutput bool
+}
+
+type cloudPricingOptions struct {
+	filters    verdacloud.PricingFilters
+	zones      []string
+	baseURL    string
+	sortBy     string
+	jsonOutput bool
+}
+
+func (a *App) newVerdaSDKClient(ctx context.Context, baseURL string) (*verdacloud.SDKClient, error) {
+	creds, err := (verdacloud.KeyringCredentialStore{}).Credentials(ctx)
+	if err != nil {
+		return nil, err
+	}
+	client, err := verdacloud.NewSDKClient(creds, verdacloud.ClientOptions{
+		BaseURL:   baseURL,
+		UserAgent: "nnctl",
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create Verda client: %w", err)
+	}
+	return client, nil
+}
+
+func (a *App) runCloudDeploy(ctx context.Context, opts cloudDeployOptions) error {
+	deployOpts := opts.DeployOptions
+	if opts.userDataFile != "" {
+		script, err := os.ReadFile(opts.userDataFile)
+		if err != nil {
+			return fmt.Errorf("read userdata file: %w", err)
+		}
+		deployOpts.UserDataScript = string(script)
+	}
+
+	var client verdacloud.Client
+	if !deployOpts.DryRun {
+		sdkClient, err := a.newVerdaSDKClient(ctx, deployOpts.BaseURL)
+		if err != nil {
+			return err
+		}
+		client = sdkClient
+	}
+
+	result, err := verdacloud.Deploy(ctx, client, deployOpts)
+	if err != nil {
+		return err
+	}
+	return a.printCloudDeployResult(result, opts.jsonOutput)
+}
+
+func (a *App) runCloudSSHKeys(ctx context.Context, opts cloudSSHKeysOptions) error {
+	client, err := a.newVerdaSDKClient(ctx, opts.baseURL)
+	if err != nil {
+		return err
+	}
+	keys, err := client.ListSSHKeys(ctx)
+	if err != nil {
+		return fmt.Errorf("list Verda SSH keys: %w", err)
+	}
+	return a.printCloudSSHKeys(keys, opts.jsonOutput)
+}
+
+func (a *App) runCloudList(ctx context.Context, opts cloudListOptions) error {
+	client, err := a.newVerdaSDKClient(ctx, opts.baseURL)
+	if err != nil {
+		return err
+	}
+	instances, err := client.ListInstances(ctx, opts.status)
+	if err != nil {
+		return fmt.Errorf("list Verda instances: %w", err)
+	}
+	if opts.status == "" && !opts.all {
+		instances = activeCloudInstances(instances)
+	}
+	return a.printCloudInstances(instances, opts.jsonOutput)
+}
+
+func (a *App) runCloudPricing(ctx context.Context, opts cloudPricingOptions) error {
+	client, err := a.newVerdaSDKClient(ctx, opts.baseURL)
+	if err != nil {
+		return err
+	}
+	prices, err := client.ListSpotPrices(ctx, opts.filters)
+	if err != nil {
+		return fmt.Errorf("list Verda spot prices: %w", err)
+	}
+	verdacloud.SortSpotPrices(prices, opts.sortBy)
+	return a.printCloudPricing(prices, opts.jsonOutput)
+}
+
+func (a *App) printCloudSSHKeys(keys []verdacloud.SSHKey, jsonOutput bool) error {
+	if jsonOutput {
+		enc := json.NewEncoder(a.stdout())
+		enc.SetIndent("", "  ")
+		return enc.Encode(keys)
+	}
+	if len(keys) == 0 {
+		fmt.Fprintln(a.stdout(), "no Verda SSH keys found")
+		return nil
+	}
+
+	w := tabwriter.NewWriter(a.stdout(), 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "ID\tNAME\tFINGERPRINT")
+	for _, key := range keys {
+		fmt.Fprintf(w, "%s\t%s\t%s\n", key.ID, key.Name, key.Fingerprint)
+	}
+	return w.Flush()
+}
+
+func (a *App) printCloudInstances(instances []verdacloud.Instance, jsonOutput bool) error {
+	if jsonOutput {
+		enc := json.NewEncoder(a.stdout())
+		enc.SetIndent("", "  ")
+		return enc.Encode(instances)
+	}
+	if len(instances) == 0 {
+		fmt.Fprintln(a.stdout(), "no Verda instances found")
+		return nil
+	}
+
+	w := tabwriter.NewWriter(a.stdout(), 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "ID\tHOSTNAME\tSTATUS\tTYPE\tLOCATION\tSPOT\tIP")
+	for _, instance := range instances {
+		ip := ""
+		if instance.IP != nil {
+			ip = *instance.IP
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%t\t%s\n",
+			instance.ID,
+			instance.Hostname,
+			instance.Status,
+			instance.InstanceType,
+			instance.Location,
+			instance.IsSpot,
+			ip,
+		)
+	}
+	return w.Flush()
+}
+
+func (a *App) printCloudPricing(prices []verdacloud.SpotPrice, jsonOutput bool) error {
+	if jsonOutput {
+		enc := json.NewEncoder(a.stdout())
+		enc.SetIndent("", "  ")
+		return enc.Encode(prices)
+	}
+	if len(prices) == 0 {
+		fmt.Fprintln(a.stdout(), "no Verda spot prices matched")
+		return nil
+	}
+
+	w := tabwriter.NewWriter(a.stdout(), 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "LOCATION\tINSTANCE TYPE\tGPUS\tMODEL\tSPOT/H\tCURRENCY\tAVAILABLE")
+	for _, price := range prices {
+		fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%s\t%s\t%t\n",
+			price.LocationCode,
+			price.InstanceType,
+			price.GPUCount,
+			firstNonEmpty(price.Model, price.DisplayName),
+			formatCloudPrice(price),
+			price.Currency,
+			price.Available,
+		)
+	}
+	return w.Flush()
+}
+
+func (a *App) printCloudDeployResult(result *verdacloud.DeployResult, jsonOutput bool) error {
+	if jsonOutput {
+		enc := json.NewEncoder(a.stdout())
+		enc.SetIndent("", "  ")
+		return enc.Encode(result)
+	}
+
+	if result.DryRun {
+		location := result.Policy.LocationCode
+		if location == "" {
+			location = result.Policy.LocationSelection
+		}
+		fmt.Fprintf(a.stdout(), "dry run: would deploy %s as a spot single-GPU instance in %s\n", result.Request.InstanceType, location)
+		fmt.Fprintf(a.stdout(), "hostname: %s\n", result.Request.Hostname)
+		fmt.Fprintf(a.stdout(), "image: %s\n", result.Request.Image)
+		fmt.Fprintf(a.stdout(), "startup script: hardcoded userdata\n")
+		return nil
+	}
+
+	instance := result.Instance
+	if instance == nil {
+		return fmt.Errorf("deploy result did not include an instance")
+	}
+	fmt.Fprintf(a.stdout(), "created Verda instance %s\n", instance.ID)
+	fmt.Fprintf(a.stdout(), "hostname: %s\n", instance.Hostname)
+	fmt.Fprintf(a.stdout(), "status: %s\n", instance.Status)
+	fmt.Fprintf(a.stdout(), "instance type: %s\n", instance.InstanceType)
+	fmt.Fprintf(a.stdout(), "location: %s\n", result.Policy.LocationCode)
+	if result.Placement != nil && result.Placement.PriceKnown {
+		currency := result.Placement.Currency
+		if currency == "" {
+			currency = "unknown currency"
+		}
+		fmt.Fprintf(a.stdout(), "spot price: %.4f %s/hour\n", result.Placement.SpotPrice, currency)
+	}
+	fmt.Fprintf(a.stdout(), "spot: %t\n", instance.IsSpot)
+	if instance.IP != nil && *instance.IP != "" {
+		fmt.Fprintf(a.stdout(), "ip: %s\n", *instance.IP)
+	}
+	if result.StartupScript != nil {
+		fmt.Fprintf(a.stdout(), "startup script: %s\n", result.StartupScript.ID)
+	}
+	return nil
+}
+
+func activeCloudInstances(instances []verdacloud.Instance) []verdacloud.Instance {
+	active := instances[:0]
+	for _, instance := range instances {
+		if isActiveCloudStatus(instance.Status) {
+			active = append(active, instance)
+		}
+	}
+	return active
+}
+
+func isActiveCloudStatus(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "new", "ordered", "provisioning", "validating", "running", "pending":
+		return true
+	default:
+		return false
+	}
+}
+
+func sortUniqueStrings(values []string) []string {
+	values = append([]string(nil), values...)
+	for i := range values {
+		values[i] = strings.TrimSpace(values[i])
+	}
+	sort.Strings(values)
+	unique := values[:0]
+	for _, value := range values {
+		if value == "" {
+			continue
+		}
+		if len(unique) == 0 || unique[len(unique)-1] != value {
+			unique = append(unique, value)
+		}
+	}
+	return unique
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return "-"
+}
+
+func formatCloudPrice(price verdacloud.SpotPrice) string {
+	if !price.PriceKnown {
+		return "-"
+	}
+	return fmt.Sprintf("%.4f", price.SpotPrice)
+}

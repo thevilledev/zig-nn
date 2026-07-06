@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"nnctl/internal/catalog"
+	verdacloud "nnctl/internal/cloud/verda"
 	"nnctl/internal/repo"
 )
 
@@ -66,6 +67,7 @@ func (a *App) newRootCommand() *cobra.Command {
 		a.newReleaseCommand(withRepo),
 		a.newTestCommand(withRepo),
 		a.newBenchmarkCommand(withRepo),
+		a.newCloudCommand(),
 		a.newExamplesCommand(withRepo),
 		a.newRunCommand(withRepo),
 		a.newTrainCommand(withRepo),
@@ -191,6 +193,143 @@ raw CSV file to print current-vs-baseline deltas.`,
 	cmd.Flags().BoolVar(&opts.debug, "debug", opts.debug, "run benchmark-debug instead of ReleaseFast benchmark")
 	cmd.Flags().BoolVar(&opts.csv, "csv", opts.csv, "print raw CSV output")
 	cmd.Flags().StringVar(&opts.compare, "compare", opts.compare, "compare current results against a raw benchmark CSV file")
+	cmd.Flags().SortFlags = false
+	return cmd
+}
+
+func (a *App) newCloudCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "cloud <command>",
+		Short: "Deploy cloud GPU benchmark workers",
+		Long:  "Deploys cloud GPU benchmark workers for nnctl agents. Verda deployments are restricted to spot, single-GPU instances.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmd.Help()
+		},
+	}
+	cmd.AddCommand(
+		a.newCloudDeployCommand(),
+		a.newCloudListCommand(),
+		a.newCloudPricingCommand(),
+		a.newCloudSSHKeysCommand(),
+	)
+	return cmd
+}
+
+func (a *App) newCloudDeployCommand() *cobra.Command {
+	opts := cloudDeployOptions{
+		DeployOptions: verdacloud.DefaultDeployOptions(""),
+	}
+	cmd := &cobra.Command{
+		Use:   "deploy",
+		Short: "Deploy a Verda spot GPU worker",
+		Long: `Deploys one Verda GPU instance for nnctl benchmark work.
+The deployment policy is intentionally narrow: spot only and single-GPU instance
+types only. By default nnctl chooses the cheapest currently available spot
+location for the requested instance type. Userdata defaults to the hardcoded
+script in nnctl/internal/cloud/verda/userdata.go.`,
+		Example: `  nnctl cloud deploy --instance-type 1V100.6V --ssh-key-id ssh_key_id
+  nnctl cloud deploy --instance-type 1V100.6V --dry-run --json
+  nnctl cloud deploy --instance-type 1V100.6V --location-code FIN-03
+  nnctl cloud deploy --instance-type 1V100.6V --user-data-file ./bootstrap.sh`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return a.runCloudDeploy(cmd.Context(), opts)
+		},
+	}
+	cmd.Flags().StringVar(&opts.InstanceType, "instance-type", opts.InstanceType, "Verda instance type, for example 1L40S.20V")
+	cmd.Flags().StringVar(&opts.Image, "image", opts.Image, "Verda image")
+	cmd.Flags().StringVar(&opts.Hostname, "hostname", opts.Hostname, "instance hostname")
+	cmd.Flags().StringVar(&opts.Description, "description", opts.Description, "instance description")
+	cmd.Flags().StringArrayVar(&opts.SSHKeyIDs, "ssh-key-id", opts.SSHKeyIDs, "Verda SSH key ID to attach (repeatable)")
+	cmd.Flags().StringVar(&opts.LocationCode, "location-code", opts.LocationCode, "Verda location code; defaults to cheapest currently available spot location")
+	cmd.Flags().StringVar(&opts.StartupScriptName, "startup-script-name", opts.StartupScriptName, "Verda startup script name")
+	cmd.Flags().StringVar(&opts.userDataFile, "user-data-file", opts.userDataFile, "read userdata from a file instead of the hardcoded script")
+	cmd.Flags().StringVar(&opts.BaseURL, "base-url", opts.BaseURL, "Verda API base URL")
+	cmd.Flags().BoolVar(&opts.SkipAvailabilityCheck, "skip-availability-check", opts.SkipAvailabilityCheck, "skip spot availability check before creating the instance")
+	cmd.Flags().BoolVar(&opts.DryRun, "dry-run", opts.DryRun, "print the planned spot deployment without reading keychain credentials")
+	cmd.Flags().BoolVar(&opts.jsonOutput, "json", opts.jsonOutput, "print machine-readable JSON")
+	cmd.Flags().SortFlags = false
+	_ = cmd.MarkFlagRequired("instance-type")
+	return cmd
+}
+
+func (a *App) newCloudSSHKeysCommand() *cobra.Command {
+	opts := cloudSSHKeysOptions{}
+	cmd := &cobra.Command{
+		Use:     "ssh-keys",
+		Aliases: []string{"sshkeys", "ssh-key"},
+		Short:   "List Verda SSH key IDs",
+		Long:    "Lists Verda SSH keys and their UUIDs. Pass one of these IDs to cloud deploy with --ssh-key-id.",
+		Example: `  nnctl cloud ssh-keys
+  nnctl cloud ssh-keys --json
+  nnctl cloud deploy --instance-type 1L40S.20V --ssh-key-id 00000000-0000-0000-0000-000000000000`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return a.runCloudSSHKeys(cmd.Context(), opts)
+		},
+	}
+	cmd.Flags().StringVar(&opts.baseURL, "base-url", opts.baseURL, "Verda API base URL")
+	cmd.Flags().BoolVar(&opts.jsonOutput, "json", opts.jsonOutput, "print machine-readable JSON")
+	cmd.Flags().SortFlags = false
+	return cmd
+}
+
+func (a *App) newCloudListCommand() *cobra.Command {
+	opts := cloudListOptions{}
+	cmd := &cobra.Command{
+		Use:   "list",
+		Short: "List active Verda instances",
+		Long:  "Lists active Verda instances by default. Use --all to include inactive instances or --status to query one Verda status.",
+		Example: `  nnctl cloud list
+  nnctl cloud list --all
+  nnctl cloud list --status running
+  nnctl cloud list --json`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return a.runCloudList(cmd.Context(), opts)
+		},
+	}
+	cmd.Flags().StringVar(&opts.status, "status", opts.status, "Verda instance status filter, for example running")
+	cmd.Flags().BoolVar(&opts.all, "all", opts.all, "include inactive instances")
+	cmd.Flags().StringVar(&opts.baseURL, "base-url", opts.baseURL, "Verda API base URL")
+	cmd.Flags().BoolVar(&opts.jsonOutput, "json", opts.jsonOutput, "print machine-readable JSON")
+	cmd.Flags().SortFlags = false
+	return cmd
+}
+
+func (a *App) newCloudPricingCommand() *cobra.Command {
+	opts := cloudPricingOptions{
+		sortBy: "price",
+	}
+	opts.filters.AvailableOnly = true
+	cmd := &cobra.Command{
+		Use:   "pricing",
+		Short: "List Verda spot prices",
+		Long:  "Lists Verda spot prices with filters for location, instance type, GPU model, manufacturer, and GPU count.",
+		Example: `  nnctl cloud pricing
+  nnctl cloud pricing --single-gpu
+  nnctl cloud pricing --zone FIN-02 --model L40
+  nnctl cloud pricing --instance-type 1L40S.20V --json
+  nnctl cloud pricing --available-only=false --sort location`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			opts.filters.LocationCodes = append(opts.filters.LocationCodes, opts.zones...)
+			opts.filters.LocationCodes = sortUniqueStrings(opts.filters.LocationCodes)
+			opts.filters.InstanceTypes = sortUniqueStrings(opts.filters.InstanceTypes)
+			return a.runCloudPricing(cmd.Context(), opts)
+		},
+	}
+	cmd.Flags().StringArrayVar(&opts.filters.LocationCodes, "location-code", opts.filters.LocationCodes, "Verda location code filter (repeatable)")
+	cmd.Flags().StringArrayVar(&opts.zones, "zone", opts.zones, "alias for --location-code")
+	cmd.Flags().StringArrayVar(&opts.filters.InstanceTypes, "instance-type", opts.filters.InstanceTypes, "Verda instance type filter (repeatable)")
+	cmd.Flags().StringVar(&opts.filters.Model, "model", opts.filters.Model, "GPU model/display substring filter")
+	cmd.Flags().StringVar(&opts.filters.Manufacturer, "manufacturer", opts.filters.Manufacturer, "GPU manufacturer substring filter")
+	cmd.Flags().BoolVar(&opts.filters.SingleGPU, "single-gpu", opts.filters.SingleGPU, "only show single-GPU instance types")
+	cmd.Flags().BoolVar(&opts.filters.AvailableOnly, "available-only", opts.filters.AvailableOnly, "only show currently available spot instance types")
+	cmd.Flags().StringVar(&opts.filters.Currency, "currency", opts.filters.Currency, "Verda pricing currency")
+	cmd.Flags().StringVar(&opts.sortBy, "sort", opts.sortBy, "sort by price, location, or instance-type")
+	cmd.Flags().StringVar(&opts.baseURL, "base-url", opts.baseURL, "Verda API base URL")
+	cmd.Flags().BoolVar(&opts.jsonOutput, "json", opts.jsonOutput, "print machine-readable JSON")
 	cmd.Flags().SortFlags = false
 	return cmd
 }
