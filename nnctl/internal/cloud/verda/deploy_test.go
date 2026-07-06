@@ -2,10 +2,21 @@ package verdacloud
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestDefaultUserDataScriptMatchesBootstrap(t *testing.T) {
+	bootstrap, err := os.ReadFile("../../../../bootstrap.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if DefaultUserDataScript != string(bootstrap) {
+		t.Fatal("DefaultUserDataScript must match bootstrap.sh")
+	}
+}
 
 func TestNormalizeDeployOptionsDefaultsToSpotFinlandPolicyInputs(t *testing.T) {
 	opts, err := DefaultDeployOptions("1V100.6V").normalized(time.Date(2026, 7, 6, 12, 34, 56, 0, time.UTC))
@@ -22,7 +33,7 @@ func TestNormalizeDeployOptionsDefaultsToSpotFinlandPolicyInputs(t *testing.T) {
 	if opts.StartupScriptName != opts.Hostname+"-userdata" {
 		t.Fatalf("StartupScriptName = %q", opts.StartupScriptName)
 	}
-	if !strings.Contains(opts.UserDataScript, "nnctl") {
+	if !strings.Contains(opts.UserDataScript, "cuda-toolkit-13-0") {
 		t.Fatalf("UserDataScript did not contain expected bootstrap marker")
 	}
 }

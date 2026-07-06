@@ -1,8 +1,4 @@
-package verdacloud
-
-// DefaultUserDataScript mirrors bootstrap.sh so the deployed benchmark worker
-// image has CUDA, Zig, and linker paths ready before nnctl agents connect.
-const DefaultUserDataScript = `#!/bin/bash
+#!/bin/bash
 set -euxo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
@@ -74,4 +70,3 @@ EOF
 /usr/local/bin/zig version
 /usr/bin/test -f /usr/local/cuda/include/cuda.h
 /usr/bin/find -L /usr/local/cuda -maxdepth 3 \( -name cuda.h -o -name 'libnvrtc.so*' -o -name 'libcuda.so*' \) -print
-`
