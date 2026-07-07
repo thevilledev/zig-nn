@@ -332,15 +332,15 @@ func TestPrintCloudPricingPlainText(t *testing.T) {
 	var stdout bytes.Buffer
 	app := &App{Stdout: &stdout}
 
-	err := app.printCloudPricing([]verdacloud.SpotPrice{
-		{LocationCode: "FIN-02", InstanceType: "1L40S.20V", GPUCount: 1, Model: "L40S", SpotPrice: 0.42, PriceKnown: true, Currency: "eur", Available: true},
+	err := app.printCloudPricing([]verdacloud.InstancePrice{
+		{LocationCode: "FIN-02", Market: "spot", IsSpot: true, InstanceType: "1L40S.20V", GPUCount: 1, Model: "L40S", PricePerHour: 0.42, PriceKnown: true, Currency: "eur", Available: true},
 	}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	output := stdout.String()
-	for _, want := range []string{"LOCATION", "INSTANCE TYPE", "SPOT/H", "FIN-02", "1L40S.20V", "L40S", "0.4200", "eur", "true"} {
+	for _, want := range []string{"LOCATION", "MARKET", "INSTANCE TYPE", "PRICE/H", "FIN-02", "spot", "1L40S.20V", "L40S", "0.4200", "eur", "true"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("pricing output missing %q:\n%s", want, output)
 		}
@@ -351,18 +351,60 @@ func TestPrintCloudPricingJSON(t *testing.T) {
 	var stdout bytes.Buffer
 	app := &App{Stdout: &stdout}
 
-	err := app.printCloudPricing([]verdacloud.SpotPrice{
-		{LocationCode: "FIN-02", InstanceType: "1L40S.20V", GPUCount: 1, Model: "L40S", SpotPrice: 0.42, PriceKnown: true, Currency: "eur", Available: true},
+	err := app.printCloudPricing([]verdacloud.InstancePrice{
+		{LocationCode: "FIN-02", Market: "spot", IsSpot: true, InstanceType: "1L40S.20V", GPUCount: 1, Model: "L40S", PricePerHour: 0.42, PriceKnown: true, Currency: "eur", Available: true},
 	}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	var prices []verdacloud.SpotPrice
+	var prices []verdacloud.InstancePrice
 	if err := json.Unmarshal(stdout.Bytes(), &prices); err != nil {
 		t.Fatalf("invalid JSON output: %v\n%s", err, stdout.String())
 	}
-	if len(prices) != 1 || prices[0].InstanceType != "1L40S.20V" || prices[0].LocationCode != "FIN-02" {
+	if len(prices) != 1 || prices[0].InstanceType != "1L40S.20V" || prices[0].LocationCode != "FIN-02" || prices[0].Market != "spot" {
 		t.Fatalf("unexpected prices: %#v", prices)
+	}
+}
+
+func TestResolveCloudPricingGPUCounts(t *testing.T) {
+	tests := []struct {
+		name             string
+		opts             cloudPricingOptions
+		singleGPUChanged bool
+		gpuCountChanged  bool
+		want             []int
+		wantErr          bool
+	}{
+		{name: "default single gpu", want: []int{1}},
+		{name: "explicit cpu", opts: cloudPricingOptions{gpuCounts: []int{0}}, gpuCountChanged: true, want: []int{0}},
+		{name: "explicit multi gpu", opts: cloudPricingOptions{gpuCounts: []int{8, 1, 8}}, gpuCountChanged: true, want: []int{1, 8}},
+		{name: "all gpu counts", opts: cloudPricingOptions{allGPU: true}, want: nil},
+		{name: "single gpu false disables default", opts: cloudPricingOptions{singleGPU: false}, singleGPUChanged: true, want: nil},
+		{name: "all conflicts with gpu count", opts: cloudPricingOptions{allGPU: true, gpuCounts: []int{0}}, gpuCountChanged: true, wantErr: true},
+		{name: "all conflicts with single gpu", opts: cloudPricingOptions{allGPU: true, singleGPU: true}, singleGPUChanged: true, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := resolveCloudPricingGPUCounts(tt.opts, tt.singleGPUChanged, tt.gpuCountChanged)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got) != len(tt.want) {
+				t.Fatalf("GPUCounts = %#v, want %#v", got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Fatalf("GPUCounts = %#v, want %#v", got, tt.want)
+				}
+			}
+		})
 	}
 }

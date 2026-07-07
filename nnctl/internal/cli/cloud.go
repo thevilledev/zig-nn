@@ -43,6 +43,9 @@ type cloudListOptions struct {
 type cloudPricingOptions struct {
 	filters    verdacloud.PricingFilters
 	zones      []string
+	gpuCounts  []int
+	singleGPU  bool
+	allGPU     bool
 	baseURL    string
 	sortBy     string
 	jsonOutput bool
@@ -182,15 +185,20 @@ func writeCloudPackerTemplate(outputDir string, force bool) ([]string, error) {
 }
 
 func (a *App) runCloudPricing(ctx context.Context, opts cloudPricingOptions) error {
+	opts.filters = verdacloud.NormalizePricingFilters(opts.filters)
+	if err := verdacloud.ValidatePricingFilters(opts.filters); err != nil {
+		return err
+	}
+
 	client, err := a.newVerdaSDKClient(ctx, opts.baseURL)
 	if err != nil {
 		return err
 	}
-	prices, err := client.ListSpotPrices(ctx, opts.filters)
+	prices, err := client.ListInstancePrices(ctx, opts.filters)
 	if err != nil {
-		return fmt.Errorf("list Verda spot prices: %w", err)
+		return fmt.Errorf("list Verda prices: %w", err)
 	}
-	verdacloud.SortSpotPrices(prices, opts.sortBy)
+	verdacloud.SortInstancePrices(prices, opts.sortBy)
 	return a.printCloudPricing(prices, opts.jsonOutput)
 }
 
@@ -270,22 +278,23 @@ func (a *App) printCloudInstances(instances []verdacloud.Instance, jsonOutput bo
 	return w.Flush()
 }
 
-func (a *App) printCloudPricing(prices []verdacloud.SpotPrice, jsonOutput bool) error {
+func (a *App) printCloudPricing(prices []verdacloud.InstancePrice, jsonOutput bool) error {
 	if jsonOutput {
 		enc := json.NewEncoder(a.stdout())
 		enc.SetIndent("", "  ")
 		return enc.Encode(prices)
 	}
 	if len(prices) == 0 {
-		fmt.Fprintln(a.stdout(), "no Verda spot prices matched")
+		fmt.Fprintln(a.stdout(), "no Verda prices matched")
 		return nil
 	}
 
 	w := tabwriter.NewWriter(a.stdout(), 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "LOCATION\tINSTANCE TYPE\tGPUS\tMODEL\tSPOT/H\tCURRENCY\tAVAILABLE")
+	fmt.Fprintln(w, "LOCATION\tMARKET\tINSTANCE TYPE\tGPUS\tMODEL\tPRICE/H\tCURRENCY\tAVAILABLE")
 	for _, price := range prices {
-		fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%s\t%s\t%t\n",
+		fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\t%s\t%s\t%t\n",
 			price.LocationCode,
+			price.Market,
 			price.InstanceType,
 			price.GPUCount,
 			firstNonEmpty(price.Model, price.DisplayName),
@@ -423,9 +432,43 @@ func pluralSuffix[T any](values []T) string {
 	return "s"
 }
 
-func formatCloudPrice(price verdacloud.SpotPrice) string {
+func resolveCloudPricingGPUCounts(opts cloudPricingOptions, singleGPUChanged, gpuCountChanged bool) ([]int, error) {
+	if opts.allGPU {
+		if gpuCountChanged {
+			return nil, fmt.Errorf("--all-gpu-counts cannot be combined with --gpu-count")
+		}
+		if singleGPUChanged && opts.singleGPU {
+			return nil, fmt.Errorf("--all-gpu-counts cannot be combined with --single-gpu")
+		}
+		return nil, nil
+	}
+	if gpuCountChanged {
+		return sortUniqueInts(opts.gpuCounts), nil
+	}
+	if singleGPUChanged {
+		if opts.singleGPU {
+			return []int{1}, nil
+		}
+		return nil, nil
+	}
+	return []int{1}, nil
+}
+
+func sortUniqueInts(values []int) []int {
+	values = append([]int(nil), values...)
+	sort.Ints(values)
+	unique := values[:0]
+	for _, value := range values {
+		if len(unique) == 0 || unique[len(unique)-1] != value {
+			unique = append(unique, value)
+		}
+	}
+	return unique
+}
+
+func formatCloudPrice(price verdacloud.InstancePrice) string {
 	if !price.PriceKnown {
 		return "-"
 	}
-	return fmt.Sprintf("%.4f", price.SpotPrice)
+	return fmt.Sprintf("%.4f", price.PricePerHour)
 }

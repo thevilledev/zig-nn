@@ -103,47 +103,59 @@ func (c *SDKClient) ListInstances(ctx context.Context, status string) ([]Instanc
 	return result, nil
 }
 
-func (c *SDKClient) ListSpotPrices(ctx context.Context, filters PricingFilters) ([]SpotPrice, error) {
+func (c *SDKClient) ListInstancePrices(ctx context.Context, filters PricingFilters) ([]InstancePrice, error) {
 	filters = NormalizePricingFilters(filters)
-	availability, err := c.spotAvailabilityByLocation(ctx)
-	if err != nil {
+	if err := ValidatePricingFilters(filters); err != nil {
 		return nil, err
 	}
 
-	locationCodes := filters.LocationCodes
-	if len(locationCodes) == 0 {
-		for locationCode := range availability {
-			locationCodes = append(locationCodes, locationCode)
-		}
-		sort.Strings(locationCodes)
-	}
-
 	seen := map[string]bool{}
-	var prices []SpotPrice
-	for _, locationCode := range locationCodes {
-		instanceTypes, err := c.getInstanceTypes(ctx, true, locationCode, filters.Currency)
+	var prices []InstancePrice
+	for _, market := range pricingMarkets(filters.Market) {
+		spot := market == PricingMarketSpot
+		availability, err := c.availabilityByLocation(ctx, spot)
 		if err != nil {
-			return nil, fmt.Errorf("get spot prices for %s: %w", locationCode, err)
+			return nil, err
 		}
-		for _, info := range instanceTypes {
-			available := availability[locationCode][strings.ToUpper(info.InstanceType)]
-			price := spotPriceFromInstanceType(info, locationCode, available)
-			if !SpotPriceMatchesFilters(price, filters) {
-				continue
+
+		locationCodes := filters.LocationCodes
+		if len(locationCodes) == 0 {
+			locationCodes = make([]string, 0, len(availability))
+			for locationCode := range availability {
+				locationCodes = append(locationCodes, locationCode)
 			}
-			key := strings.ToUpper(price.LocationCode) + "\x00" + strings.ToUpper(price.InstanceType)
-			if seen[key] {
-				continue
+			sort.Strings(locationCodes)
+		}
+
+		for _, locationCode := range locationCodes {
+			instanceTypes, err := c.getInstanceTypes(ctx, spot, locationCode, filters.Currency)
+			if err != nil {
+				return nil, fmt.Errorf("get %s prices for %s: %w", market, locationCode, err)
 			}
-			seen[key] = true
-			prices = append(prices, price)
+			for _, info := range instanceTypes {
+				available := availability[locationCode][strings.ToUpper(info.InstanceType)]
+				price := instancePriceFromInstanceType(info, locationCode, market, available)
+				if !InstancePriceMatchesFilters(price, filters) {
+					continue
+				}
+				key := strings.Join([]string{
+					strings.ToUpper(price.Market),
+					strings.ToUpper(price.LocationCode),
+					strings.ToUpper(price.InstanceType),
+				}, "\x00")
+				if seen[key] {
+					continue
+				}
+				seen[key] = true
+				prices = append(prices, price)
+			}
 		}
 	}
 	return prices, nil
 }
 
-func (c *SDKClient) spotAvailabilityByLocation(ctx context.Context) (map[string]map[string]bool, error) {
-	availabilities, err := c.client.InstanceAvailability.GetAllAvailabilities(ctx, true, "")
+func (c *SDKClient) availabilityByLocation(ctx context.Context, spot bool) (map[string]map[string]bool, error) {
+	availabilities, err := c.client.InstanceAvailability.GetAllAvailabilities(ctx, spot, "")
 	if err != nil {
 		return nil, err
 	}
@@ -205,20 +217,30 @@ func instanceTypeFromSDK(info sdkverda.InstanceTypeInfo) InstanceType {
 	}
 }
 
-func spotPriceFromInstanceType(info sdkverda.InstanceTypeInfo, locationCode string, available bool) SpotPrice {
-	price, known := spotPriceFromSDK(info)
-	return SpotPrice{
+func instancePriceFromInstanceType(info sdkverda.InstanceTypeInfo, locationCode, market string, available bool) InstancePrice {
+	price, known := instancePriceFromSDK(info, market == PricingMarketSpot)
+	return InstancePrice{
 		InstanceType: info.InstanceType,
 		DisplayName:  info.DisplayName,
 		Model:        info.Model,
 		Manufacturer: info.Manufacturer,
 		GPUCount:     info.GPU.NumberOfGPUs,
 		LocationCode: locationCode,
-		SpotPrice:    price,
+		Market:       market,
+		IsSpot:       market == PricingMarketSpot,
+		PricePerHour: price,
 		PriceKnown:   known,
 		Currency:     info.Currency,
 		Available:    available,
 	}
+}
+
+func instancePriceFromSDK(info sdkverda.InstanceTypeInfo, spot bool) (float64, bool) {
+	if spot {
+		return spotPriceFromSDK(info)
+	}
+	price := info.PricePerHour.Float64()
+	return price, price > 0
 }
 
 func spotPriceFromSDK(info sdkverda.InstanceTypeInfo) (float64, bool) {

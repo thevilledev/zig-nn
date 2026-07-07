@@ -389,12 +389,14 @@ func (a *App) newCloudPricingCommand() *cobra.Command {
 		sortBy: "price",
 	}
 	opts.filters.AvailableOnly = true
+	opts.filters.Market = verdacloud.PricingMarketSpot
 	cmd := &cobra.Command{
 		Use:   "pricing",
-		Short: "List Verda spot prices",
-		Long:  "Lists Verda spot prices with filters for location, instance type, GPU model, manufacturer, and GPU count.",
+		Short: "List Verda instance prices",
+		Long:  "Lists Verda instance prices with filters for market, location, instance type, GPU model, manufacturer, and GPU count.",
 		Example: `  nnctl cloud pricing
-  nnctl cloud pricing --single-gpu
+  nnctl cloud pricing --market on-demand --gpu-count 0
+  nnctl cloud pricing --market all --all-gpu-counts
   nnctl cloud pricing --zone FIN-02 --model L40
   nnctl cloud pricing --instance-type 1L40S.20V --json
   nnctl cloud pricing --available-only=false --sort location`,
@@ -403,18 +405,30 @@ func (a *App) newCloudPricingCommand() *cobra.Command {
 			opts.filters.LocationCodes = append(opts.filters.LocationCodes, opts.zones...)
 			opts.filters.LocationCodes = sortUniqueStrings(opts.filters.LocationCodes)
 			opts.filters.InstanceTypes = sortUniqueStrings(opts.filters.InstanceTypes)
+			gpuCounts, err := resolveCloudPricingGPUCounts(
+				opts,
+				cmd.Flags().Changed("single-gpu"),
+				cmd.Flags().Changed("gpu-count"),
+			)
+			if err != nil {
+				return err
+			}
+			opts.filters.GPUCounts = gpuCounts
 			return a.runCloudPricing(cmd.Context(), opts)
 		},
 	}
 	cmd.Flags().StringArrayVar(&opts.filters.LocationCodes, "location-code", opts.filters.LocationCodes, "Verda location code filter (repeatable)")
 	cmd.Flags().StringArrayVar(&opts.zones, "zone", opts.zones, "alias for --location-code")
 	cmd.Flags().StringArrayVar(&opts.filters.InstanceTypes, "instance-type", opts.filters.InstanceTypes, "Verda instance type filter (repeatable)")
+	cmd.Flags().StringVar(&opts.filters.Market, "market", opts.filters.Market, "pricing market: spot, on-demand, or all")
 	cmd.Flags().StringVar(&opts.filters.Model, "model", opts.filters.Model, "GPU model/display substring filter")
 	cmd.Flags().StringVar(&opts.filters.Manufacturer, "manufacturer", opts.filters.Manufacturer, "GPU manufacturer substring filter")
-	cmd.Flags().BoolVar(&opts.filters.SingleGPU, "single-gpu", opts.filters.SingleGPU, "only show single-GPU instance types")
-	cmd.Flags().BoolVar(&opts.filters.AvailableOnly, "available-only", opts.filters.AvailableOnly, "only show currently available spot instance types")
+	cmd.Flags().BoolVar(&opts.singleGPU, "single-gpu", opts.singleGPU, "only show single-GPU instance types")
+	cmd.Flags().IntSliceVar(&opts.gpuCounts, "gpu-count", opts.gpuCounts, "GPU count filter; use 0 for CPU-only types (repeatable or comma-separated)")
+	cmd.Flags().BoolVar(&opts.allGPU, "all-gpu-counts", opts.allGPU, "show CPU, single-GPU, and multi-GPU instance types")
+	cmd.Flags().BoolVar(&opts.filters.AvailableOnly, "available-only", opts.filters.AvailableOnly, "only show currently available instance types")
 	cmd.Flags().StringVar(&opts.filters.Currency, "currency", opts.filters.Currency, "Verda pricing currency")
-	cmd.Flags().StringVar(&opts.sortBy, "sort", opts.sortBy, "sort by price, location, or instance-type")
+	cmd.Flags().StringVar(&opts.sortBy, "sort", opts.sortBy, "sort by price, market, location, or instance-type")
 	cmd.Flags().StringVar(&opts.baseURL, "base-url", opts.baseURL, "Verda API base URL")
 	cmd.Flags().BoolVar(&opts.jsonOutput, "json", opts.jsonOutput, "print machine-readable JSON")
 	cmd.Flags().SortFlags = false
