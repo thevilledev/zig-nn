@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"time"
 
 	sdkverda "github.com/verda-cloud/verdacloud-sdk-go/pkg/verda"
 )
@@ -263,6 +264,63 @@ func (c *SDKClient) CreateStartupScript(ctx context.Context, name, script string
 	}, nil
 }
 
+func (c *SDKClient) CloneVolume(ctx context.Context, req CloneVolumeRequest) (Volume, error) {
+	volumeID := strings.TrimSpace(req.SourceVolumeID)
+	if volumeID == "" {
+		return Volume{}, fmt.Errorf("source volume ID is required")
+	}
+	createdID, err := c.client.Volumes.CloneVolume(ctx, volumeID, sdkverda.VolumeCloneRequest{
+		Name:         req.Name,
+		LocationCode: req.LocationCode,
+	})
+	if err != nil {
+		return Volume{}, err
+	}
+	return Volume{
+		ID:       createdID,
+		Name:     req.Name,
+		Location: req.LocationCode,
+	}, nil
+}
+
+func (c *SDKClient) WaitVolumeReady(ctx context.Context, volumeID string) (Volume, error) {
+	ctx, cancel := context.WithTimeout(ctx, VolumeReadyTimeout)
+	defer cancel()
+
+	for {
+		volume, err := c.getVolume(ctx, volumeID)
+		if err != nil {
+			return Volume{}, err
+		}
+		if volumeReadyStatus(volume.Status) {
+			return volume, nil
+		}
+		if volumeFailedStatus(volume.Status) {
+			return Volume{}, fmt.Errorf("volume %s entered terminal status %q", volumeID, volume.Status)
+		}
+
+		timer := time.NewTimer(VolumeReadyPoll)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return Volume{}, fmt.Errorf("timed out waiting for volume %s to become ready: %w", volumeID, ctx.Err())
+		case <-timer.C:
+		}
+	}
+}
+
+func (c *SDKClient) getVolume(ctx context.Context, volumeID string) (Volume, error) {
+	volume, err := c.client.Volumes.GetVolume(ctx, volumeID)
+	if err != nil {
+		return Volume{}, err
+	}
+	return volumeFromSDK(*volume), nil
+}
+
+func (c *SDKClient) DeleteVolume(ctx context.Context, volumeID string, force bool) error {
+	return c.client.Volumes.DeleteVolume(ctx, volumeID, force)
+}
+
 func (c *SDKClient) CreateInstance(ctx context.Context, req CreateInstanceRequest) (Instance, error) {
 	sdkReq := sdkverda.CreateInstanceRequest{
 		InstanceType: req.InstanceType,
@@ -306,6 +364,34 @@ func (c *SDKClient) DestroyInstances(ctx context.Context, req DestroyInstanceReq
 		})
 	}
 	return destroyResults, nil
+}
+
+func volumeFromSDK(volume sdkverda.Volume) Volume {
+	return Volume{
+		ID:         volume.ID,
+		Name:       volume.Name,
+		Status:     volume.Status,
+		Location:   volume.Location,
+		IsOSVolume: volume.IsOSVolume,
+	}
+}
+
+func volumeReadyStatus(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case sdkverda.VolumeStatusCreated, sdkverda.VolumeStatusDetached:
+		return true
+	default:
+		return false
+	}
+}
+
+func volumeFailedStatus(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case sdkverda.VolumeStatusDeleted, sdkverda.VolumeStatusDeleting, sdkverda.VolumeStatusCanceled, sdkverda.VolumeStatusCanceling:
+		return true
+	default:
+		return false
+	}
 }
 
 func instanceFromSDK(instance sdkverda.Instance) Instance {

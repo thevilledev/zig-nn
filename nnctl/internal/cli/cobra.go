@@ -243,6 +243,7 @@ func (a *App) newCloudCommand() *cobra.Command {
 	cmd.AddCommand(
 		a.newCloudDeployCommand(),
 		a.newCloudDestroyCommand(),
+		a.newCloudPackerTemplateCommand(),
 		a.newCloudListCommand(),
 		a.newCloudPricingCommand(),
 		a.newCloudSSHKeysCommand(),
@@ -262,17 +263,17 @@ The deployment policy is intentionally narrow: spot only and single-GPU instance
 types only. By default nnctl chooses the cheapest currently available spot
 location for the requested instance type. Userdata defaults to the embedded
 script from nnctl/internal/cloud/verda/bootstrap.sh.`,
-		Example: `  nnctl cloud deploy --instance-type 1V100.6V --ssh-key-id ssh_key_id
-  nnctl cloud deploy --instance-type 1V100.6V --dry-run --json
-  nnctl cloud deploy --instance-type 1V100.6V --location-code FIN-03
-  nnctl cloud deploy --instance-type 1V100.6V --user-data-file ./custom-bootstrap.sh`,
+		Example: `  nnctl cloud deploy --instance-type 1V100.6V --source-os-volume-id volume_id --ssh-key-id ssh_key_id
+  nnctl cloud deploy --instance-type 1V100.6V --source-os-volume-id volume_id --dry-run --json
+  nnctl cloud deploy --instance-type 1V100.6V --source-os-volume-id volume_id --location-code FIN-03
+  nnctl cloud deploy --instance-type 1V100.6V --source-os-volume-id volume_id --user-data-file ./custom-bootstrap.sh`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return a.runCloudDeploy(cmd.Context(), opts)
 		},
 	}
 	cmd.Flags().StringVar(&opts.InstanceType, "instance-type", opts.InstanceType, "Verda instance type, for example 1L40S.20V")
-	cmd.Flags().StringVar(&opts.Image, "image", opts.Image, "Verda image")
+	cmd.Flags().StringVar(&opts.SourceOSVolumeID, "source-os-volume-id", opts.SourceOSVolumeID, "Packer-built Verda OS volume ID to clone for this instance")
 	cmd.Flags().StringVar(&opts.Hostname, "hostname", opts.Hostname, "instance hostname")
 	cmd.Flags().StringVar(&opts.Description, "description", opts.Description, "instance description")
 	cmd.Flags().StringArrayVar(&opts.SSHKeyIDs, "ssh-key-id", opts.SSHKeyIDs, "Verda SSH key ID to attach (repeatable)")
@@ -285,6 +286,7 @@ script from nnctl/internal/cloud/verda/bootstrap.sh.`,
 	cmd.Flags().BoolVar(&opts.jsonOutput, "json", opts.jsonOutput, "print machine-readable JSON")
 	cmd.Flags().SortFlags = false
 	_ = cmd.MarkFlagRequired("instance-type")
+	_ = cmd.MarkFlagRequired("source-os-volume-id")
 	return cmd
 }
 
@@ -300,7 +302,7 @@ func (a *App) newCloudDestroyCommand() *cobra.Command {
 		Example: `  nnctl cloud destroy instance_id
   nnctl cloud destroy instance_id --dry-run
   nnctl cloud destroy instance_id --permanent=false
-  nnctl cloud destroy instance_id --volume-id volume_id --json`,
+  nnctl cloud destroy instance_id --volume-id cloned_os_volume_id --source-os-volume-id source_os_volume_id --json`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.InstanceIDs = args
@@ -308,10 +310,29 @@ func (a *App) newCloudDestroyCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringArrayVar(&opts.VolumeIDs, "volume-id", opts.VolumeIDs, "Verda volume ID to delete with the instance (repeatable)")
+	cmd.Flags().StringVar(&opts.SourceOSVolumeID, "source-os-volume-id", opts.SourceOSVolumeID, "protect this golden Packer source OS volume ID from cleanup")
 	cmd.Flags().BoolVar(&opts.DeletePermanently, "permanent", opts.DeletePermanently, "delete permanently instead of using Verda's non-permanent delete")
 	cmd.Flags().StringVar(&opts.BaseURL, "base-url", opts.BaseURL, "Verda API base URL")
 	cmd.Flags().BoolVar(&opts.DryRun, "dry-run", opts.DryRun, "print the planned destroy request without reading keychain credentials")
 	cmd.Flags().BoolVar(&opts.jsonOutput, "json", opts.jsonOutput, "print machine-readable JSON")
+	cmd.Flags().SortFlags = false
+	return cmd
+}
+
+func (a *App) newCloudPackerTemplateCommand() *cobra.Command {
+	opts := cloudPackerTemplateOptions{}
+	cmd := &cobra.Command{
+		Use:   "packer-template DIR",
+		Short: "Write Verda Packer template files",
+		Long:  "Writes the embedded Verda Packer template and bootstrap script used to build the golden OS volume for nnctl cloud deploy.",
+		Example: `  nnctl cloud packer-template ./packer/verda
+  cd ./packer/verda && packer init . && packer build .`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return a.runCloudPackerTemplate(args[0], opts)
+		},
+	}
+	cmd.Flags().BoolVar(&opts.force, "force", opts.force, "overwrite existing template files")
 	cmd.Flags().SortFlags = false
 	return cmd
 }

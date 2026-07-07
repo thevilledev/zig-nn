@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 
@@ -14,7 +15,7 @@ func TestCloudDeployDryRunJSON(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	app := &App{Stdout: &stdout, Stderr: &stderr}
 
-	err := app.Run(context.Background(), []string{"cloud", "deploy", "--instance-type", "1V100.6V", "--dry-run", "--json"})
+	err := app.Run(context.Background(), []string{"cloud", "deploy", "--instance-type", "1V100.6V", "--source-os-volume-id", "vol-golden", "--dry-run", "--json"})
 	if err != nil {
 		t.Fatalf("Run() error = %v\nstderr:\n%s", err, stderr.String())
 	}
@@ -28,7 +29,8 @@ func TestCloudDeployDryRunJSON(t *testing.T) {
 			SpotOnly          bool   `json:"spot_only"`
 			SingleGPU         bool   `json:"single_gpu"`
 		} `json:"policy"`
-		Request struct {
+		SourceOSVolumeID string `json:"source_os_volume_id"`
+		Request          struct {
 			InstanceType string `json:"instance_type"`
 			LocationCode string `json:"location_code"`
 			Contract     string `json:"contract"`
@@ -45,6 +47,9 @@ func TestCloudDeployDryRunJSON(t *testing.T) {
 	if result.Request.InstanceType != "1V100.6V" || result.Request.LocationCode != "" || result.Request.Contract != "SPOT" || !result.Request.IsSpot {
 		t.Fatalf("request did not enforce spot auto-placement deploy: %#v", result.Request)
 	}
+	if result.SourceOSVolumeID != "vol-golden" {
+		t.Fatalf("SourceOSVolumeID = %q", result.SourceOSVolumeID)
+	}
 	if result.Policy.LocationCode != "" || result.Policy.LocationSelection != "cheapest_available_spot" || !result.Policy.SpotOnly || !result.Policy.SingleGPU {
 		t.Fatalf("policy was not encoded: %#v", result.Policy)
 	}
@@ -54,7 +59,7 @@ func TestCloudDeployRejectsNonUUIDSSHKeyID(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	app := &App{Stdout: &stdout, Stderr: &stderr}
 
-	err := app.Run(context.Background(), []string{"cloud", "deploy", "--instance-type", "1V100.6V", "--dry-run", "--ssh-key-id", "ville+mba@vesilehto.fi"})
+	err := app.Run(context.Background(), []string{"cloud", "deploy", "--instance-type", "1V100.6V", "--source-os-volume-id", "vol-golden", "--dry-run", "--ssh-key-id", "ville+mba@vesilehto.fi"})
 	if err == nil {
 		t.Fatal("expected non-UUID SSH key id error")
 	}
@@ -73,6 +78,19 @@ func TestCloudDeployRequiresInstanceTypeFlag(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "instance-type") {
 		t.Fatalf("error did not mention instance-type: %v", err)
+	}
+}
+
+func TestCloudDeployRequiresSourceOSVolumeIDFlag(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	app := &App{Stdout: &stdout, Stderr: &stderr}
+
+	err := app.Run(context.Background(), []string{"cloud", "deploy", "--instance-type", "1V100.6V", "--dry-run"})
+	if err == nil {
+		t.Fatal("expected missing source-os-volume-id error")
+	}
+	if !strings.Contains(err.Error(), "source-os-volume-id") {
+		t.Fatalf("error did not mention source-os-volume-id: %v", err)
 	}
 }
 
@@ -127,6 +145,36 @@ func TestCloudDestroyDefaultsToPermanentDryRun(t *testing.T) {
 	}
 	if !result.Request.DeletePermanently {
 		t.Fatal("DeletePermanently = false, want true")
+	}
+}
+
+func TestCloudPackerTemplateWritesEmbeddedFiles(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	app := &App{Stdout: &stdout, Stderr: &stderr}
+	dir := t.TempDir()
+
+	err := app.Run(context.Background(), []string{"cloud", "packer-template", dir})
+	if err != nil {
+		t.Fatalf("Run() error = %v\nstderr:\n%s", err, stderr.String())
+	}
+
+	for _, file := range []struct {
+		name string
+		want string
+	}{
+		{name: "ubuntu.pkr.hcl", want: `source "verda-instance" "ubuntu"`},
+		{name: "bootstrap.sh", want: "cuda-toolkit-13-0"},
+	} {
+		content, err := os.ReadFile(dir + "/" + file.name)
+		if err != nil {
+			t.Fatalf("read generated %s: %v", file.name, err)
+		}
+		if !strings.Contains(string(content), file.want) {
+			t.Fatalf("%s missing %q:\n%s", file.name, file.want, string(content))
+		}
+	}
+	if !strings.Contains(stdout.String(), "ubuntu.pkr.hcl") || !strings.Contains(stdout.String(), "bootstrap.sh") {
+		t.Fatalf("stdout did not list written files:\n%s", stdout.String())
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 type DestroyOptions struct {
 	InstanceIDs       []string
 	VolumeIDs         []string
+	SourceOSVolumeID  string
 	DeletePermanently bool
 	BaseURL           string
 	DryRun            bool
@@ -28,10 +29,11 @@ type DestroyInstanceResult struct {
 }
 
 type DestroyResult struct {
-	Provider string                  `json:"provider"`
-	DryRun   bool                    `json:"dry_run"`
-	Request  DestroyInstanceRequest  `json:"request"`
-	Results  []DestroyInstanceResult `json:"results,omitempty"`
+	Provider         string                  `json:"provider"`
+	DryRun           bool                    `json:"dry_run"`
+	SourceOSVolumeID string                  `json:"source_os_volume_id,omitempty"`
+	Request          DestroyInstanceRequest  `json:"request"`
+	Results          []DestroyInstanceResult `json:"results,omitempty"`
 }
 
 type DestroyClient interface {
@@ -57,9 +59,10 @@ func Destroy(ctx context.Context, client DestroyClient, opts DestroyOptions) (*D
 		DeletePermanently: normalized.DeletePermanently,
 	}
 	result := &DestroyResult{
-		Provider: ProviderName,
-		DryRun:   normalized.DryRun,
-		Request:  req,
+		Provider:         ProviderName,
+		DryRun:           normalized.DryRun,
+		SourceOSVolumeID: normalized.SourceOSVolumeID,
+		Request:          req,
 	}
 	if normalized.DryRun {
 		return result, nil
@@ -82,10 +85,16 @@ func Destroy(ctx context.Context, client DestroyClient, opts DestroyOptions) (*D
 func (o DestroyOptions) normalized() (DestroyOptions, error) {
 	o.InstanceIDs = compactStrings(o.InstanceIDs)
 	o.VolumeIDs = compactStrings(o.VolumeIDs)
+	o.SourceOSVolumeID = strings.TrimSpace(o.SourceOSVolumeID)
 	o.BaseURL = strings.TrimSpace(o.BaseURL)
 
 	if len(o.InstanceIDs) == 0 {
 		return DestroyOptions{}, fmt.Errorf("at least one instance ID is required")
+	}
+	for _, volumeID := range o.VolumeIDs {
+		if o.SourceOSVolumeID != "" && volumeID == o.SourceOSVolumeID {
+			return DestroyOptions{}, fmt.Errorf("refusing to delete source_os_volume_id %s; pass only cloned OS volume IDs to cleanup", o.SourceOSVolumeID)
+		}
 	}
 	return o, nil
 }

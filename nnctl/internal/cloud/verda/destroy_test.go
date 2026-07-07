@@ -67,6 +67,20 @@ func TestDestroyCallsClient(t *testing.T) {
 	}
 }
 
+func TestDestroyRejectsSourceOSVolumeIDAsCleanupVolume(t *testing.T) {
+	opts := DefaultDestroyOptions([]string{"inst-1"})
+	opts.SourceOSVolumeID = "vol-golden"
+	opts.VolumeIDs = []string{"vol-clone-1", "vol-golden"}
+
+	_, err := Destroy(context.Background(), nil, opts)
+	if err == nil {
+		t.Fatal("expected source volume cleanup error")
+	}
+	if !strings.Contains(err.Error(), "source_os_volume_id") {
+		t.Fatalf("error did not mention source_os_volume_id: %v", err)
+	}
+}
+
 func TestDestroyRequiresInstanceID(t *testing.T) {
 	_, err := Destroy(context.Background(), nil, DefaultDestroyOptions(nil))
 	if err == nil {

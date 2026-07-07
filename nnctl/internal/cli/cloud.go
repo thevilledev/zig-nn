@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -26,6 +27,10 @@ type cloudSSHKeysOptions struct {
 type cloudDestroyOptions struct {
 	verdacloud.DestroyOptions
 	jsonOutput bool
+}
+
+type cloudPackerTemplateOptions struct {
+	force bool
 }
 
 type cloudListOptions struct {
@@ -113,6 +118,17 @@ func (a *App) runCloudDestroy(ctx context.Context, opts cloudDestroyOptions) err
 	return a.printCloudDestroyResult(result, opts.jsonOutput)
 }
 
+func (a *App) runCloudPackerTemplate(outputDir string, opts cloudPackerTemplateOptions) error {
+	written, err := writeCloudPackerTemplate(outputDir, opts.force)
+	if err != nil {
+		return err
+	}
+	for _, path := range written {
+		fmt.Fprintf(a.stdout(), "wrote %s\n", path)
+	}
+	return nil
+}
+
 func (a *App) runCloudList(ctx context.Context, opts cloudListOptions) error {
 	client, err := a.newVerdaSDKClient(ctx, opts.baseURL)
 	if err != nil {
@@ -126,6 +142,43 @@ func (a *App) runCloudList(ctx context.Context, opts cloudListOptions) error {
 		instances = activeCloudInstances(instances)
 	}
 	return a.printCloudInstances(instances, opts.jsonOutput)
+}
+
+func writeCloudPackerTemplate(outputDir string, force bool) ([]string, error) {
+	outputDir = strings.TrimSpace(outputDir)
+	if outputDir == "" {
+		return nil, fmt.Errorf("output directory is required")
+	}
+	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+		return nil, fmt.Errorf("create Packer template directory: %w", err)
+	}
+
+	var written []string
+	for _, file := range verdacloud.PackerTemplateFiles() {
+		path := filepath.Join(outputDir, file.Path)
+		flag := os.O_WRONLY | os.O_CREATE
+		if force {
+			flag |= os.O_TRUNC
+		} else {
+			flag |= os.O_EXCL
+		}
+		handle, err := os.OpenFile(path, flag, 0o644)
+		if err != nil {
+			if os.IsExist(err) {
+				return nil, fmt.Errorf("%s already exists; pass --force to overwrite", path)
+			}
+			return nil, fmt.Errorf("create %s: %w", path, err)
+		}
+		if _, err := handle.WriteString(file.Content); err != nil {
+			_ = handle.Close()
+			return nil, fmt.Errorf("write %s: %w", path, err)
+		}
+		if err := handle.Close(); err != nil {
+			return nil, fmt.Errorf("close %s: %w", path, err)
+		}
+		written = append(written, path)
+	}
+	return written, nil
 }
 
 func (a *App) runCloudPricing(ctx context.Context, opts cloudPricingOptions) error {
@@ -174,6 +227,9 @@ func (a *App) printCloudDestroyResult(result *verdacloud.DestroyResult, jsonOutp
 		fmt.Fprintf(a.stdout(), "destroy requested for Verda instance%s %s\n", pluralSuffix(result.Request.InstanceIDs), ids)
 	}
 	fmt.Fprintf(a.stdout(), "delete permanently: %t\n", result.Request.DeletePermanently)
+	if result.SourceOSVolumeID != "" {
+		fmt.Fprintf(a.stdout(), "protected source os volume: %s\n", result.SourceOSVolumeID)
+	}
 	if len(result.Request.VolumeIDs) > 0 {
 		fmt.Fprintf(a.stdout(), "volume ids: %s\n", strings.Join(result.Request.VolumeIDs, ", "))
 	}
@@ -255,7 +311,10 @@ func (a *App) printCloudDeployResult(result *verdacloud.DeployResult, jsonOutput
 		}
 		fmt.Fprintf(a.stdout(), "dry run: would deploy %s as a spot single-GPU instance in %s\n", result.Request.InstanceType, location)
 		fmt.Fprintf(a.stdout(), "hostname: %s\n", result.Request.Hostname)
-		fmt.Fprintf(a.stdout(), "image: %s\n", result.Request.Image)
+		fmt.Fprintf(a.stdout(), "source os volume: %s\n", result.SourceOSVolumeID)
+		if result.OSVolumeClone != nil {
+			fmt.Fprintf(a.stdout(), "cloned os volume name: %s\n", result.OSVolumeClone.Name)
+		}
 		fmt.Fprintf(a.stdout(), "startup script: embedded userdata\n")
 		return nil
 	}
@@ -279,6 +338,10 @@ func (a *App) printCloudDeployResult(result *verdacloud.DeployResult, jsonOutput
 	fmt.Fprintf(a.stdout(), "spot: %t\n", instance.IsSpot)
 	if instance.IP != nil && *instance.IP != "" {
 		fmt.Fprintf(a.stdout(), "ip: %s\n", *instance.IP)
+	}
+	if result.OSVolumeClone != nil {
+		fmt.Fprintf(a.stdout(), "source os volume: %s\n", result.OSVolumeClone.SourceVolumeID)
+		fmt.Fprintf(a.stdout(), "cloned os volume: %s\n", result.OSVolumeClone.VolumeID)
 	}
 	if result.StartupScript != nil {
 		fmt.Fprintf(a.stdout(), "startup script: %s\n", result.StartupScript.ID)

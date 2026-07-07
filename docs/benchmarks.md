@@ -95,21 +95,33 @@ spot instances running after the benchmark is captured.
    Prefer the cheapest available instance when several untested models are
    available.
 
-3. Deploy one benchmark worker with the shared SSH key:
+3. Materialize the embedded Verda Packer template, build the golden OS volume,
+   and record the resulting Verda OS volume ID:
+
+   ```bash
+   ./bin/nnctl cloud packer-template /tmp/zig-nn-verda-packer
+   cd /tmp/zig-nn-verda-packer
+   packer init .
+   packer build .
+   ```
+
+4. Deploy one benchmark worker with the shared SSH key. `nnctl` clones the
+   Packer-built source OS volume and uses the clone as the instance image:
 
    ```bash
    ./bin/nnctl cloud deploy \
      --instance-type <instance-type> \
+     --source-os-volume-id <packer-os-volume-id> \
      --ssh-key-id '397644c5-cb14-4ab0-b072-d14090f881f3'
    ```
 
-4. Poll until the VM reports an IP address:
+5. Poll until the VM reports an IP address:
 
    ```bash
    ./bin/nnctl cloud list
    ```
 
-5. SSH to the host and wait for cloud-init to finish. Some images expose the GPU
+6. SSH to the host and wait for cloud-init to finish. Some images expose the GPU
    before Zig has been installed by the startup script.
 
    ```bash
@@ -119,7 +131,7 @@ spot instances running after the benchmark is captured.
      "$host" 'cloud-init status --long; zig version; nvidia-smi'
    ```
 
-6. Deploy the current source snapshot and run a quick CUDA smoke test followed by
+7. Deploy the current source snapshot and run a quick CUDA smoke test followed by
    the full ReleaseFast suite:
 
    ```bash
@@ -133,14 +145,17 @@ spot instances running after the benchmark is captured.
      "cd '$dest' && zig build benchmark -Dgpu=cuda"
    ```
 
-7. Record the GPU model, instance type, source commit, command output, and raw
+8. Record the GPU model, instance type, source commit, command output, and raw
    CSV in the local benchmark scratchpad. The committed table below should stay
    compact and should use CUDA absolute timings for cross-GPU comparisons.
 
-8. Destroy the instance and verify that no benchmark workers remain:
+9. Destroy the instance and the cloned OS volume reported by deploy. Do not pass
+   the golden Packer source volume as `--volume-id`:
 
    ```bash
-   ./bin/nnctl cloud destroy <instance-id>
+   ./bin/nnctl cloud destroy <instance-id> \
+     --volume-id <cloned-os-volume-id> \
+     --source-os-volume-id <packer-os-volume-id>
    ./bin/nnctl cloud list --all
    ```
 
