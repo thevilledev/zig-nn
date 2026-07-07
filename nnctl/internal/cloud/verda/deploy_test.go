@@ -33,6 +33,30 @@ func TestNormalizeDeployOptionsDefaultsToSpotFinlandPolicyInputs(t *testing.T) {
 	if opts.Hostname != "nnctl-bench-1v100-6v-20260706123456" {
 		t.Fatalf("Hostname = %q", opts.Hostname)
 	}
+	if opts.StartupScriptName != "" {
+		t.Fatalf("StartupScriptName = %q, want empty", opts.StartupScriptName)
+	}
+	if opts.UserDataScript != "" {
+		t.Fatalf("UserDataScript should be empty when source volume is set")
+	}
+}
+
+func TestNormalizeDeployOptionsDefaultsUserDataWithoutSourceOSVolume(t *testing.T) {
+	base := DefaultDeployOptions("1V100.6V")
+	opts, err := base.normalized(time.Date(2026, 7, 6, 12, 34, 56, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if opts.SourceOSVolumeID != "" {
+		t.Fatalf("SourceOSVolumeID = %q, want empty", opts.SourceOSVolumeID)
+	}
+	if opts.Image != DefaultDeployImage {
+		t.Fatalf("Image = %q, want %s", opts.Image, DefaultDeployImage)
+	}
+	if opts.Hostname != "nnctl-bench-1v100-6v-20260706123456" {
+		t.Fatalf("Hostname = %q", opts.Hostname)
+	}
 	if opts.StartupScriptName != opts.Hostname+"-userdata" {
 		t.Fatalf("StartupScriptName = %q", opts.StartupScriptName)
 	}
@@ -66,6 +90,32 @@ func TestDeployDryRunBuildsSpotAutoPlacementRequestWithoutClient(t *testing.T) {
 	if result.OSVolumeClone == nil || result.OSVolumeClone.SourceVolumeID != "vol-golden" {
 		t.Fatalf("unexpected OSVolumeClone: %#v", result.OSVolumeClone)
 	}
+	if result.StartupScript != nil {
+		t.Fatalf("unexpected default startup script: %#v", result.StartupScript)
+	}
+}
+
+func TestDeployDryRunWithoutSourceOSVolumeUsesDefaultImageAndUserData(t *testing.T) {
+	opts := DefaultDeployOptions("1V100.6V")
+	opts.DryRun = true
+
+	result, err := Deploy(context.Background(), nil, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if result.Policy.LocationSelection != SpotPlacementLocation || result.Policy.SourceOSVolumeLocked {
+		t.Fatalf("unexpected policy: %#v", result.Policy)
+	}
+	if result.Request.Image != DefaultDeployImage || result.Request.LocationCode != "" {
+		t.Fatalf("unexpected request: %#v", result.Request)
+	}
+	if result.SourceOSVolumeID != "" || result.OSVolumeClone != nil {
+		t.Fatalf("unexpected source volume plan: source=%q clone=%#v", result.SourceOSVolumeID, result.OSVolumeClone)
+	}
+	if result.StartupScript == nil || result.StartupScript.Name == "" {
+		t.Fatalf("expected planned startup script: %#v", result.StartupScript)
+	}
 }
 
 func TestDeployRejectsMultiGPUInstanceTypes(t *testing.T) {
@@ -95,7 +145,6 @@ func TestDeployCreatesSpotCPUInstanceInSourceOSVolumeLocation(t *testing.T) {
 		placements: []SpotPlacement{
 			{LocationCode: FinlandLocationCode, SpotPrice: 1, PriceKnown: true, Currency: "eur"},
 		},
-		script:       StartupScript{ID: "script-1", Name: "userdata"},
 		clonedVolume: Volume{ID: "vol-clone-1", Name: "worker-os", Status: "cloning", Location: FinlandLocationCode},
 		readyVolume:  Volume{ID: "vol-clone-1", Name: "worker-os", Status: "detached", Location: FinlandLocationCode},
 		instance:     Instance{ID: "inst-1", Hostname: "worker", Status: "new", InstanceType: "4C.16M", Location: FinlandLocationCode, IsSpot: true},
@@ -118,6 +167,9 @@ func TestDeployCreatesSpotCPUInstanceInSourceOSVolumeLocation(t *testing.T) {
 	if client.createRequest.InstanceType != "4C.16M" || client.createRequest.LocationCode != FinlandLocationCode {
 		t.Fatalf("unexpected create request: %#v", client.createRequest)
 	}
+	if client.createdScript || result.StartupScript != nil {
+		t.Fatalf("unexpected startup script: client=%t result=%#v", client.createdScript, result.StartupScript)
+	}
 }
 
 func TestDeployCreatesSpotInstanceInSourceOSVolumeLocation(t *testing.T) {
@@ -128,7 +180,6 @@ func TestDeployCreatesSpotInstanceInSourceOSVolumeLocation(t *testing.T) {
 			{LocationCode: FinlandLocationCode, SpotPrice: 2, PriceKnown: true, Currency: "eur"},
 			{LocationCode: "NOR-01", SpotPrice: 1, PriceKnown: true, Currency: "eur"},
 		},
-		script:       StartupScript{ID: "script-1", Name: "userdata"},
 		clonedVolume: Volume{ID: "vol-clone-1", Name: "worker-os", Status: "cloning", Location: FinlandLocationCode},
 		readyVolume:  Volume{ID: "vol-clone-1", Name: "worker-os", Status: "detached", Location: FinlandLocationCode},
 		instance:     Instance{ID: "inst-1", Hostname: "worker", Status: "new", InstanceType: "1V100.6V", Location: FinlandLocationCode, IsSpot: true},
@@ -165,15 +216,12 @@ func TestDeployCreatesSpotInstanceInSourceOSVolumeLocation(t *testing.T) {
 	if result.Placement == nil || result.Placement.LocationCode != FinlandLocationCode || result.Placement.SpotPrice != 2 {
 		t.Fatalf("unexpected placement: %#v", result.Placement)
 	}
-	if client.createdScriptName != "worker-userdata" {
-		t.Fatalf("createdScriptName = %q", client.createdScriptName)
-	}
 	req := client.createRequest
 	if req.LocationCode != FinlandLocationCode || !req.IsSpot || req.Contract != SpotContract {
 		t.Fatalf("request did not enforce spot placement policy: %#v", req)
 	}
-	if req.StartupScriptID != "script-1" {
-		t.Fatalf("StartupScriptID = %q", req.StartupScriptID)
+	if client.createdScript || req.StartupScriptID != "" || result.StartupScript != nil {
+		t.Fatalf("unexpected startup script: client=%t req=%#v result=%#v", client.createdScript, req, result.StartupScript)
 	}
 	if req.Image != "vol-clone-1" {
 		t.Fatalf("Image = %q, want cloned OS volume ID", req.Image)
@@ -192,6 +240,81 @@ func TestDeployCreatesSpotInstanceInSourceOSVolumeLocation(t *testing.T) {
 	}
 	if result.ClonedOSVolumeIDs["inst-1"] != "vol-clone-1" {
 		t.Fatalf("unexpected clone tracking: %#v", result.ClonedOSVolumeIDs)
+	}
+}
+
+func TestDeployCreatesSourceOSVolumeInstanceWithCustomUserData(t *testing.T) {
+	client := &fakeClient{
+		sourceVolume: Volume{ID: "vol-golden", Name: "golden", Status: "detached", Location: FinlandLocationCode, IsOSVolume: true},
+		instanceType: InstanceType{InstanceType: "1V100.6V", GPUCount: 1},
+		placements:   []SpotPlacement{{LocationCode: FinlandLocationCode, SpotPrice: 2, PriceKnown: true, Currency: "eur"}},
+		script:       StartupScript{ID: "script-1", Name: "userdata"},
+		clonedVolume: Volume{ID: "vol-clone-1", Name: "worker-os", Status: "cloning", Location: FinlandLocationCode},
+		readyVolume:  Volume{ID: "vol-clone-1", Name: "worker-os", Status: "detached", Location: FinlandLocationCode},
+		instance:     Instance{ID: "inst-1", Hostname: "worker", Status: "new", InstanceType: "1V100.6V", Location: FinlandLocationCode, IsSpot: true},
+	}
+	opts := DefaultDeployOptions("1V100.6V")
+	opts.SourceOSVolumeID = "vol-golden"
+	opts.Hostname = "worker"
+	opts.UserDataScript = "#!/bin/sh\necho custom\n"
+
+	result, err := Deploy(context.Background(), client, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if client.createdScriptName != "worker-userdata" {
+		t.Fatalf("createdScriptName = %q", client.createdScriptName)
+	}
+	if !strings.Contains(client.createdScriptContent, "echo custom") {
+		t.Fatalf("created script did not include custom userdata: %q", client.createdScriptContent)
+	}
+	if client.createRequest.StartupScriptID != "script-1" {
+		t.Fatalf("StartupScriptID = %q", client.createRequest.StartupScriptID)
+	}
+	if result.StartupScript == nil || result.StartupScript.ID != "script-1" {
+		t.Fatalf("unexpected startup script result: %#v", result.StartupScript)
+	}
+}
+
+func TestDeployCreatesSpotInstanceFromDefaultImageWithUserData(t *testing.T) {
+	client := &fakeClient{
+		instanceType: InstanceType{InstanceType: "1V100.6V", GPUCount: 1},
+		placements: []SpotPlacement{
+			{LocationCode: "NOR-01", SpotPrice: 1, PriceKnown: true, Currency: "eur"},
+			{LocationCode: FinlandLocationCode, SpotPrice: 2, PriceKnown: true, Currency: "eur"},
+		},
+		script:   StartupScript{ID: "script-1", Name: "userdata"},
+		instance: Instance{ID: "inst-1", Hostname: "worker", Status: "new", InstanceType: "1V100.6V", Location: "NOR-01", IsSpot: true},
+	}
+	opts := DefaultDeployOptions("1V100.6V")
+	opts.Hostname = "worker"
+
+	result, err := Deploy(context.Background(), client, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if client.gotVolumeID != "" || len(client.cloneRequests) != 0 || client.waitedVolumeID != "" {
+		t.Fatalf("unexpected volume operations: got=%q clone=%#v waited=%q", client.gotVolumeID, client.cloneRequests, client.waitedVolumeID)
+	}
+	if client.createRequest.Image != DefaultDeployImage {
+		t.Fatalf("Image = %q, want %s", client.createRequest.Image, DefaultDeployImage)
+	}
+	if client.createRequest.LocationCode != "NOR-01" {
+		t.Fatalf("LocationCode = %q, want NOR-01", client.createRequest.LocationCode)
+	}
+	if client.createRequest.StartupScriptID != "script-1" {
+		t.Fatalf("StartupScriptID = %q", client.createRequest.StartupScriptID)
+	}
+	if !strings.Contains(client.createdScriptContent, "cuda-toolkit-13-0") {
+		t.Fatalf("created script did not include default userdata marker")
+	}
+	if result.SourceOSVolumeID != "" || result.SourceOSVolume != nil || result.OSVolumeClone != nil || len(result.ClonedOSVolumeIDs) != 0 {
+		t.Fatalf("unexpected source volume result: %#v", result)
+	}
+	if result.Policy.LocationCode != "NOR-01" || result.Policy.LocationSelection != SpotPlacementLocation || result.Policy.SourceOSVolumeLocked {
+		t.Fatalf("unexpected policy: %#v", result.Policy)
 	}
 }
 
@@ -268,16 +391,17 @@ func TestDeployRejectsNonUUIDSSHKeyID(t *testing.T) {
 	}
 }
 
-func TestDeployRequiresSourceOSVolumeID(t *testing.T) {
+func TestDeployRejectsClonedOSVolumeWithoutSourceOSVolume(t *testing.T) {
 	opts := DefaultDeployOptions("1V100.6V")
 	opts.DryRun = true
+	opts.ClonedOSVolumeID = "vol-clone-1"
 
 	_, err := Deploy(context.Background(), nil, opts)
 	if err == nil {
-		t.Fatal("expected missing source_os_volume_id error")
+		t.Fatal("expected cloned_os_volume_id without source_os_volume_id error")
 	}
-	if !strings.Contains(err.Error(), "source_os_volume_id") {
-		t.Fatalf("error did not mention source_os_volume_id: %v", err)
+	if !strings.Contains(err.Error(), "cloned_os_volume_id") || !strings.Contains(err.Error(), "source_os_volume_id") {
+		t.Fatalf("error did not mention cloned/source volume IDs: %v", err)
 	}
 }
 
@@ -403,22 +527,23 @@ func TestDeployRejectsReusedClonedOSVolumeLocationMismatch(t *testing.T) {
 }
 
 type fakeClient struct {
-	sourceVolume      Volume
-	instanceType      InstanceType
-	placements        []SpotPlacement
-	script            StartupScript
-	clonedVolume      Volume
-	readyVolume       Volume
-	instance          Instance
-	placementsListed  bool
-	gotVolumeID       string
-	createdScript     bool
-	createdScriptName string
-	cloneRequests     []CloneVolumeRequest
-	waitedVolumeID    string
-	deletedVolumeIDs  []string
-	createRequest     CreateInstanceRequest
-	createErr         error
+	sourceVolume         Volume
+	instanceType         InstanceType
+	placements           []SpotPlacement
+	script               StartupScript
+	clonedVolume         Volume
+	readyVolume          Volume
+	instance             Instance
+	placementsListed     bool
+	gotVolumeID          string
+	createdScript        bool
+	createdScriptName    string
+	createdScriptContent string
+	cloneRequests        []CloneVolumeRequest
+	waitedVolumeID       string
+	deletedVolumeIDs     []string
+	createRequest        CreateInstanceRequest
+	createErr            error
 }
 
 func (c *fakeClient) GetVolume(_ context.Context, volumeID string) (Volume, error) {
@@ -438,9 +563,10 @@ func (c *fakeClient) GetSpotPlacementOptions(context.Context, string) ([]SpotPla
 	return append([]SpotPlacement(nil), c.placements...), nil
 }
 
-func (c *fakeClient) CreateStartupScript(_ context.Context, name, _ string) (StartupScript, error) {
+func (c *fakeClient) CreateStartupScript(_ context.Context, name, script string) (StartupScript, error) {
 	c.createdScript = true
 	c.createdScriptName = name
+	c.createdScriptContent = script
 	return c.script, nil
 }
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -16,8 +17,10 @@ const (
 	FinlandLocationCode    = sdkverda.LocationFIN03
 	ExplicitLocation       = "explicit"
 	SourceOSVolumeLocation = "source_os_volume_location"
+	SpotPlacementLocation  = "spot_placement"
 	SpotContract           = "SPOT"
 	DefaultDescription     = "nnctl benchmark worker"
+	DefaultDeployImage     = "ubuntu-24.04"
 	MaxDeployGPUCount      = 1
 	VolumeReadyTimeout     = 20 * time.Minute
 	VolumeReadyPoll        = 5 * time.Second
@@ -27,6 +30,7 @@ type DeployOptions struct {
 	InstanceType                string
 	SourceOSVolumeID            string
 	ClonedOSVolumeID            string
+	Image                       string
 	Hostname                    string
 	Description                 string
 	SSHKeyIDs                   []string
@@ -150,9 +154,9 @@ type Client interface {
 
 func DefaultDeployOptions(instanceType string) DeployOptions {
 	return DeployOptions{
-		InstanceType:   instanceType,
-		Description:    DefaultDescription,
-		UserDataScript: DefaultUserDataScript,
+		InstanceType: instanceType,
+		Description:  DefaultDescription,
+		Image:        DefaultDeployImage,
 	}
 }
 
@@ -162,8 +166,13 @@ func Deploy(ctx context.Context, client Client, opts DeployOptions) (*DeployResu
 		return nil, err
 	}
 
+	image := normalized.Image
+	if normalized.SourceOSVolumeID != "" {
+		image = ""
+	}
 	req := CreateInstanceRequest{
 		InstanceType: normalized.InstanceType,
+		Image:        image,
 		Hostname:     normalized.Hostname,
 		Description:  normalized.Description,
 		SSHKeyIDs:    normalized.SSHKeyIDs,
@@ -173,7 +182,10 @@ func Deploy(ctx context.Context, client Client, opts DeployOptions) (*DeployResu
 	}
 	locationSelection := ExplicitLocation
 	if normalized.LocationCode == "" {
-		locationSelection = SourceOSVolumeLocation
+		locationSelection = SpotPlacementLocation
+		if normalized.SourceOSVolumeID != "" {
+			locationSelection = SourceOSVolumeLocation
+		}
 	}
 
 	result := &DeployResult{
@@ -182,7 +194,7 @@ func Deploy(ctx context.Context, client Client, opts DeployOptions) (*DeployResu
 		Policy: DeployPolicy{
 			LocationCode:                   normalized.LocationCode,
 			LocationSelection:              locationSelection,
-			SourceOSVolumeLocked:           true,
+			SourceOSVolumeLocked:           normalized.SourceOSVolumeID != "",
 			SpotOnly:                       true,
 			SingleGPU:                      true,
 			AllowsCPU:                      true,
@@ -191,13 +203,18 @@ func Deploy(ctx context.Context, client Client, opts DeployOptions) (*DeployResu
 		},
 		SourceOSVolumeID: normalized.SourceOSVolumeID,
 		Request:          req,
-		OSVolumeClone: &OSVolumeClone{
+	}
+	if normalized.SourceOSVolumeID != "" {
+		result.OSVolumeClone = &OSVolumeClone{
 			SourceVolumeID: normalized.SourceOSVolumeID,
 			VolumeID:       normalized.ClonedOSVolumeID,
 			Name:           osVolumeCloneName(normalized.Hostname),
 			LocationCode:   normalized.LocationCode,
 			Reused:         normalized.ClonedOSVolumeID != "",
-		},
+		}
+	}
+	if normalized.UserDataScript != "" {
+		result.StartupScript = &StartupScript{Name: normalized.StartupScriptName}
 	}
 	if normalized.DryRun {
 		return result, nil
@@ -206,18 +223,20 @@ func Deploy(ctx context.Context, client Client, opts DeployOptions) (*DeployResu
 		return nil, fmt.Errorf("verda client is required")
 	}
 
-	sourceVolume, err := getSourceOSVolume(ctx, client, normalized.SourceOSVolumeID)
-	if err != nil {
-		return nil, err
-	}
-	result.SourceOSVolume = &sourceVolume
-	if normalized.LocationCode == "" {
-		req.LocationCode = sourceVolume.Location
-		result.Request = req
-		result.Policy.LocationCode = sourceVolume.Location
-		result.OSVolumeClone.LocationCode = sourceVolume.Location
-	} else if !strings.EqualFold(normalized.LocationCode, sourceVolume.Location) {
-		return nil, fmt.Errorf("source_os_volume_id %s is in %s, but --location-code requested %s", normalized.SourceOSVolumeID, sourceVolume.Location, normalized.LocationCode)
+	if normalized.SourceOSVolumeID != "" {
+		sourceVolume, err := getSourceOSVolume(ctx, client, normalized.SourceOSVolumeID)
+		if err != nil {
+			return nil, err
+		}
+		result.SourceOSVolume = &sourceVolume
+		if normalized.LocationCode == "" {
+			req.LocationCode = sourceVolume.Location
+			result.Request = req
+			result.Policy.LocationCode = sourceVolume.Location
+			result.OSVolumeClone.LocationCode = sourceVolume.Location
+		} else if !strings.EqualFold(normalized.LocationCode, sourceVolume.Location) {
+			return nil, fmt.Errorf("source_os_volume_id %s is in %s, but --location-code requested %s", normalized.SourceOSVolumeID, sourceVolume.Location, normalized.LocationCode)
+		}
 	}
 
 	instanceType, err := client.GetInstanceType(ctx, normalized.InstanceType, true, req.LocationCode)
@@ -235,30 +254,46 @@ func Deploy(ctx context.Context, client Client, opts DeployOptions) (*DeployResu
 			return nil, err
 		}
 		result.Placement = &placement
+		if req.LocationCode == "" {
+			req.LocationCode = placement.LocationCode
+			result.Policy.LocationCode = placement.LocationCode
+			result.Request = req
+		}
 	}
 
-	script, err := client.CreateStartupScript(ctx, normalized.StartupScriptName, normalized.UserDataScript)
-	if err != nil {
-		return nil, fmt.Errorf("create Verda startup script: %w", err)
+	if normalized.UserDataScript != "" {
+		script, err := client.CreateStartupScript(ctx, normalized.StartupScriptName, normalized.UserDataScript)
+		if err != nil {
+			return nil, fmt.Errorf("create Verda startup script: %w", err)
+		}
+		result.StartupScript = &script
+		req.StartupScriptID = script.ID
+		result.Request = req
 	}
-	result.StartupScript = &script
-	req.StartupScriptID = script.ID
-	result.Request = req
 
-	clone, cloneCreated, err := prepareOSVolume(ctx, client, normalized, req.LocationCode)
-	if err != nil {
-		return nil, err
+	var clone OSVolumeClone
+	cloneCreated := false
+	if normalized.SourceOSVolumeID != "" {
+		clone, cloneCreated, err = prepareOSVolume(ctx, client, normalized, req.LocationCode)
+		if err != nil {
+			return nil, err
+		}
+		result.OSVolumeClone = &clone
+		req.Image = clone.VolumeID
+		result.Request = req
 	}
-	result.OSVolumeClone = &clone
-	req.Image = clone.VolumeID
-	result.Request = req
 
 	instance, err := client.CreateInstance(ctx, req)
 	if err != nil {
+		if normalized.SourceOSVolumeID == "" {
+			return nil, fmt.Errorf("create Verda instance: %w", err)
+		}
 		return nil, createInstanceFailureError(ctx, client, normalized.SourceOSVolumeID, clone, cloneCreated, normalized.KeepClonedOSVolumeOnFailure, err)
 	}
 	result.Instance = &instance
-	result.ClonedOSVolumeIDs = map[string]string{instance.ID: clone.VolumeID}
+	if clone.VolumeID != "" {
+		result.ClonedOSVolumeIDs = map[string]string{instance.ID: clone.VolumeID}
+	}
 	return result, nil
 }
 
@@ -266,6 +301,7 @@ func (o DeployOptions) normalized(now time.Time) (DeployOptions, error) {
 	o.InstanceType = strings.TrimSpace(o.InstanceType)
 	o.SourceOSVolumeID = strings.TrimSpace(o.SourceOSVolumeID)
 	o.ClonedOSVolumeID = strings.TrimSpace(o.ClonedOSVolumeID)
+	o.Image = strings.TrimSpace(o.Image)
 	o.Hostname = strings.TrimSpace(o.Hostname)
 	o.Description = strings.TrimSpace(o.Description)
 	o.StartupScriptName = strings.TrimSpace(o.StartupScriptName)
@@ -276,19 +312,22 @@ func (o DeployOptions) normalized(now time.Time) (DeployOptions, error) {
 	if o.InstanceType == "" {
 		return DeployOptions{}, fmt.Errorf("instance type is required")
 	}
-	if o.SourceOSVolumeID == "" {
-		return DeployOptions{}, fmt.Errorf("source_os_volume_id is required")
+	if o.SourceOSVolumeID == "" && o.ClonedOSVolumeID != "" {
+		return DeployOptions{}, fmt.Errorf("cloned_os_volume_id requires source_os_volume_id")
+	}
+	if o.SourceOSVolumeID == "" && o.Image == "" {
+		return DeployOptions{}, fmt.Errorf("image is required when source_os_volume_id is not set")
 	}
 	if o.Description == "" {
 		return DeployOptions{}, fmt.Errorf("description is required")
 	}
-	if o.UserDataScript == "" {
-		return DeployOptions{}, fmt.Errorf("userdata script is required")
+	if o.SourceOSVolumeID == "" && o.UserDataScript == "" {
+		o.UserDataScript = DefaultUserDataScript
 	}
 	if o.Hostname == "" {
 		o.Hostname = defaultHostname(o.InstanceType, now)
 	}
-	if o.StartupScriptName == "" {
+	if o.UserDataScript != "" && o.StartupScriptName == "" {
 		o.StartupScriptName = o.Hostname + "-userdata"
 	}
 	o.SSHKeyIDs = compactStrings(o.SSHKeyIDs)
@@ -427,12 +466,33 @@ func requireSpotPlacement(ctx context.Context, client Client, instanceType, loca
 	if err != nil {
 		return SpotPlacement{}, fmt.Errorf("list Verda spot placement options for %q: %w", instanceType, err)
 	}
+	if locationCode == "" && len(options) > 0 {
+		sortSpotPlacements(options)
+		return options[0], nil
+	}
+	if locationCode == "" {
+		return SpotPlacement{}, fmt.Errorf("verda spot instance type %q is not currently available in any location", instanceType)
+	}
 	for _, option := range options {
 		if strings.EqualFold(option.LocationCode, locationCode) {
 			return option, nil
 		}
 	}
 	return SpotPlacement{}, fmt.Errorf("verda spot instance type %q is not currently available in %s", instanceType, locationCode)
+}
+
+func sortSpotPlacements(options []SpotPlacement) {
+	sort.SliceStable(options, func(i, j int) bool {
+		left := options[i]
+		right := options[j]
+		if left.PriceKnown != right.PriceKnown {
+			return left.PriceKnown
+		}
+		if left.PriceKnown && left.SpotPrice != right.SpotPrice {
+			return left.SpotPrice < right.SpotPrice
+		}
+		return left.LocationCode < right.LocationCode
+	})
 }
 
 var hostnameInvalid = regexp.MustCompile(`[^a-z0-9-]+`)

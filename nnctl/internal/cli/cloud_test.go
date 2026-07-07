@@ -34,10 +34,12 @@ func TestCloudDeployDryRunJSON(t *testing.T) {
 		SourceOSVolumeID string `json:"source_os_volume_id"`
 		Request          struct {
 			InstanceType string `json:"instance_type"`
+			Image        string `json:"image"`
 			LocationCode string `json:"location_code"`
 			Contract     string `json:"contract"`
 			IsSpot       bool   `json:"is_spot"`
 		} `json:"request"`
+		StartupScript *verdacloud.StartupScript `json:"startup_script"`
 	}
 	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
 		t.Fatalf("invalid JSON output: %v\n%s", err, stdout.String())
@@ -49,11 +51,17 @@ func TestCloudDeployDryRunJSON(t *testing.T) {
 	if result.Request.InstanceType != "1V100.6V" || result.Request.LocationCode != "" || result.Request.Contract != "SPOT" || !result.Request.IsSpot {
 		t.Fatalf("request did not enforce spot auto-placement deploy: %#v", result.Request)
 	}
+	if result.Request.Image != "" {
+		t.Fatalf("Image = %q, want empty source-volume dry-run image", result.Request.Image)
+	}
 	if result.SourceOSVolumeID != "vol-golden" {
 		t.Fatalf("SourceOSVolumeID = %q", result.SourceOSVolumeID)
 	}
 	if result.Policy.LocationCode != "" || result.Policy.LocationSelection != "source_os_volume_location" || !result.Policy.SourceOSVolumeLocked || !result.Policy.SpotOnly || !result.Policy.AllowsCPU || result.Policy.MaxGPUCount != 1 {
 		t.Fatalf("policy was not encoded: %#v", result.Policy)
+	}
+	if result.StartupScript != nil {
+		t.Fatalf("unexpected default startup script: %#v", result.StartupScript)
 	}
 }
 
@@ -125,16 +133,42 @@ func TestCloudDeployRequiresInstanceTypeFlag(t *testing.T) {
 	}
 }
 
-func TestCloudDeployRequiresSourceOSVolumeIDFlag(t *testing.T) {
+func TestCloudDeployDryRunWithoutSourceOSVolumeUsesDefaultImage(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	app := &App{Stdout: &stdout, Stderr: &stderr}
 
-	err := app.Run(context.Background(), []string{"cloud", "deploy", "--instance-type", "1V100.6V", "--dry-run"})
-	if err == nil {
-		t.Fatal("expected missing source-os-volume-id error")
+	err := app.Run(context.Background(), []string{"cloud", "deploy", "--instance-type", "1V100.6V", "--dry-run", "--json"})
+	if err != nil {
+		t.Fatalf("Run() error = %v\nstderr:\n%s", err, stderr.String())
 	}
-	if !strings.Contains(err.Error(), "source-os-volume-id") {
-		t.Fatalf("error did not mention source-os-volume-id: %v", err)
+
+	var result struct {
+		Policy struct {
+			LocationSelection    string `json:"location_selection"`
+			SourceOSVolumeLocked bool   `json:"source_os_volume_locked"`
+		} `json:"policy"`
+		Request struct {
+			Image string `json:"image"`
+		} `json:"request"`
+		SourceOSVolumeID string                    `json:"source_os_volume_id"`
+		OSVolumeClone    *verdacloud.OSVolumeClone `json:"os_volume_clone"`
+		StartupScript    *verdacloud.StartupScript `json:"startup_script"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("invalid JSON output: %v\n%s", err, stdout.String())
+	}
+
+	if result.Request.Image != verdacloud.DefaultDeployImage {
+		t.Fatalf("Image = %q, want %s", result.Request.Image, verdacloud.DefaultDeployImage)
+	}
+	if result.Policy.LocationSelection != "spot_placement" || result.Policy.SourceOSVolumeLocked {
+		t.Fatalf("unexpected policy: %#v", result.Policy)
+	}
+	if result.SourceOSVolumeID != "" || result.OSVolumeClone != nil {
+		t.Fatalf("unexpected source volume plan: source=%q clone=%#v", result.SourceOSVolumeID, result.OSVolumeClone)
+	}
+	if result.StartupScript == nil {
+		t.Fatal("expected planned default startup script")
 	}
 }
 

@@ -320,7 +320,12 @@ func (a *App) printCloudDeployResult(result *verdacloud.DeployResult, jsonOutput
 		}
 		fmt.Fprintf(a.stdout(), "dry run: would deploy %s as a spot instance in %s\n", result.Request.InstanceType, location)
 		fmt.Fprintf(a.stdout(), "hostname: %s\n", result.Request.Hostname)
-		fmt.Fprintf(a.stdout(), "source os volume: %s\n", result.SourceOSVolumeID)
+		if result.Request.Image != "" {
+			fmt.Fprintf(a.stdout(), "image: %s\n", result.Request.Image)
+		}
+		if result.SourceOSVolumeID != "" {
+			fmt.Fprintf(a.stdout(), "source os volume: %s\n", result.SourceOSVolumeID)
+		}
 		if result.Policy.SourceOSVolumeLocked {
 			if result.Policy.LocationCode == "" {
 				fmt.Fprintf(a.stdout(), "location locked by source os volume: resolved during deploy\n")
@@ -335,7 +340,11 @@ func (a *App) printCloudDeployResult(result *verdacloud.DeployResult, jsonOutput
 				fmt.Fprintf(a.stdout(), "cloned os volume name: %s\n", result.OSVolumeClone.Name)
 			}
 		}
-		fmt.Fprintf(a.stdout(), "startup script: embedded userdata\n")
+		if result.StartupScript != nil {
+			fmt.Fprintf(a.stdout(), "startup script: embedded userdata\n")
+		} else {
+			fmt.Fprintf(a.stdout(), "startup script: none\n")
+		}
 		return nil
 	}
 

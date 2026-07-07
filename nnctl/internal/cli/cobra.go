@@ -235,7 +235,7 @@ func (a *App) newCloudCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "cloud <command>",
 		Short: "Deploy cloud benchmark workers",
-		Long:  "Deploys cloud benchmark workers for nnctl agents. Verda deployments are restricted to spot CPU-only or single-GPU instances.",
+		Long:  "Deploys cloud benchmark workers for nnctl agents. Verda deployments default to spot CPU-only or single-GPU instances.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return cmd.Help()
 		},
@@ -260,10 +260,12 @@ func (a *App) newCloudDeployCommand() *cobra.Command {
 		Short: "Deploy a Verda spot benchmark worker",
 		Long: `Deploys one Verda spot instance for nnctl benchmark work.
 The deployment policy is intentionally narrow: spot only, with CPU-only and
-single-GPU instance types accepted. By default nnctl uses the source OS volume
-location for the requested instance type. Userdata defaults to the embedded
-script from nnctl/internal/cloud/verda/bootstrap.sh.`,
+single-GPU instance types accepted. When --source-os-volume-id is set, nnctl
+locks placement to that source volume location and clones it as the instance
+image. Without a source volume, nnctl boots --image and applies the embedded
+userdata script from nnctl/internal/cloud/verda/bootstrap.sh.`,
 		Example: `  nnctl cloud deploy --instance-type 1V100.6V --source-os-volume-id volume_id --ssh-key-id ssh_key_id
+  nnctl cloud deploy --instance-type 1V100.6V --ssh-key-id ssh_key_id
   nnctl cloud deploy --instance-type 1V100.6V --source-os-volume-id volume_id --dry-run --json
   nnctl cloud deploy --instance-type 1V100.6V --source-os-volume-id volume_id --location-code FIN-03
   nnctl cloud deploy --instance-type 1V100.6V --source-os-volume-id source_volume_id --cloned-os-volume-id cloned_volume_id
@@ -276,12 +278,13 @@ script from nnctl/internal/cloud/verda/bootstrap.sh.`,
 	cmd.Flags().StringVar(&opts.InstanceType, "instance-type", opts.InstanceType, "Verda instance type, for example 1L40S.20V")
 	cmd.Flags().StringVar(&opts.SourceOSVolumeID, "source-os-volume-id", opts.SourceOSVolumeID, "Packer-built Verda source OS volume ID used for location lock and cloning")
 	cmd.Flags().StringVar(&opts.ClonedOSVolumeID, "cloned-os-volume-id", opts.ClonedOSVolumeID, "existing cloned OS volume ID to use as the instance image instead of creating a new clone")
+	cmd.Flags().StringVar(&opts.Image, "image", opts.Image, "Verda image to boot when --source-os-volume-id is omitted")
 	cmd.Flags().StringVar(&opts.Hostname, "hostname", opts.Hostname, "instance hostname")
 	cmd.Flags().StringVar(&opts.Description, "description", opts.Description, "instance description")
 	cmd.Flags().StringArrayVar(&opts.SSHKeyIDs, "ssh-key-id", opts.SSHKeyIDs, "Verda SSH key ID to attach (repeatable)")
-	cmd.Flags().StringVar(&opts.LocationCode, "location-code", opts.LocationCode, "Verda location code; defaults to source OS volume location")
+	cmd.Flags().StringVar(&opts.LocationCode, "location-code", opts.LocationCode, "Verda location code; defaults to source OS volume location or spot placement")
 	cmd.Flags().StringVar(&opts.StartupScriptName, "startup-script-name", opts.StartupScriptName, "Verda startup script name")
-	cmd.Flags().StringVar(&opts.userDataFile, "user-data-file", opts.userDataFile, "read userdata from a file instead of the embedded script")
+	cmd.Flags().StringVar(&opts.userDataFile, "user-data-file", opts.userDataFile, "read userdata from a file; defaults to the embedded script only without --source-os-volume-id")
 	cmd.Flags().StringVar(&opts.BaseURL, "base-url", opts.BaseURL, "Verda API base URL")
 	cmd.Flags().BoolVar(&opts.SkipAvailabilityCheck, "skip-availability-check", opts.SkipAvailabilityCheck, "skip spot availability check before creating the instance")
 	cmd.Flags().BoolVar(&opts.KeepClonedOSVolumeOnFailure, "keep-cloned-os-volume-on-failure", opts.KeepClonedOSVolumeOnFailure, "keep a newly cloned OS volume when instance creation fails")
@@ -289,7 +292,6 @@ script from nnctl/internal/cloud/verda/bootstrap.sh.`,
 	cmd.Flags().BoolVar(&opts.jsonOutput, "json", opts.jsonOutput, "print machine-readable JSON")
 	cmd.Flags().SortFlags = false
 	_ = cmd.MarkFlagRequired("instance-type")
-	_ = cmd.MarkFlagRequired("source-os-volume-id")
 	return cmd
 }
 
