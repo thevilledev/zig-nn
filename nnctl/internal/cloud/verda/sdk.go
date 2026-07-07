@@ -288,7 +288,7 @@ func (c *SDKClient) WaitVolumeReady(ctx context.Context, volumeID string) (Volum
 	defer cancel()
 
 	for {
-		volume, err := c.getVolume(ctx, volumeID)
+		volume, err := c.GetVolume(ctx, volumeID)
 		if err != nil {
 			return Volume{}, err
 		}
@@ -309,7 +309,7 @@ func (c *SDKClient) WaitVolumeReady(ctx context.Context, volumeID string) (Volum
 	}
 }
 
-func (c *SDKClient) getVolume(ctx context.Context, volumeID string) (Volume, error) {
+func (c *SDKClient) GetVolume(ctx context.Context, volumeID string) (Volume, error) {
 	volume, err := c.client.Volumes.GetVolume(ctx, volumeID)
 	if err != nil {
 		return Volume{}, err

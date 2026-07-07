@@ -105,8 +105,9 @@ spot instances running after the benchmark is captured.
    packer build .
    ```
 
-4. Deploy one benchmark worker with the shared SSH key. `nnctl` clones the
-   Packer-built source OS volume and uses the clone as the instance image:
+4. Deploy one benchmark worker with the shared SSH key. `nnctl` reads the
+   Packer-built source OS volume location, restricts placement to that location,
+   clones the source volume, and uses the clone as the instance image:
 
    ```bash
    ./bin/nnctl cloud deploy \

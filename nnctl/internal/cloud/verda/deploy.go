@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
-	"sort"
 	"strings"
 	"time"
 
@@ -13,14 +12,14 @@ import (
 )
 
 const (
-	ProviderName          = "verda"
-	FinlandLocationCode   = sdkverda.LocationFIN03
-	AutoLocationSelection = "cheapest_available_spot"
-	ExplicitLocation      = "explicit"
-	SpotContract          = "SPOT"
-	DefaultDescription    = "nnctl GPU benchmark worker"
-	VolumeReadyTimeout    = 20 * time.Minute
-	VolumeReadyPoll       = 5 * time.Second
+	ProviderName           = "verda"
+	FinlandLocationCode    = sdkverda.LocationFIN03
+	ExplicitLocation       = "explicit"
+	SourceOSVolumeLocation = "source_os_volume_location"
+	SpotContract           = "SPOT"
+	DefaultDescription     = "nnctl GPU benchmark worker"
+	VolumeReadyTimeout     = 20 * time.Minute
+	VolumeReadyPoll        = 5 * time.Second
 )
 
 type DeployOptions struct {
@@ -113,6 +112,7 @@ type DeployResult struct {
 	DryRun            bool                  `json:"dry_run"`
 	Policy            DeployPolicy          `json:"policy"`
 	SourceOSVolumeID  string                `json:"source_os_volume_id"`
+	SourceOSVolume    *Volume               `json:"source_os_volume,omitempty"`
 	Request           CreateInstanceRequest `json:"request"`
 	InstanceType      *InstanceType         `json:"instance_type,omitempty"`
 	Placement         *SpotPlacement        `json:"placement,omitempty"`
@@ -123,13 +123,15 @@ type DeployResult struct {
 }
 
 type DeployPolicy struct {
-	LocationCode      string `json:"location_code,omitempty"`
-	LocationSelection string `json:"location_selection"`
-	SpotOnly          bool   `json:"spot_only"`
-	SingleGPU         bool   `json:"single_gpu"`
+	LocationCode         string `json:"location_code,omitempty"`
+	LocationSelection    string `json:"location_selection"`
+	SourceOSVolumeLocked bool   `json:"source_os_volume_locked"`
+	SpotOnly             bool   `json:"spot_only"`
+	SingleGPU            bool   `json:"single_gpu"`
 }
 
 type Client interface {
+	GetVolume(context.Context, string) (Volume, error)
 	GetInstanceType(context.Context, string, bool, string) (InstanceType, error)
 	GetSpotPlacementOptions(context.Context, string) ([]SpotPlacement, error)
 	CreateStartupScript(context.Context, string, string) (StartupScript, error)
@@ -164,17 +166,18 @@ func Deploy(ctx context.Context, client Client, opts DeployOptions) (*DeployResu
 	}
 	locationSelection := ExplicitLocation
 	if normalized.LocationCode == "" {
-		locationSelection = AutoLocationSelection
+		locationSelection = SourceOSVolumeLocation
 	}
 
 	result := &DeployResult{
 		Provider: ProviderName,
 		DryRun:   normalized.DryRun,
 		Policy: DeployPolicy{
-			LocationCode:      normalized.LocationCode,
-			LocationSelection: locationSelection,
-			SpotOnly:          true,
-			SingleGPU:         true,
+			LocationCode:         normalized.LocationCode,
+			LocationSelection:    locationSelection,
+			SourceOSVolumeLocked: true,
+			SpotOnly:             true,
+			SingleGPU:            true,
 		},
 		SourceOSVolumeID: normalized.SourceOSVolumeID,
 		Request:          req,
@@ -191,7 +194,21 @@ func Deploy(ctx context.Context, client Client, opts DeployOptions) (*DeployResu
 		return nil, fmt.Errorf("verda client is required")
 	}
 
-	instanceType, err := client.GetInstanceType(ctx, normalized.InstanceType, true, normalized.LocationCode)
+	sourceVolume, err := getSourceOSVolume(ctx, client, normalized.SourceOSVolumeID)
+	if err != nil {
+		return nil, err
+	}
+	result.SourceOSVolume = &sourceVolume
+	if normalized.LocationCode == "" {
+		req.LocationCode = sourceVolume.Location
+		result.Request = req
+		result.Policy.LocationCode = sourceVolume.Location
+		result.OSVolumeClone.LocationCode = sourceVolume.Location
+	} else if !strings.EqualFold(normalized.LocationCode, sourceVolume.Location) {
+		return nil, fmt.Errorf("source_os_volume_id %s is in %s, but --location-code requested %s", normalized.SourceOSVolumeID, sourceVolume.Location, normalized.LocationCode)
+	}
+
+	instanceType, err := client.GetInstanceType(ctx, normalized.InstanceType, true, req.LocationCode)
 	if err != nil {
 		return nil, fmt.Errorf("get Verda instance type %q: %w", normalized.InstanceType, err)
 	}
@@ -200,20 +217,8 @@ func Deploy(ctx context.Context, client Client, opts DeployOptions) (*DeployResu
 	}
 	result.InstanceType = &instanceType
 
-	if normalized.LocationCode == "" {
-		if normalized.SkipAvailabilityCheck {
-			return nil, fmt.Errorf("--skip-availability-check requires --location-code because automatic placement depends on availability")
-		}
-		placement, err := selectCheapestSpotPlacement(ctx, client, normalized.InstanceType)
-		if err != nil {
-			return nil, err
-		}
-		req.LocationCode = placement.LocationCode
-		result.Request = req
-		result.Policy.LocationCode = placement.LocationCode
-		result.Placement = &placement
-	} else if !normalized.SkipAvailabilityCheck {
-		placement, err := requireSpotPlacement(ctx, client, normalized.InstanceType, normalized.LocationCode)
+	if !normalized.SkipAvailabilityCheck {
+		placement, err := requireSpotPlacement(ctx, client, normalized.InstanceType, req.LocationCode)
 		if err != nil {
 			return nil, err
 		}
@@ -286,6 +291,22 @@ func (o DeployOptions) normalized(now time.Time) (DeployOptions, error) {
 	return o, nil
 }
 
+func getSourceOSVolume(ctx context.Context, client Client, sourceVolumeID string) (Volume, error) {
+	volume, err := client.GetVolume(ctx, sourceVolumeID)
+	if err != nil {
+		return Volume{}, fmt.Errorf("get source Verda OS volume %s: %w", sourceVolumeID, err)
+	}
+	volume.ID = strings.TrimSpace(volume.ID)
+	if volume.ID == "" {
+		volume.ID = sourceVolumeID
+	}
+	volume.Location = strings.ToUpper(strings.TrimSpace(volume.Location))
+	if volume.Location == "" {
+		return Volume{}, fmt.Errorf("source_os_volume_id %s did not report a location", sourceVolumeID)
+	}
+	return volume, nil
+}
+
 func cloneOSVolume(ctx context.Context, client Client, sourceVolumeID, hostname, locationCode string) (OSVolumeClone, error) {
 	cloneReq := CloneVolumeRequest{
 		SourceVolumeID: sourceVolumeID,
@@ -330,18 +351,6 @@ func deleteClonedOSVolume(ctx context.Context, client Client, sourceVolumeID, cl
 	return client.DeleteVolume(ctx, cloneVolumeID, true)
 }
 
-func selectCheapestSpotPlacement(ctx context.Context, client Client, instanceType string) (SpotPlacement, error) {
-	options, err := client.GetSpotPlacementOptions(ctx, instanceType)
-	if err != nil {
-		return SpotPlacement{}, fmt.Errorf("list Verda spot placement options for %q: %w", instanceType, err)
-	}
-	if len(options) == 0 {
-		return SpotPlacement{}, fmt.Errorf("verda spot instance type %q is not currently available in any location", instanceType)
-	}
-	sortSpotPlacements(options)
-	return options[0], nil
-}
-
 func requireSpotPlacement(ctx context.Context, client Client, instanceType, locationCode string) (SpotPlacement, error) {
 	options, err := client.GetSpotPlacementOptions(ctx, instanceType)
 	if err != nil {
@@ -353,20 +362,6 @@ func requireSpotPlacement(ctx context.Context, client Client, instanceType, loca
 		}
 	}
 	return SpotPlacement{}, fmt.Errorf("verda spot instance type %q is not currently available in %s", instanceType, locationCode)
-}
-
-func sortSpotPlacements(options []SpotPlacement) {
-	sort.SliceStable(options, func(i, j int) bool {
-		left := options[i]
-		right := options[j]
-		if left.PriceKnown != right.PriceKnown {
-			return left.PriceKnown
-		}
-		if left.PriceKnown && left.SpotPrice != right.SpotPrice {
-			return left.SpotPrice < right.SpotPrice
-		}
-		return left.LocationCode < right.LocationCode
-	})
 }
 
 var hostnameInvalid = regexp.MustCompile(`[^a-z0-9-]+`)

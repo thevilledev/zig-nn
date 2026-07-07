@@ -24,10 +24,11 @@ func TestCloudDeployDryRunJSON(t *testing.T) {
 		Provider string `json:"provider"`
 		DryRun   bool   `json:"dry_run"`
 		Policy   struct {
-			LocationCode      string `json:"location_code"`
-			LocationSelection string `json:"location_selection"`
-			SpotOnly          bool   `json:"spot_only"`
-			SingleGPU         bool   `json:"single_gpu"`
+			LocationCode         string `json:"location_code"`
+			LocationSelection    string `json:"location_selection"`
+			SourceOSVolumeLocked bool   `json:"source_os_volume_locked"`
+			SpotOnly             bool   `json:"spot_only"`
+			SingleGPU            bool   `json:"single_gpu"`
 		} `json:"policy"`
 		SourceOSVolumeID string `json:"source_os_volume_id"`
 		Request          struct {
@@ -50,7 +51,7 @@ func TestCloudDeployDryRunJSON(t *testing.T) {
 	if result.SourceOSVolumeID != "vol-golden" {
 		t.Fatalf("SourceOSVolumeID = %q", result.SourceOSVolumeID)
 	}
-	if result.Policy.LocationCode != "" || result.Policy.LocationSelection != "cheapest_available_spot" || !result.Policy.SpotOnly || !result.Policy.SingleGPU {
+	if result.Policy.LocationCode != "" || result.Policy.LocationSelection != "source_os_volume_location" || !result.Policy.SourceOSVolumeLocked || !result.Policy.SpotOnly || !result.Policy.SingleGPU {
 		t.Fatalf("policy was not encoded: %#v", result.Policy)
 	}
 }

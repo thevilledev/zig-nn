@@ -54,7 +54,7 @@ func TestDeployDryRunBuildsSpotAutoPlacementRequestWithoutClient(t *testing.T) {
 	if !result.DryRun {
 		t.Fatal("DryRun = false")
 	}
-	if result.Policy.LocationCode != "" || result.Policy.LocationSelection != AutoLocationSelection || !result.Policy.SpotOnly || !result.Policy.SingleGPU {
+	if result.Policy.LocationCode != "" || result.Policy.LocationSelection != SourceOSVolumeLocation || !result.Policy.SourceOSVolumeLocked || !result.Policy.SpotOnly || !result.Policy.SingleGPU {
 		t.Fatalf("unexpected policy: %#v", result.Policy)
 	}
 	if !result.Request.IsSpot || result.Request.Contract != SpotContract || result.Request.LocationCode != "" {
@@ -71,6 +71,7 @@ func TestDeployDryRunBuildsSpotAutoPlacementRequestWithoutClient(t *testing.T) {
 func TestDeployRejectsMultiGPUInstanceTypes(t *testing.T) {
 	client := &fakeClient{
 		instanceType: InstanceType{InstanceType: "8H100.80S", GPUCount: 8},
+		sourceVolume: Volume{ID: "vol-golden", Location: FinlandLocationCode, IsOSVolume: true},
 	}
 
 	opts := DefaultDeployOptions("8H100.80S")
@@ -87,17 +88,18 @@ func TestDeployRejectsMultiGPUInstanceTypes(t *testing.T) {
 	}
 }
 
-func TestDeployCreatesCheapestAvailableSpotInstance(t *testing.T) {
+func TestDeployCreatesSpotInstanceInSourceOSVolumeLocation(t *testing.T) {
 	client := &fakeClient{
+		sourceVolume: Volume{ID: "vol-golden", Name: "golden", Status: "detached", Location: FinlandLocationCode, IsOSVolume: true},
 		instanceType: InstanceType{InstanceType: "1V100.6V", GPUCount: 1},
 		placements: []SpotPlacement{
 			{LocationCode: FinlandLocationCode, SpotPrice: 2, PriceKnown: true, Currency: "eur"},
 			{LocationCode: "NOR-01", SpotPrice: 1, PriceKnown: true, Currency: "eur"},
 		},
 		script:       StartupScript{ID: "script-1", Name: "userdata"},
-		clonedVolume: Volume{ID: "vol-clone-1", Name: "worker-os", Status: "cloning", Location: "NOR-01"},
-		readyVolume:  Volume{ID: "vol-clone-1", Name: "worker-os", Status: "detached", Location: "NOR-01"},
-		instance:     Instance{ID: "inst-1", Hostname: "worker", Status: "new", InstanceType: "1V100.6V", Location: "NOR-01", IsSpot: true},
+		clonedVolume: Volume{ID: "vol-clone-1", Name: "worker-os", Status: "cloning", Location: FinlandLocationCode},
+		readyVolume:  Volume{ID: "vol-clone-1", Name: "worker-os", Status: "detached", Location: FinlandLocationCode},
+		instance:     Instance{ID: "inst-1", Hostname: "worker", Status: "new", InstanceType: "1V100.6V", Location: FinlandLocationCode, IsSpot: true},
 	}
 	opts := DefaultDeployOptions("1V100.6V")
 	opts.SourceOSVolumeID = "vol-golden"
@@ -119,17 +121,23 @@ func TestDeployCreatesCheapestAvailableSpotInstance(t *testing.T) {
 	if !client.placementsListed {
 		t.Fatal("placement options were not listed")
 	}
-	if result.Policy.LocationCode != "NOR-01" {
-		t.Fatalf("LocationCode = %q, want NOR-01", result.Policy.LocationCode)
+	if client.gotVolumeID != "vol-golden" {
+		t.Fatalf("gotVolumeID = %q", client.gotVolumeID)
 	}
-	if result.Placement == nil || result.Placement.SpotPrice != 1 {
+	if result.SourceOSVolume == nil || result.SourceOSVolume.Location != FinlandLocationCode {
+		t.Fatalf("unexpected source volume: %#v", result.SourceOSVolume)
+	}
+	if result.Policy.LocationCode != FinlandLocationCode || result.Policy.LocationSelection != SourceOSVolumeLocation || !result.Policy.SourceOSVolumeLocked {
+		t.Fatalf("unexpected location policy: %#v", result.Policy)
+	}
+	if result.Placement == nil || result.Placement.LocationCode != FinlandLocationCode || result.Placement.SpotPrice != 2 {
 		t.Fatalf("unexpected placement: %#v", result.Placement)
 	}
 	if client.createdScriptName != "worker-userdata" {
 		t.Fatalf("createdScriptName = %q", client.createdScriptName)
 	}
 	req := client.createRequest
-	if req.LocationCode != "NOR-01" || !req.IsSpot || req.Contract != SpotContract {
+	if req.LocationCode != FinlandLocationCode || !req.IsSpot || req.Contract != SpotContract {
 		t.Fatalf("request did not enforce spot placement policy: %#v", req)
 	}
 	if req.StartupScriptID != "script-1" {
@@ -141,7 +149,7 @@ func TestDeployCreatesCheapestAvailableSpotInstance(t *testing.T) {
 	if len(req.SSHKeyIDs) != 2 || req.SSHKeyIDs[0] != "11111111-1111-1111-1111-111111111111" || req.SSHKeyIDs[1] != "22222222-2222-2222-2222-222222222222" {
 		t.Fatalf("SSHKeyIDs were not compacted: %#v", req.SSHKeyIDs)
 	}
-	if len(client.cloneRequests) != 1 || client.cloneRequests[0].SourceVolumeID != "vol-golden" || client.cloneRequests[0].Name != "worker-os" || client.cloneRequests[0].LocationCode != "NOR-01" {
+	if len(client.cloneRequests) != 1 || client.cloneRequests[0].SourceVolumeID != "vol-golden" || client.cloneRequests[0].Name != "worker-os" || client.cloneRequests[0].LocationCode != FinlandLocationCode {
 		t.Fatalf("unexpected clone requests: %#v", client.cloneRequests)
 	}
 	if client.waitedVolumeID != "vol-clone-1" {
@@ -157,6 +165,7 @@ func TestDeployCreatesCheapestAvailableSpotInstance(t *testing.T) {
 
 func TestDeployCreatesExplicitLocationSpotInstance(t *testing.T) {
 	client := &fakeClient{
+		sourceVolume: Volume{ID: "vol-golden", Name: "golden", Status: "detached", Location: FinlandLocationCode, IsOSVolume: true},
 		instanceType: InstanceType{InstanceType: "1V100.6V", GPUCount: 1},
 		placements: []SpotPlacement{
 			{LocationCode: FinlandLocationCode, SpotPrice: 2, PriceKnown: true, Currency: "eur"},
@@ -191,18 +200,24 @@ func TestDeployCreatesExplicitLocationSpotInstance(t *testing.T) {
 	}
 }
 
-func TestDeployRejectsAutoPlacementWithoutAvailabilityCheck(t *testing.T) {
-	client := &fakeClient{instanceType: InstanceType{InstanceType: "1V100.6V", GPUCount: 1}}
+func TestDeployRejectsExplicitLocationDifferentFromSourceOSVolumeLocation(t *testing.T) {
+	client := &fakeClient{
+		sourceVolume: Volume{ID: "vol-golden", Name: "golden", Status: "detached", Location: FinlandLocationCode, IsOSVolume: true},
+		instanceType: InstanceType{InstanceType: "1V100.6V", GPUCount: 1},
+	}
 	opts := DefaultDeployOptions("1V100.6V")
 	opts.SourceOSVolumeID = "vol-golden"
-	opts.SkipAvailabilityCheck = true
+	opts.LocationCode = "NOR-01"
 
 	_, err := Deploy(context.Background(), client, opts)
 	if err == nil {
-		t.Fatal("expected auto-placement skip availability error")
+		t.Fatal("expected source volume location mismatch error")
 	}
-	if !strings.Contains(err.Error(), "--location-code") {
-		t.Fatalf("error did not mention --location-code: %v", err)
+	if !strings.Contains(err.Error(), "source_os_volume_id") || !strings.Contains(err.Error(), FinlandLocationCode) || !strings.Contains(err.Error(), "NOR-01") {
+		t.Fatalf("error did not include source and requested locations: %v", err)
+	}
+	if client.createdScript {
+		t.Fatal("startup script should not be created for mismatched source volume location")
 	}
 }
 
@@ -236,6 +251,7 @@ func TestDeployRequiresSourceOSVolumeID(t *testing.T) {
 
 func TestDeployDeletesOnlyClonedVolumeWhenCreateInstanceFails(t *testing.T) {
 	client := &fakeClient{
+		sourceVolume: Volume{ID: "vol-golden", Name: "golden", Status: "detached", Location: FinlandLocationCode, IsOSVolume: true},
 		instanceType: InstanceType{InstanceType: "1V100.6V", GPUCount: 1},
 		placements:   []SpotPlacement{{LocationCode: FinlandLocationCode, SpotPrice: 2, PriceKnown: true}},
 		script:       StartupScript{ID: "script-1", Name: "userdata"},
@@ -261,6 +277,7 @@ func TestDeployDeletesOnlyClonedVolumeWhenCreateInstanceFails(t *testing.T) {
 }
 
 type fakeClient struct {
+	sourceVolume      Volume
 	instanceType      InstanceType
 	placements        []SpotPlacement
 	script            StartupScript
@@ -268,6 +285,7 @@ type fakeClient struct {
 	readyVolume       Volume
 	instance          Instance
 	placementsListed  bool
+	gotVolumeID       string
 	createdScript     bool
 	createdScriptName string
 	cloneRequests     []CloneVolumeRequest
@@ -275,6 +293,14 @@ type fakeClient struct {
 	deletedVolumeIDs  []string
 	createRequest     CreateInstanceRequest
 	createErr         error
+}
+
+func (c *fakeClient) GetVolume(_ context.Context, volumeID string) (Volume, error) {
+	c.gotVolumeID = volumeID
+	if c.sourceVolume.ID == "" {
+		c.sourceVolume = Volume{ID: volumeID, Location: FinlandLocationCode, IsOSVolume: true}
+	}
+	return c.sourceVolume, nil
 }
 
 func (c *fakeClient) GetInstanceType(context.Context, string, bool, string) (InstanceType, error) {

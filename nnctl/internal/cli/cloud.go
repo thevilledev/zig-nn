@@ -312,6 +312,13 @@ func (a *App) printCloudDeployResult(result *verdacloud.DeployResult, jsonOutput
 		fmt.Fprintf(a.stdout(), "dry run: would deploy %s as a spot single-GPU instance in %s\n", result.Request.InstanceType, location)
 		fmt.Fprintf(a.stdout(), "hostname: %s\n", result.Request.Hostname)
 		fmt.Fprintf(a.stdout(), "source os volume: %s\n", result.SourceOSVolumeID)
+		if result.Policy.SourceOSVolumeLocked {
+			if result.Policy.LocationCode == "" {
+				fmt.Fprintf(a.stdout(), "location locked by source os volume: resolved during deploy\n")
+			} else {
+				fmt.Fprintf(a.stdout(), "location locked by source os volume: %s\n", result.Policy.LocationCode)
+			}
+		}
 		if result.OSVolumeClone != nil {
 			fmt.Fprintf(a.stdout(), "cloned os volume name: %s\n", result.OSVolumeClone.Name)
 		}
@@ -328,6 +335,9 @@ func (a *App) printCloudDeployResult(result *verdacloud.DeployResult, jsonOutput
 	fmt.Fprintf(a.stdout(), "status: %s\n", instance.Status)
 	fmt.Fprintf(a.stdout(), "instance type: %s\n", instance.InstanceType)
 	fmt.Fprintf(a.stdout(), "location: %s\n", result.Policy.LocationCode)
+	if result.Policy.SourceOSVolumeLocked {
+		fmt.Fprintf(a.stdout(), "location locked by source os volume: %s\n", result.Policy.LocationCode)
+	}
 	if result.Placement != nil && result.Placement.PriceKnown {
 		currency := result.Placement.Currency
 		if currency == "" {
@@ -341,6 +351,9 @@ func (a *App) printCloudDeployResult(result *verdacloud.DeployResult, jsonOutput
 	}
 	if result.OSVolumeClone != nil {
 		fmt.Fprintf(a.stdout(), "source os volume: %s\n", result.OSVolumeClone.SourceVolumeID)
+		if result.SourceOSVolume != nil {
+			fmt.Fprintf(a.stdout(), "source os volume location: %s\n", result.SourceOSVolume.Location)
+		}
 		fmt.Fprintf(a.stdout(), "cloned os volume: %s\n", result.OSVolumeClone.VolumeID)
 	}
 	if result.StartupScript != nil {
