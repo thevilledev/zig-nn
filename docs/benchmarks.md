@@ -105,16 +105,20 @@ spot instances running after the benchmark is captured.
    packer build .
    ```
 
-4. Deploy one benchmark worker with the shared SSH key. `nnctl` reads the
-   Packer-built source OS volume location, restricts placement to that location,
-   clones the source volume, and uses the clone as the instance image:
+4. Deploy one benchmark worker with the shared SSH key. `nnctl` can choose a
+   Packer-built source OS volume by name when matching source volumes exist in
+   multiple zones: it checks spot availability, picks a matching volume in an
+   available location, clones that source volume, and uses the clone as the
+   instance image:
 
    ```bash
    ./bin/nnctl cloud deploy \
      --instance-type <instance-type> \
-     --source-os-volume-id <packer-os-volume-id> \
+     --source-os-volume-name <packer-os-volume-name> \
      --ssh-key-id '397644c5-cb14-4ab0-b072-d14090f881f3'
    ```
+
+   To force a specific source volume, pass `--source-os-volume-id` instead.
 
 5. Poll until the VM reports an IP address:
 

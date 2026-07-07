@@ -29,6 +29,7 @@ const (
 type DeployOptions struct {
 	InstanceType                string
 	SourceOSVolumeID            string
+	SourceOSVolumeName          string
 	ClonedOSVolumeID            string
 	Image                       string
 	Hostname                    string
@@ -116,18 +117,19 @@ type Instance struct {
 }
 
 type DeployResult struct {
-	Provider          string                `json:"provider"`
-	DryRun            bool                  `json:"dry_run"`
-	Policy            DeployPolicy          `json:"policy"`
-	SourceOSVolumeID  string                `json:"source_os_volume_id"`
-	SourceOSVolume    *Volume               `json:"source_os_volume,omitempty"`
-	Request           CreateInstanceRequest `json:"request"`
-	InstanceType      *InstanceType         `json:"instance_type,omitempty"`
-	Placement         *SpotPlacement        `json:"placement,omitempty"`
-	OSVolumeClone     *OSVolumeClone        `json:"os_volume_clone,omitempty"`
-	ClonedOSVolumeIDs map[string]string     `json:"cloned_os_volume_ids,omitempty"`
-	StartupScript     *StartupScript        `json:"startup_script,omitempty"`
-	Instance          *Instance             `json:"instance,omitempty"`
+	Provider           string                `json:"provider"`
+	DryRun             bool                  `json:"dry_run"`
+	Policy             DeployPolicy          `json:"policy"`
+	SourceOSVolumeID   string                `json:"source_os_volume_id"`
+	SourceOSVolumeName string                `json:"source_os_volume_name,omitempty"`
+	SourceOSVolume     *Volume               `json:"source_os_volume,omitempty"`
+	Request            CreateInstanceRequest `json:"request"`
+	InstanceType       *InstanceType         `json:"instance_type,omitempty"`
+	Placement          *SpotPlacement        `json:"placement,omitempty"`
+	OSVolumeClone      *OSVolumeClone        `json:"os_volume_clone,omitempty"`
+	ClonedOSVolumeIDs  map[string]string     `json:"cloned_os_volume_ids,omitempty"`
+	StartupScript      *StartupScript        `json:"startup_script,omitempty"`
+	Instance           *Instance             `json:"instance,omitempty"`
 }
 
 type DeployPolicy struct {
@@ -143,6 +145,7 @@ type DeployPolicy struct {
 
 type Client interface {
 	GetVolume(context.Context, string) (Volume, error)
+	ListVolumes(context.Context) ([]Volume, error)
 	GetInstanceType(context.Context, string, bool, string) (InstanceType, error)
 	GetSpotPlacementOptions(context.Context, string) ([]SpotPlacement, error)
 	CreateStartupScript(context.Context, string, string) (StartupScript, error)
@@ -167,7 +170,8 @@ func Deploy(ctx context.Context, client Client, opts DeployOptions) (*DeployResu
 	}
 
 	image := normalized.Image
-	if normalized.SourceOSVolumeID != "" {
+	sourceOSVolumeRequested := normalized.hasSourceOSVolume()
+	if sourceOSVolumeRequested {
 		image = ""
 	}
 	req := CreateInstanceRequest{
@@ -183,7 +187,7 @@ func Deploy(ctx context.Context, client Client, opts DeployOptions) (*DeployResu
 	locationSelection := ExplicitLocation
 	if normalized.LocationCode == "" {
 		locationSelection = SpotPlacementLocation
-		if normalized.SourceOSVolumeID != "" {
+		if sourceOSVolumeRequested {
 			locationSelection = SourceOSVolumeLocation
 		}
 	}
@@ -194,17 +198,18 @@ func Deploy(ctx context.Context, client Client, opts DeployOptions) (*DeployResu
 		Policy: DeployPolicy{
 			LocationCode:                   normalized.LocationCode,
 			LocationSelection:              locationSelection,
-			SourceOSVolumeLocked:           normalized.SourceOSVolumeID != "",
+			SourceOSVolumeLocked:           sourceOSVolumeRequested,
 			SpotOnly:                       true,
 			SingleGPU:                      true,
 			AllowsCPU:                      true,
 			MaxGPUCount:                    MaxDeployGPUCount,
 			CleanupClonedOSVolumeOnFailure: !normalized.KeepClonedOSVolumeOnFailure,
 		},
-		SourceOSVolumeID: normalized.SourceOSVolumeID,
-		Request:          req,
+		SourceOSVolumeID:   normalized.SourceOSVolumeID,
+		SourceOSVolumeName: normalized.SourceOSVolumeName,
+		Request:            req,
 	}
-	if normalized.SourceOSVolumeID != "" {
+	if sourceOSVolumeRequested {
 		result.OSVolumeClone = &OSVolumeClone{
 			SourceVolumeID: normalized.SourceOSVolumeID,
 			VolumeID:       normalized.ClonedOSVolumeID,
@@ -223,6 +228,7 @@ func Deploy(ctx context.Context, client Client, opts DeployOptions) (*DeployResu
 		return nil, fmt.Errorf("verda client is required")
 	}
 
+	var selectedPlacement *SpotPlacement
 	if normalized.SourceOSVolumeID != "" {
 		sourceVolume, err := getSourceOSVolume(ctx, client, normalized.SourceOSVolumeID)
 		if err != nil {
@@ -237,6 +243,22 @@ func Deploy(ctx context.Context, client Client, opts DeployOptions) (*DeployResu
 		} else if !strings.EqualFold(normalized.LocationCode, sourceVolume.Location) {
 			return nil, fmt.Errorf("source_os_volume_id %s is in %s, but --location-code requested %s", normalized.SourceOSVolumeID, sourceVolume.Location, normalized.LocationCode)
 		}
+	} else if normalized.SourceOSVolumeName != "" {
+		sourceVolume, placement, err := selectSourceOSVolumeByName(ctx, client, normalized.SourceOSVolumeName, normalized.InstanceType, normalized.LocationCode, normalized.SkipAvailabilityCheck)
+		if err != nil {
+			return nil, err
+		}
+		selectedPlacement = placement
+		normalized.SourceOSVolumeID = sourceVolume.ID
+		result.SourceOSVolumeID = sourceVolume.ID
+		result.SourceOSVolume = &sourceVolume
+		if result.OSVolumeClone != nil {
+			result.OSVolumeClone.SourceVolumeID = sourceVolume.ID
+			result.OSVolumeClone.LocationCode = sourceVolume.Location
+		}
+		req.LocationCode = sourceVolume.Location
+		result.Request = req
+		result.Policy.LocationCode = sourceVolume.Location
 	}
 
 	instanceType, err := client.GetInstanceType(ctx, normalized.InstanceType, true, req.LocationCode)
@@ -249,14 +271,17 @@ func Deploy(ctx context.Context, client Client, opts DeployOptions) (*DeployResu
 	result.InstanceType = &instanceType
 
 	if !normalized.SkipAvailabilityCheck {
-		placement, err := requireSpotPlacement(ctx, client, normalized.InstanceType, req.LocationCode)
-		if err != nil {
-			return nil, err
+		if selectedPlacement == nil {
+			placement, err := requireSpotPlacement(ctx, client, normalized.InstanceType, req.LocationCode)
+			if err != nil {
+				return nil, err
+			}
+			selectedPlacement = &placement
 		}
-		result.Placement = &placement
+		result.Placement = selectedPlacement
 		if req.LocationCode == "" {
-			req.LocationCode = placement.LocationCode
-			result.Policy.LocationCode = placement.LocationCode
+			req.LocationCode = selectedPlacement.LocationCode
+			result.Policy.LocationCode = selectedPlacement.LocationCode
 			result.Request = req
 		}
 	}
@@ -300,6 +325,7 @@ func Deploy(ctx context.Context, client Client, opts DeployOptions) (*DeployResu
 func (o DeployOptions) normalized(now time.Time) (DeployOptions, error) {
 	o.InstanceType = strings.TrimSpace(o.InstanceType)
 	o.SourceOSVolumeID = strings.TrimSpace(o.SourceOSVolumeID)
+	o.SourceOSVolumeName = strings.TrimSpace(o.SourceOSVolumeName)
 	o.ClonedOSVolumeID = strings.TrimSpace(o.ClonedOSVolumeID)
 	o.Image = strings.TrimSpace(o.Image)
 	o.Hostname = strings.TrimSpace(o.Hostname)
@@ -312,16 +338,19 @@ func (o DeployOptions) normalized(now time.Time) (DeployOptions, error) {
 	if o.InstanceType == "" {
 		return DeployOptions{}, fmt.Errorf("instance type is required")
 	}
-	if o.SourceOSVolumeID == "" && o.ClonedOSVolumeID != "" {
-		return DeployOptions{}, fmt.Errorf("cloned_os_volume_id requires source_os_volume_id")
+	if o.SourceOSVolumeID != "" && o.SourceOSVolumeName != "" {
+		return DeployOptions{}, fmt.Errorf("source_os_volume_name cannot be combined with source_os_volume_id")
 	}
-	if o.SourceOSVolumeID == "" && o.Image == "" {
-		return DeployOptions{}, fmt.Errorf("image is required when source_os_volume_id is not set")
+	if !o.hasSourceOSVolume() && o.ClonedOSVolumeID != "" {
+		return DeployOptions{}, fmt.Errorf("cloned_os_volume_id requires source_os_volume_id or source_os_volume_name")
+	}
+	if !o.hasSourceOSVolume() && o.Image == "" {
+		return DeployOptions{}, fmt.Errorf("image is required when source_os_volume_id or source_os_volume_name is not set")
 	}
 	if o.Description == "" {
 		return DeployOptions{}, fmt.Errorf("description is required")
 	}
-	if o.SourceOSVolumeID == "" && o.UserDataScript == "" {
+	if !o.hasSourceOSVolume() && o.UserDataScript == "" {
 		o.UserDataScript = DefaultUserDataScript
 	}
 	if o.Hostname == "" {
@@ -337,20 +366,144 @@ func (o DeployOptions) normalized(now time.Time) (DeployOptions, error) {
 	return o, nil
 }
 
+func (o DeployOptions) hasSourceOSVolume() bool {
+	return o.SourceOSVolumeID != "" || o.SourceOSVolumeName != ""
+}
+
 func getSourceOSVolume(ctx context.Context, client Client, sourceVolumeID string) (Volume, error) {
 	volume, err := client.GetVolume(ctx, sourceVolumeID)
 	if err != nil {
 		return Volume{}, fmt.Errorf("get source Verda OS volume %s: %w", sourceVolumeID, err)
 	}
+	return normalizeSourceOSVolume(volume, sourceVolumeID, fmt.Sprintf("source_os_volume_id %s", sourceVolumeID))
+}
+
+func selectSourceOSVolumeByName(ctx context.Context, client Client, sourceVolumeName, instanceType, locationCode string, skipAvailabilityCheck bool) (Volume, *SpotPlacement, error) {
+	volumes, err := listSourceOSVolumesByName(ctx, client, sourceVolumeName)
+	if err != nil {
+		return Volume{}, nil, err
+	}
+	if locationCode != "" {
+		volume, err := selectSourceOSVolumeInLocation(volumes, sourceVolumeName, locationCode)
+		return volume, nil, err
+	}
+	if skipAvailabilityCheck {
+		if len(volumes) != 1 {
+			return Volume{}, nil, fmt.Errorf("source_os_volume_name %q matched %d OS volumes; pass --location-code or enable availability checks so nnctl can choose a zone", sourceVolumeName, len(volumes))
+		}
+		return volumes[0], nil, nil
+	}
+
+	placements, err := spotPlacementOptions(ctx, client, instanceType)
+	if err != nil {
+		return Volume{}, nil, err
+	}
+	if len(placements) == 0 {
+		return Volume{}, nil, fmt.Errorf("verda spot instance type %q is not currently available in any location", instanceType)
+	}
+	for _, placement := range placements {
+		candidates := volumesInLocation(volumes, placement.LocationCode)
+		if len(candidates) == 0 {
+			continue
+		}
+		if len(candidates) > 1 {
+			return Volume{}, nil, fmt.Errorf("source_os_volume_name %q matched multiple OS volumes in %s: %s; pass --source-os-volume-id", sourceVolumeName, placement.LocationCode, volumeIDs(candidates))
+		}
+		selectedPlacement := placement
+		return candidates[0], &selectedPlacement, nil
+	}
+	return Volume{}, nil, fmt.Errorf("source_os_volume_name %q matched OS volumes in %s, but spot instance type %q is not currently available in those locations", sourceVolumeName, volumeLocations(volumes), instanceType)
+}
+
+func listSourceOSVolumesByName(ctx context.Context, client Client, sourceVolumeName string) ([]Volume, error) {
+	volumes, err := client.ListVolumes(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list Verda volumes for source_os_volume_name %q: %w", sourceVolumeName, err)
+	}
+
+	var matches []Volume
+	for _, volume := range volumes {
+		if strings.TrimSpace(volume.Name) != sourceVolumeName || !volume.IsOSVolume {
+			continue
+		}
+		normalized, err := normalizeSourceOSVolume(volume, "", fmt.Sprintf("source_os_volume_name %q", sourceVolumeName))
+		if err != nil {
+			return nil, err
+		}
+		matches = append(matches, normalized)
+	}
+	sort.SliceStable(matches, func(i, j int) bool {
+		if matches[i].Location != matches[j].Location {
+			return matches[i].Location < matches[j].Location
+		}
+		return matches[i].ID < matches[j].ID
+	})
+	if len(matches) == 0 {
+		return nil, fmt.Errorf("no Verda OS volumes named %q found", sourceVolumeName)
+	}
+	return matches, nil
+}
+
+func selectSourceOSVolumeInLocation(volumes []Volume, sourceVolumeName, locationCode string) (Volume, error) {
+	candidates := volumesInLocation(volumes, locationCode)
+	if len(candidates) == 0 {
+		return Volume{}, fmt.Errorf("source_os_volume_name %q did not match an OS volume in %s", sourceVolumeName, locationCode)
+	}
+	if len(candidates) > 1 {
+		return Volume{}, fmt.Errorf("source_os_volume_name %q matched multiple OS volumes in %s: %s; pass --source-os-volume-id", sourceVolumeName, locationCode, volumeIDs(candidates))
+	}
+	return candidates[0], nil
+}
+
+func normalizeSourceOSVolume(volume Volume, fallbackID, label string) (Volume, error) {
 	volume.ID = strings.TrimSpace(volume.ID)
 	if volume.ID == "" {
-		volume.ID = sourceVolumeID
+		volume.ID = strings.TrimSpace(fallbackID)
 	}
+	if volume.ID == "" {
+		return Volume{}, fmt.Errorf("%s did not report an ID", label)
+	}
+	volume.Name = strings.TrimSpace(volume.Name)
 	volume.Location = strings.ToUpper(strings.TrimSpace(volume.Location))
 	if volume.Location == "" {
-		return Volume{}, fmt.Errorf("source_os_volume_id %s did not report a location", sourceVolumeID)
+		return Volume{}, fmt.Errorf("%s did not report a location", label)
 	}
 	return volume, nil
+}
+
+func volumesInLocation(volumes []Volume, locationCode string) []Volume {
+	locationCode = strings.ToUpper(strings.TrimSpace(locationCode))
+	var matches []Volume
+	for _, volume := range volumes {
+		if strings.EqualFold(volume.Location, locationCode) {
+			matches = append(matches, volume)
+		}
+	}
+	return matches
+}
+
+func volumeIDs(volumes []Volume) string {
+	ids := make([]string, 0, len(volumes))
+	for _, volume := range volumes {
+		ids = append(ids, volume.ID)
+	}
+	sort.Strings(ids)
+	return strings.Join(ids, ", ")
+}
+
+func volumeLocations(volumes []Volume) string {
+	locations := make([]string, 0, len(volumes))
+	seen := map[string]bool{}
+	for _, volume := range volumes {
+		location := strings.ToUpper(strings.TrimSpace(volume.Location))
+		if location == "" || seen[location] {
+			continue
+		}
+		seen[location] = true
+		locations = append(locations, location)
+	}
+	sort.Strings(locations)
+	return strings.Join(locations, ", ")
 }
 
 func prepareOSVolume(ctx context.Context, client Client, opts DeployOptions, locationCode string) (OSVolumeClone, bool, error) {
@@ -462,12 +615,11 @@ func deleteClonedOSVolume(ctx context.Context, client Client, sourceVolumeID, cl
 }
 
 func requireSpotPlacement(ctx context.Context, client Client, instanceType, locationCode string) (SpotPlacement, error) {
-	options, err := client.GetSpotPlacementOptions(ctx, instanceType)
+	options, err := spotPlacementOptions(ctx, client, instanceType)
 	if err != nil {
-		return SpotPlacement{}, fmt.Errorf("list Verda spot placement options for %q: %w", instanceType, err)
+		return SpotPlacement{}, err
 	}
 	if locationCode == "" && len(options) > 0 {
-		sortSpotPlacements(options)
 		return options[0], nil
 	}
 	if locationCode == "" {
@@ -479,6 +631,15 @@ func requireSpotPlacement(ctx context.Context, client Client, instanceType, loca
 		}
 	}
 	return SpotPlacement{}, fmt.Errorf("verda spot instance type %q is not currently available in %s", instanceType, locationCode)
+}
+
+func spotPlacementOptions(ctx context.Context, client Client, instanceType string) ([]SpotPlacement, error) {
+	options, err := client.GetSpotPlacementOptions(ctx, instanceType)
+	if err != nil {
+		return nil, fmt.Errorf("list Verda spot placement options for %q: %w", instanceType, err)
+	}
+	sortSpotPlacements(options)
+	return options, nil
 }
 
 func sortSpotPlacements(options []SpotPlacement) {

@@ -107,6 +107,66 @@ func TestCloudDeployDryRunJSONCanReuseClonedOSVolume(t *testing.T) {
 	}
 }
 
+func TestCloudDeployDryRunJSONWithSourceOSVolumeName(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	app := &App{Stdout: &stdout, Stderr: &stderr}
+
+	err := app.Run(context.Background(), []string{"cloud", "deploy", "--instance-type", "1V100.6V", "--source-os-volume-name", "golden", "--dry-run", "--json"})
+	if err != nil {
+		t.Fatalf("Run() error = %v\nstderr:\n%s", err, stderr.String())
+	}
+
+	var result struct {
+		Policy struct {
+			LocationSelection    string `json:"location_selection"`
+			SourceOSVolumeLocked bool   `json:"source_os_volume_locked"`
+		} `json:"policy"`
+		SourceOSVolumeID   string `json:"source_os_volume_id"`
+		SourceOSVolumeName string `json:"source_os_volume_name"`
+		Request            struct {
+			Image        string `json:"image"`
+			LocationCode string `json:"location_code"`
+		} `json:"request"`
+		OSVolumeClone *verdacloud.OSVolumeClone `json:"os_volume_clone"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("invalid JSON output: %v\n%s", err, stdout.String())
+	}
+
+	if result.SourceOSVolumeID != "" || result.SourceOSVolumeName != "golden" {
+		t.Fatalf("unexpected source volume fields: id=%q name=%q", result.SourceOSVolumeID, result.SourceOSVolumeName)
+	}
+	if result.Policy.LocationSelection != "source_os_volume_location" || !result.Policy.SourceOSVolumeLocked {
+		t.Fatalf("unexpected policy: %#v", result.Policy)
+	}
+	if result.Request.Image != "" || result.Request.LocationCode != "" {
+		t.Fatalf("unexpected request: %#v", result.Request)
+	}
+	if result.OSVolumeClone == nil || result.OSVolumeClone.SourceVolumeID != "" || result.OSVolumeClone.Name == "" {
+		t.Fatalf("unexpected OS clone plan: %#v", result.OSVolumeClone)
+	}
+}
+
+func TestCloudDeployAcceptsSourceVolumeNameAlias(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	app := &App{Stdout: &stdout, Stderr: &stderr}
+
+	err := app.Run(context.Background(), []string{"cloud", "deploy", "--instance-type", "1V100.6V", "--source-volume-name", "golden", "--dry-run", "--json"})
+	if err != nil {
+		t.Fatalf("Run() error = %v\nstderr:\n%s", err, stderr.String())
+	}
+
+	var result struct {
+		SourceOSVolumeName string `json:"source_os_volume_name"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("invalid JSON output: %v\n%s", err, stdout.String())
+	}
+	if result.SourceOSVolumeName != "golden" {
+		t.Fatalf("SourceOSVolumeName = %q, want golden", result.SourceOSVolumeName)
+	}
+}
+
 func TestCloudDeployRejectsNonUUIDSSHKeyID(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	app := &App{Stdout: &stdout, Stderr: &stderr}

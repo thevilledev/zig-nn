@@ -368,6 +368,19 @@ func (c *SDKClient) GetVolume(ctx context.Context, volumeID string) (Volume, err
 	return volumeFromSDK(*volume), nil
 }
 
+func (c *SDKClient) ListVolumes(ctx context.Context) ([]Volume, error) {
+	volumes, err := c.client.Volumes.ListVolumes(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]Volume, 0, len(volumes))
+	for _, volume := range volumes {
+		result = append(result, volumeFromSDK(volume))
+	}
+	return result, nil
+}
+
 func (c *SDKClient) DeleteVolume(ctx context.Context, volumeID string, force bool) error {
 	return c.client.Volumes.DeleteVolume(ctx, volumeID, force)
 }

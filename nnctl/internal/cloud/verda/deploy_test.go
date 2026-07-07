@@ -243,6 +243,135 @@ func TestDeployCreatesSpotInstanceInSourceOSVolumeLocation(t *testing.T) {
 	}
 }
 
+func TestDeploySelectsSourceOSVolumeByNameInAvailableLocation(t *testing.T) {
+	client := &fakeClient{
+		sourceVolumes: []Volume{
+			{ID: "vol-fin", Name: "golden", Status: "detached", Location: FinlandLocationCode, IsOSVolume: true},
+			{ID: "vol-nor", Name: "golden", Status: "detached", Location: "NOR-01", IsOSVolume: true},
+			{ID: "vol-data", Name: "golden", Status: "detached", Location: "NOR-01"},
+		},
+		instanceType: InstanceType{InstanceType: "1V100.6V", GPUCount: 1},
+		placements: []SpotPlacement{
+			{LocationCode: FinlandLocationCode, SpotPrice: 2, PriceKnown: true, Currency: "eur"},
+			{LocationCode: "NOR-01", SpotPrice: 1, PriceKnown: true, Currency: "eur"},
+		},
+		clonedVolume: Volume{ID: "vol-clone-1", Name: "worker-os", Status: "cloning", Location: "NOR-01"},
+		readyVolume:  Volume{ID: "vol-clone-1", Name: "worker-os", Status: "detached", Location: "NOR-01"},
+		instance:     Instance{ID: "inst-1", Hostname: "worker", Status: "new", InstanceType: "1V100.6V", Location: "NOR-01", IsSpot: true},
+	}
+	opts := DefaultDeployOptions("1V100.6V")
+	opts.SourceOSVolumeName = "golden"
+	opts.Hostname = "worker"
+
+	result, err := Deploy(context.Background(), client, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !client.volumesListed {
+		t.Fatal("volumes were not listed")
+	}
+	if client.gotVolumeID != "" {
+		t.Fatalf("GetVolume should not be used for source name resolution, got %q", client.gotVolumeID)
+	}
+	if result.SourceOSVolumeID != "vol-nor" || result.SourceOSVolumeName != "golden" {
+		t.Fatalf("unexpected resolved source volume: id=%q name=%q", result.SourceOSVolumeID, result.SourceOSVolumeName)
+	}
+	if result.SourceOSVolume == nil || result.SourceOSVolume.Location != "NOR-01" {
+		t.Fatalf("unexpected source volume: %#v", result.SourceOSVolume)
+	}
+	if result.Policy.LocationCode != "NOR-01" || result.Policy.LocationSelection != SourceOSVolumeLocation || !result.Policy.SourceOSVolumeLocked {
+		t.Fatalf("unexpected location policy: %#v", result.Policy)
+	}
+	if result.Placement == nil || result.Placement.LocationCode != "NOR-01" || result.Placement.SpotPrice != 1 {
+		t.Fatalf("unexpected placement: %#v", result.Placement)
+	}
+	if len(client.cloneRequests) != 1 || client.cloneRequests[0].SourceVolumeID != "vol-nor" || client.cloneRequests[0].LocationCode != "NOR-01" {
+		t.Fatalf("unexpected clone requests: %#v", client.cloneRequests)
+	}
+	if client.createRequest.LocationCode != "NOR-01" || client.createRequest.Image != "vol-clone-1" {
+		t.Fatalf("unexpected create request: %#v", client.createRequest)
+	}
+}
+
+func TestDeploySourceOSVolumeNameHonorsExplicitLocation(t *testing.T) {
+	client := &fakeClient{
+		sourceVolumes: []Volume{
+			{ID: "vol-fin", Name: "golden", Status: "detached", Location: FinlandLocationCode, IsOSVolume: true},
+			{ID: "vol-nor", Name: "golden", Status: "detached", Location: "NOR-01", IsOSVolume: true},
+		},
+		instanceType: InstanceType{InstanceType: "1V100.6V", GPUCount: 1},
+		placements:   []SpotPlacement{{LocationCode: FinlandLocationCode, SpotPrice: 2, PriceKnown: true, Currency: "eur"}},
+		clonedVolume: Volume{ID: "vol-clone-1", Name: "worker-os", Status: "cloning", Location: FinlandLocationCode},
+		readyVolume:  Volume{ID: "vol-clone-1", Name: "worker-os", Status: "detached", Location: FinlandLocationCode},
+		instance:     Instance{ID: "inst-1", Hostname: "worker", Status: "new", InstanceType: "1V100.6V", Location: FinlandLocationCode, IsSpot: true},
+	}
+	opts := DefaultDeployOptions("1V100.6V")
+	opts.SourceOSVolumeName = "golden"
+	opts.Hostname = "worker"
+	opts.LocationCode = strings.ToLower(FinlandLocationCode)
+
+	result, err := Deploy(context.Background(), client, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if result.SourceOSVolumeID != "vol-fin" {
+		t.Fatalf("SourceOSVolumeID = %q, want vol-fin", result.SourceOSVolumeID)
+	}
+	if result.Policy.LocationCode != FinlandLocationCode || result.Policy.LocationSelection != ExplicitLocation {
+		t.Fatalf("unexpected location policy: %#v", result.Policy)
+	}
+	if len(client.cloneRequests) != 1 || client.cloneRequests[0].SourceVolumeID != "vol-fin" || client.cloneRequests[0].LocationCode != FinlandLocationCode {
+		t.Fatalf("unexpected clone requests: %#v", client.cloneRequests)
+	}
+}
+
+func TestDeployRejectsAmbiguousSourceOSVolumeNameInAvailableLocation(t *testing.T) {
+	client := &fakeClient{
+		sourceVolumes: []Volume{
+			{ID: "vol-nor-a", Name: "golden", Status: "detached", Location: "NOR-01", IsOSVolume: true},
+			{ID: "vol-nor-b", Name: "golden", Status: "detached", Location: "NOR-01", IsOSVolume: true},
+		},
+		instanceType: InstanceType{InstanceType: "1V100.6V", GPUCount: 1},
+		placements:   []SpotPlacement{{LocationCode: "NOR-01", SpotPrice: 1, PriceKnown: true, Currency: "eur"}},
+	}
+	opts := DefaultDeployOptions("1V100.6V")
+	opts.SourceOSVolumeName = "golden"
+
+	_, err := Deploy(context.Background(), client, opts)
+	if err == nil {
+		t.Fatal("expected ambiguous source volume name error")
+	}
+	if !strings.Contains(err.Error(), "multiple OS volumes in NOR-01") || !strings.Contains(err.Error(), "vol-nor-a") || !strings.Contains(err.Error(), "vol-nor-b") {
+		t.Fatalf("error did not mention ambiguous volumes: %v", err)
+	}
+	if len(client.cloneRequests) != 0 || client.createRequest.InstanceType != "" {
+		t.Fatalf("deploy should stop before clone/create: clone=%#v create=%#v", client.cloneRequests, client.createRequest)
+	}
+}
+
+func TestDeployRejectsSourceOSVolumeNameWithSkipAvailabilityAndMultipleMatches(t *testing.T) {
+	client := &fakeClient{
+		sourceVolumes: []Volume{
+			{ID: "vol-fin", Name: "golden", Status: "detached", Location: FinlandLocationCode, IsOSVolume: true},
+			{ID: "vol-nor", Name: "golden", Status: "detached", Location: "NOR-01", IsOSVolume: true},
+		},
+		instanceType: InstanceType{InstanceType: "1V100.6V", GPUCount: 1},
+	}
+	opts := DefaultDeployOptions("1V100.6V")
+	opts.SourceOSVolumeName = "golden"
+	opts.SkipAvailabilityCheck = true
+
+	_, err := Deploy(context.Background(), client, opts)
+	if err == nil {
+		t.Fatal("expected skip availability ambiguity error")
+	}
+	if !strings.Contains(err.Error(), "--location-code") || !strings.Contains(err.Error(), "availability checks") {
+		t.Fatalf("error did not explain how to disambiguate: %v", err)
+	}
+}
+
 func TestDeployCreatesSourceOSVolumeInstanceWithCustomUserData(t *testing.T) {
 	client := &fakeClient{
 		sourceVolume: Volume{ID: "vol-golden", Name: "golden", Status: "detached", Location: FinlandLocationCode, IsOSVolume: true},
@@ -528,6 +657,7 @@ func TestDeployRejectsReusedClonedOSVolumeLocationMismatch(t *testing.T) {
 
 type fakeClient struct {
 	sourceVolume         Volume
+	sourceVolumes        []Volume
 	instanceType         InstanceType
 	placements           []SpotPlacement
 	script               StartupScript
@@ -535,6 +665,7 @@ type fakeClient struct {
 	readyVolume          Volume
 	instance             Instance
 	placementsListed     bool
+	volumesListed        bool
 	gotVolumeID          string
 	createdScript        bool
 	createdScriptName    string
@@ -552,6 +683,11 @@ func (c *fakeClient) GetVolume(_ context.Context, volumeID string) (Volume, erro
 		c.sourceVolume = Volume{ID: volumeID, Location: FinlandLocationCode, IsOSVolume: true}
 	}
 	return c.sourceVolume, nil
+}
+
+func (c *fakeClient) ListVolumes(context.Context) ([]Volume, error) {
+	c.volumesListed = true
+	return append([]Volume(nil), c.sourceVolumes...), nil
 }
 
 func (c *fakeClient) GetInstanceType(context.Context, string, bool, string) (InstanceType, error) {

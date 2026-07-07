@@ -326,6 +326,9 @@ func (a *App) printCloudDeployResult(result *verdacloud.DeployResult, jsonOutput
 		if result.SourceOSVolumeID != "" {
 			fmt.Fprintf(a.stdout(), "source os volume: %s\n", result.SourceOSVolumeID)
 		}
+		if result.SourceOSVolumeName != "" {
+			fmt.Fprintf(a.stdout(), "source os volume name: %s\n", result.SourceOSVolumeName)
+		}
 		if result.Policy.SourceOSVolumeLocked {
 			if result.Policy.LocationCode == "" {
 				fmt.Fprintf(a.stdout(), "location locked by source os volume: resolved during deploy\n")
@@ -373,6 +376,9 @@ func (a *App) printCloudDeployResult(result *verdacloud.DeployResult, jsonOutput
 	}
 	if result.OSVolumeClone != nil {
 		fmt.Fprintf(a.stdout(), "source os volume: %s\n", result.OSVolumeClone.SourceVolumeID)
+		if result.SourceOSVolumeName != "" {
+			fmt.Fprintf(a.stdout(), "source os volume name: %s\n", result.SourceOSVolumeName)
+		}
 		if result.SourceOSVolume != nil {
 			fmt.Fprintf(a.stdout(), "source os volume location: %s\n", result.SourceOSVolume.Location)
 		}
