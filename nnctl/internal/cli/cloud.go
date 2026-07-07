@@ -320,7 +320,11 @@ func (a *App) printCloudDeployResult(result *verdacloud.DeployResult, jsonOutput
 			}
 		}
 		if result.OSVolumeClone != nil {
-			fmt.Fprintf(a.stdout(), "cloned os volume name: %s\n", result.OSVolumeClone.Name)
+			if result.OSVolumeClone.Reused {
+				fmt.Fprintf(a.stdout(), "reused cloned os volume: %s\n", result.OSVolumeClone.VolumeID)
+			} else {
+				fmt.Fprintf(a.stdout(), "cloned os volume name: %s\n", result.OSVolumeClone.Name)
+			}
 		}
 		fmt.Fprintf(a.stdout(), "startup script: embedded userdata\n")
 		return nil
@@ -354,7 +358,11 @@ func (a *App) printCloudDeployResult(result *verdacloud.DeployResult, jsonOutput
 		if result.SourceOSVolume != nil {
 			fmt.Fprintf(a.stdout(), "source os volume location: %s\n", result.SourceOSVolume.Location)
 		}
-		fmt.Fprintf(a.stdout(), "cloned os volume: %s\n", result.OSVolumeClone.VolumeID)
+		if result.OSVolumeClone.Reused {
+			fmt.Fprintf(a.stdout(), "reused cloned os volume: %s\n", result.OSVolumeClone.VolumeID)
+		} else {
+			fmt.Fprintf(a.stdout(), "cloned os volume: %s\n", result.OSVolumeClone.VolumeID)
+		}
 	}
 	if result.StartupScript != nil {
 		fmt.Fprintf(a.stdout(), "startup script: %s\n", result.StartupScript.ID)

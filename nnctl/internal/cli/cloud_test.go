@@ -56,6 +56,48 @@ func TestCloudDeployDryRunJSON(t *testing.T) {
 	}
 }
 
+func TestCloudDeployDryRunJSONCanReuseClonedOSVolume(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	app := &App{Stdout: &stdout, Stderr: &stderr}
+
+	err := app.Run(context.Background(), []string{
+		"cloud",
+		"deploy",
+		"--instance-type",
+		"1V100.6V",
+		"--source-os-volume-id",
+		"vol-golden",
+		"--cloned-os-volume-id",
+		"vol-clone-1",
+		"--keep-cloned-os-volume-on-failure",
+		"--dry-run",
+		"--json",
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v\nstderr:\n%s", err, stderr.String())
+	}
+
+	var result struct {
+		Policy struct {
+			CleanupClonedOSVolumeOnFailure bool `json:"cleanup_cloned_os_volume_on_failure"`
+		} `json:"policy"`
+		OSVolumeClone struct {
+			VolumeID string `json:"volume_id"`
+			Reused   bool   `json:"reused"`
+		} `json:"os_volume_clone"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("invalid JSON output: %v\n%s", err, stdout.String())
+	}
+
+	if result.Policy.CleanupClonedOSVolumeOnFailure {
+		t.Fatalf("cleanup policy = true, want false")
+	}
+	if result.OSVolumeClone.VolumeID != "vol-clone-1" || !result.OSVolumeClone.Reused {
+		t.Fatalf("unexpected OS clone plan: %#v", result.OSVolumeClone)
+	}
+}
+
 func TestCloudDeployRejectsNonUUIDSSHKeyID(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	app := &App{Stdout: &stdout, Stderr: &stderr}

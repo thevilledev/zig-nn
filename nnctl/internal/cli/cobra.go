@@ -266,6 +266,7 @@ script from nnctl/internal/cloud/verda/bootstrap.sh.`,
 		Example: `  nnctl cloud deploy --instance-type 1V100.6V --source-os-volume-id volume_id --ssh-key-id ssh_key_id
   nnctl cloud deploy --instance-type 1V100.6V --source-os-volume-id volume_id --dry-run --json
   nnctl cloud deploy --instance-type 1V100.6V --source-os-volume-id volume_id --location-code FIN-03
+  nnctl cloud deploy --instance-type 1V100.6V --source-os-volume-id source_volume_id --cloned-os-volume-id cloned_volume_id
   nnctl cloud deploy --instance-type 1V100.6V --source-os-volume-id volume_id --user-data-file ./custom-bootstrap.sh`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -273,7 +274,8 @@ script from nnctl/internal/cloud/verda/bootstrap.sh.`,
 		},
 	}
 	cmd.Flags().StringVar(&opts.InstanceType, "instance-type", opts.InstanceType, "Verda instance type, for example 1L40S.20V")
-	cmd.Flags().StringVar(&opts.SourceOSVolumeID, "source-os-volume-id", opts.SourceOSVolumeID, "Packer-built Verda OS volume ID to clone for this instance")
+	cmd.Flags().StringVar(&opts.SourceOSVolumeID, "source-os-volume-id", opts.SourceOSVolumeID, "Packer-built Verda source OS volume ID used for location lock and cloning")
+	cmd.Flags().StringVar(&opts.ClonedOSVolumeID, "cloned-os-volume-id", opts.ClonedOSVolumeID, "existing cloned OS volume ID to use as the instance image instead of creating a new clone")
 	cmd.Flags().StringVar(&opts.Hostname, "hostname", opts.Hostname, "instance hostname")
 	cmd.Flags().StringVar(&opts.Description, "description", opts.Description, "instance description")
 	cmd.Flags().StringArrayVar(&opts.SSHKeyIDs, "ssh-key-id", opts.SSHKeyIDs, "Verda SSH key ID to attach (repeatable)")
@@ -282,6 +284,7 @@ script from nnctl/internal/cloud/verda/bootstrap.sh.`,
 	cmd.Flags().StringVar(&opts.userDataFile, "user-data-file", opts.userDataFile, "read userdata from a file instead of the embedded script")
 	cmd.Flags().StringVar(&opts.BaseURL, "base-url", opts.BaseURL, "Verda API base URL")
 	cmd.Flags().BoolVar(&opts.SkipAvailabilityCheck, "skip-availability-check", opts.SkipAvailabilityCheck, "skip spot availability check before creating the instance")
+	cmd.Flags().BoolVar(&opts.KeepClonedOSVolumeOnFailure, "keep-cloned-os-volume-on-failure", opts.KeepClonedOSVolumeOnFailure, "keep a newly cloned OS volume when instance creation fails")
 	cmd.Flags().BoolVar(&opts.DryRun, "dry-run", opts.DryRun, "print the planned spot deployment without reading keychain credentials")
 	cmd.Flags().BoolVar(&opts.jsonOutput, "json", opts.jsonOutput, "print machine-readable JSON")
 	cmd.Flags().SortFlags = false

@@ -54,7 +54,7 @@ func TestDeployDryRunBuildsSpotAutoPlacementRequestWithoutClient(t *testing.T) {
 	if !result.DryRun {
 		t.Fatal("DryRun = false")
 	}
-	if result.Policy.LocationCode != "" || result.Policy.LocationSelection != SourceOSVolumeLocation || !result.Policy.SourceOSVolumeLocked || !result.Policy.SpotOnly || !result.Policy.SingleGPU {
+	if result.Policy.LocationCode != "" || result.Policy.LocationSelection != SourceOSVolumeLocation || !result.Policy.SourceOSVolumeLocked || !result.Policy.SpotOnly || !result.Policy.SingleGPU || !result.Policy.CleanupClonedOSVolumeOnFailure {
 		t.Fatalf("unexpected policy: %#v", result.Policy)
 	}
 	if !result.Request.IsSpot || result.Request.Contract != SpotContract || result.Request.LocationCode != "" {
@@ -271,8 +271,102 @@ func TestDeployDeletesOnlyClonedVolumeWhenCreateInstanceFails(t *testing.T) {
 	if len(client.deletedVolumeIDs) != 1 || client.deletedVolumeIDs[0] != "vol-clone-1" {
 		t.Fatalf("unexpected deleted volumes: %#v", client.deletedVolumeIDs)
 	}
+	if !strings.Contains(err.Error(), "cleaned up cloned OS volume vol-clone-1") {
+		t.Fatalf("error did not mention cloned volume cleanup: %v", err)
+	}
 	if strings.Contains(strings.Join(client.deletedVolumeIDs, ","), "vol-golden") {
 		t.Fatalf("source volume was deleted: %#v", client.deletedVolumeIDs)
+	}
+}
+
+func TestDeployKeepsClonedVolumeWhenCreateInstanceFailsAndCleanupDisabled(t *testing.T) {
+	client := &fakeClient{
+		sourceVolume: Volume{ID: "vol-golden", Name: "golden", Status: "detached", Location: FinlandLocationCode, IsOSVolume: true},
+		instanceType: InstanceType{InstanceType: "1V100.6V", GPUCount: 1},
+		placements:   []SpotPlacement{{LocationCode: FinlandLocationCode, SpotPrice: 2, PriceKnown: true}},
+		script:       StartupScript{ID: "script-1", Name: "userdata"},
+		clonedVolume: Volume{ID: "vol-clone-1", Name: "worker-os", Status: "cloning", Location: FinlandLocationCode},
+		readyVolume:  Volume{ID: "vol-clone-1", Name: "worker-os", Status: "detached", Location: FinlandLocationCode},
+		createErr:    errors.New("capacity disappeared"),
+	}
+	opts := DefaultDeployOptions("1V100.6V")
+	opts.SourceOSVolumeID = "vol-golden"
+	opts.Hostname = "worker"
+	opts.LocationCode = FinlandLocationCode
+	opts.KeepClonedOSVolumeOnFailure = true
+
+	_, err := Deploy(context.Background(), client, opts)
+	if err == nil {
+		t.Fatal("expected create instance error")
+	}
+	if len(client.deletedVolumeIDs) != 0 {
+		t.Fatalf("unexpected deleted volumes: %#v", client.deletedVolumeIDs)
+	}
+	if !strings.Contains(err.Error(), "cloned OS volume vol-clone-1 was kept") {
+		t.Fatalf("error did not mention kept cloned volume: %v", err)
+	}
+}
+
+func TestDeployReusesClonedOSVolume(t *testing.T) {
+	client := &fakeClient{
+		sourceVolume: Volume{ID: "vol-golden", Name: "golden", Status: "detached", Location: FinlandLocationCode, IsOSVolume: true},
+		instanceType: InstanceType{InstanceType: "1V100.6V", GPUCount: 1},
+		placements:   []SpotPlacement{{LocationCode: FinlandLocationCode, SpotPrice: 2, PriceKnown: true}},
+		script:       StartupScript{ID: "script-1", Name: "userdata"},
+		readyVolume:  Volume{ID: "vol-reuse-1", Name: "kept-os", Status: "detached", Location: FinlandLocationCode},
+		instance:     Instance{ID: "inst-1", Hostname: "worker", Status: "new", InstanceType: "1V100.6V", Location: FinlandLocationCode, IsSpot: true},
+	}
+	opts := DefaultDeployOptions("1V100.6V")
+	opts.SourceOSVolumeID = "vol-golden"
+	opts.ClonedOSVolumeID = "vol-reuse-1"
+	opts.Hostname = "worker"
+	opts.LocationCode = FinlandLocationCode
+
+	result, err := Deploy(context.Background(), client, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(client.cloneRequests) != 0 {
+		t.Fatalf("unexpected clone requests: %#v", client.cloneRequests)
+	}
+	if client.waitedVolumeID != "vol-reuse-1" {
+		t.Fatalf("waitedVolumeID = %q, want vol-reuse-1", client.waitedVolumeID)
+	}
+	if client.createRequest.Image != "vol-reuse-1" {
+		t.Fatalf("Image = %q, want reused cloned OS volume ID", client.createRequest.Image)
+	}
+	if result.OSVolumeClone == nil || result.OSVolumeClone.VolumeID != "vol-reuse-1" || !result.OSVolumeClone.Reused {
+		t.Fatalf("unexpected OSVolumeClone: %#v", result.OSVolumeClone)
+	}
+	if result.ClonedOSVolumeIDs["inst-1"] != "vol-reuse-1" {
+		t.Fatalf("unexpected clone tracking: %#v", result.ClonedOSVolumeIDs)
+	}
+}
+
+func TestDeployRejectsReusedClonedOSVolumeLocationMismatch(t *testing.T) {
+	client := &fakeClient{
+		sourceVolume: Volume{ID: "vol-golden", Name: "golden", Status: "detached", Location: FinlandLocationCode, IsOSVolume: true},
+		instanceType: InstanceType{InstanceType: "1V100.6V", GPUCount: 1},
+		placements:   []SpotPlacement{{LocationCode: FinlandLocationCode, SpotPrice: 2, PriceKnown: true}},
+		script:       StartupScript{ID: "script-1", Name: "userdata"},
+		readyVolume:  Volume{ID: "vol-reuse-1", Name: "kept-os", Status: "detached", Location: "NOR-01"},
+	}
+	opts := DefaultDeployOptions("1V100.6V")
+	opts.SourceOSVolumeID = "vol-golden"
+	opts.ClonedOSVolumeID = "vol-reuse-1"
+	opts.Hostname = "worker"
+	opts.LocationCode = FinlandLocationCode
+
+	_, err := Deploy(context.Background(), client, opts)
+	if err == nil {
+		t.Fatal("expected reused clone location mismatch")
+	}
+	if !strings.Contains(err.Error(), "cloned_os_volume_id vol-reuse-1 is in NOR-01") {
+		t.Fatalf("error did not mention reused clone location: %v", err)
+	}
+	if len(client.deletedVolumeIDs) != 0 {
+		t.Fatalf("reused cloned volume should not be deleted: %#v", client.deletedVolumeIDs)
 	}
 }
 

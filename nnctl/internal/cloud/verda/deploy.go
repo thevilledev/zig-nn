@@ -23,17 +23,19 @@ const (
 )
 
 type DeployOptions struct {
-	InstanceType          string
-	SourceOSVolumeID      string
-	Hostname              string
-	Description           string
-	SSHKeyIDs             []string
-	LocationCode          string
-	StartupScriptName     string
-	UserDataScript        string
-	BaseURL               string
-	DryRun                bool
-	SkipAvailabilityCheck bool
+	InstanceType                string
+	SourceOSVolumeID            string
+	ClonedOSVolumeID            string
+	Hostname                    string
+	Description                 string
+	SSHKeyIDs                   []string
+	LocationCode                string
+	StartupScriptName           string
+	UserDataScript              string
+	BaseURL                     string
+	DryRun                      bool
+	SkipAvailabilityCheck       bool
+	KeepClonedOSVolumeOnFailure bool
 }
 
 type InstanceType struct {
@@ -71,6 +73,7 @@ type OSVolumeClone struct {
 	Name           string `json:"name"`
 	Status         string `json:"status,omitempty"`
 	LocationCode   string `json:"location_code,omitempty"`
+	Reused         bool   `json:"reused,omitempty"`
 }
 
 type SpotPlacement struct {
@@ -123,11 +126,12 @@ type DeployResult struct {
 }
 
 type DeployPolicy struct {
-	LocationCode         string `json:"location_code,omitempty"`
-	LocationSelection    string `json:"location_selection"`
-	SourceOSVolumeLocked bool   `json:"source_os_volume_locked"`
-	SpotOnly             bool   `json:"spot_only"`
-	SingleGPU            bool   `json:"single_gpu"`
+	LocationCode                   string `json:"location_code,omitempty"`
+	LocationSelection              string `json:"location_selection"`
+	SourceOSVolumeLocked           bool   `json:"source_os_volume_locked"`
+	SpotOnly                       bool   `json:"spot_only"`
+	SingleGPU                      bool   `json:"single_gpu"`
+	CleanupClonedOSVolumeOnFailure bool   `json:"cleanup_cloned_os_volume_on_failure"`
 }
 
 type Client interface {
@@ -173,18 +177,21 @@ func Deploy(ctx context.Context, client Client, opts DeployOptions) (*DeployResu
 		Provider: ProviderName,
 		DryRun:   normalized.DryRun,
 		Policy: DeployPolicy{
-			LocationCode:         normalized.LocationCode,
-			LocationSelection:    locationSelection,
-			SourceOSVolumeLocked: true,
-			SpotOnly:             true,
-			SingleGPU:            true,
+			LocationCode:                   normalized.LocationCode,
+			LocationSelection:              locationSelection,
+			SourceOSVolumeLocked:           true,
+			SpotOnly:                       true,
+			SingleGPU:                      true,
+			CleanupClonedOSVolumeOnFailure: !normalized.KeepClonedOSVolumeOnFailure,
 		},
 		SourceOSVolumeID: normalized.SourceOSVolumeID,
 		Request:          req,
 		OSVolumeClone: &OSVolumeClone{
 			SourceVolumeID: normalized.SourceOSVolumeID,
+			VolumeID:       normalized.ClonedOSVolumeID,
 			Name:           osVolumeCloneName(normalized.Hostname),
 			LocationCode:   normalized.LocationCode,
+			Reused:         normalized.ClonedOSVolumeID != "",
 		},
 	}
 	if normalized.DryRun {
@@ -233,7 +240,7 @@ func Deploy(ctx context.Context, client Client, opts DeployOptions) (*DeployResu
 	req.StartupScriptID = script.ID
 	result.Request = req
 
-	clone, err := cloneOSVolume(ctx, client, normalized.SourceOSVolumeID, normalized.Hostname, req.LocationCode)
+	clone, cloneCreated, err := prepareOSVolume(ctx, client, normalized, req.LocationCode)
 	if err != nil {
 		return nil, err
 	}
@@ -243,13 +250,7 @@ func Deploy(ctx context.Context, client Client, opts DeployOptions) (*DeployResu
 
 	instance, err := client.CreateInstance(ctx, req)
 	if err != nil {
-		if cleanupErr := deleteClonedOSVolume(ctx, client, normalized.SourceOSVolumeID, clone.VolumeID); cleanupErr != nil {
-			return nil, errors.Join(
-				fmt.Errorf("create Verda instance: %w", err),
-				fmt.Errorf("cleanup cloned OS volume %s: %w", clone.VolumeID, cleanupErr),
-			)
-		}
-		return nil, fmt.Errorf("create Verda instance: %w", err)
+		return nil, createInstanceFailureError(ctx, client, normalized.SourceOSVolumeID, clone, cloneCreated, normalized.KeepClonedOSVolumeOnFailure, err)
 	}
 	result.Instance = &instance
 	result.ClonedOSVolumeIDs = map[string]string{instance.ID: clone.VolumeID}
@@ -259,6 +260,7 @@ func Deploy(ctx context.Context, client Client, opts DeployOptions) (*DeployResu
 func (o DeployOptions) normalized(now time.Time) (DeployOptions, error) {
 	o.InstanceType = strings.TrimSpace(o.InstanceType)
 	o.SourceOSVolumeID = strings.TrimSpace(o.SourceOSVolumeID)
+	o.ClonedOSVolumeID = strings.TrimSpace(o.ClonedOSVolumeID)
 	o.Hostname = strings.TrimSpace(o.Hostname)
 	o.Description = strings.TrimSpace(o.Description)
 	o.StartupScriptName = strings.TrimSpace(o.StartupScriptName)
@@ -307,7 +309,16 @@ func getSourceOSVolume(ctx context.Context, client Client, sourceVolumeID string
 	return volume, nil
 }
 
-func cloneOSVolume(ctx context.Context, client Client, sourceVolumeID, hostname, locationCode string) (OSVolumeClone, error) {
+func prepareOSVolume(ctx context.Context, client Client, opts DeployOptions, locationCode string) (OSVolumeClone, bool, error) {
+	if opts.ClonedOSVolumeID != "" {
+		clone, err := reuseClonedOSVolume(ctx, client, opts.SourceOSVolumeID, opts.ClonedOSVolumeID, opts.Hostname, locationCode)
+		return clone, false, err
+	}
+	clone, err := cloneOSVolume(ctx, client, opts.SourceOSVolumeID, opts.Hostname, locationCode, opts.KeepClonedOSVolumeOnFailure)
+	return clone, true, err
+}
+
+func cloneOSVolume(ctx context.Context, client Client, sourceVolumeID, hostname, locationCode string, keepOnFailure bool) (OSVolumeClone, error) {
 	cloneReq := CloneVolumeRequest{
 		SourceVolumeID: sourceVolumeID,
 		Name:           osVolumeCloneName(hostname),
@@ -331,6 +342,9 @@ func cloneOSVolume(ctx context.Context, client Client, sourceVolumeID, hostname,
 
 	ready, err := client.WaitVolumeReady(ctx, clone.VolumeID)
 	if err != nil {
+		if keepOnFailure {
+			return OSVolumeClone{}, fmt.Errorf("wait for cloned OS volume %s: %w; cloned OS volume %s was kept", clone.VolumeID, err, clone.VolumeID)
+		}
 		if cleanupErr := deleteClonedOSVolume(ctx, client, sourceVolumeID, clone.VolumeID); cleanupErr != nil {
 			return OSVolumeClone{}, errors.Join(
 				fmt.Errorf("wait for cloned OS volume %s: %w", clone.VolumeID, err),
@@ -342,6 +356,58 @@ func cloneOSVolume(ctx context.Context, client Client, sourceVolumeID, hostname,
 	clone.Status = ready.Status
 	clone.LocationCode = firstNonEmptyString(ready.Location, clone.LocationCode)
 	return clone, nil
+}
+
+func reuseClonedOSVolume(ctx context.Context, client Client, sourceVolumeID, clonedVolumeID, hostname, locationCode string) (OSVolumeClone, error) {
+	clonedVolumeID = strings.TrimSpace(clonedVolumeID)
+	if clonedVolumeID == "" {
+		return OSVolumeClone{}, fmt.Errorf("cloned_os_volume_id is required")
+	}
+	if strings.EqualFold(clonedVolumeID, sourceVolumeID) {
+		return OSVolumeClone{}, fmt.Errorf("cloned_os_volume_id must not equal source_os_volume_id %s", sourceVolumeID)
+	}
+
+	ready, err := client.WaitVolumeReady(ctx, clonedVolumeID)
+	if err != nil {
+		return OSVolumeClone{}, fmt.Errorf("wait for reused cloned OS volume %s: %w", clonedVolumeID, err)
+	}
+	ready.ID = strings.TrimSpace(ready.ID)
+	if ready.ID == "" {
+		ready.ID = clonedVolumeID
+	}
+	ready.Location = strings.ToUpper(strings.TrimSpace(ready.Location))
+	if ready.Location != "" && locationCode != "" && !strings.EqualFold(ready.Location, locationCode) {
+		return OSVolumeClone{}, fmt.Errorf("cloned_os_volume_id %s is in %s, but deploy location is %s", clonedVolumeID, ready.Location, locationCode)
+	}
+
+	return OSVolumeClone{
+		SourceVolumeID: sourceVolumeID,
+		VolumeID:       ready.ID,
+		Name:           firstNonEmptyString(ready.Name, osVolumeCloneName(hostname)),
+		Status:         ready.Status,
+		LocationCode:   firstNonEmptyString(ready.Location, locationCode),
+		Reused:         true,
+	}, nil
+}
+
+func createInstanceFailureError(ctx context.Context, client Client, sourceVolumeID string, clone OSVolumeClone, cloneCreated bool, keepClone bool, err error) error {
+	baseErr := fmt.Errorf("create Verda instance: %w", err)
+	if clone.VolumeID == "" {
+		return baseErr
+	}
+	if !cloneCreated {
+		return fmt.Errorf("%w; reused cloned OS volume %s was kept", baseErr, clone.VolumeID)
+	}
+	if keepClone {
+		return fmt.Errorf("%w; cloned OS volume %s was kept", baseErr, clone.VolumeID)
+	}
+	if cleanupErr := deleteClonedOSVolume(ctx, client, sourceVolumeID, clone.VolumeID); cleanupErr != nil {
+		return errors.Join(
+			baseErr,
+			fmt.Errorf("cleanup cloned OS volume %s: %w", clone.VolumeID, cleanupErr),
+		)
+	}
+	return fmt.Errorf("%w; cleaned up cloned OS volume %s", baseErr, clone.VolumeID)
 }
 
 func deleteClonedOSVolume(ctx context.Context, client Client, sourceVolumeID, cloneVolumeID string) error {
