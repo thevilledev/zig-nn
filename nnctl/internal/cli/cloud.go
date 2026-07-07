@@ -309,7 +309,7 @@ func (a *App) printCloudDeployResult(result *verdacloud.DeployResult, jsonOutput
 		if location == "" {
 			location = result.Policy.LocationSelection
 		}
-		fmt.Fprintf(a.stdout(), "dry run: would deploy %s as a spot single-GPU instance in %s\n", result.Request.InstanceType, location)
+		fmt.Fprintf(a.stdout(), "dry run: would deploy %s as a spot instance in %s\n", result.Request.InstanceType, location)
 		fmt.Fprintf(a.stdout(), "hostname: %s\n", result.Request.Hostname)
 		fmt.Fprintf(a.stdout(), "source os volume: %s\n", result.SourceOSVolumeID)
 		if result.Policy.SourceOSVolumeLocked {

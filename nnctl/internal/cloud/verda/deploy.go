@@ -17,7 +17,8 @@ const (
 	ExplicitLocation       = "explicit"
 	SourceOSVolumeLocation = "source_os_volume_location"
 	SpotContract           = "SPOT"
-	DefaultDescription     = "nnctl GPU benchmark worker"
+	DefaultDescription     = "nnctl benchmark worker"
+	MaxDeployGPUCount      = 1
 	VolumeReadyTimeout     = 20 * time.Minute
 	VolumeReadyPoll        = 5 * time.Second
 )
@@ -131,6 +132,8 @@ type DeployPolicy struct {
 	SourceOSVolumeLocked           bool   `json:"source_os_volume_locked"`
 	SpotOnly                       bool   `json:"spot_only"`
 	SingleGPU                      bool   `json:"single_gpu"`
+	AllowsCPU                      bool   `json:"allows_cpu"`
+	MaxGPUCount                    int    `json:"max_gpu_count"`
 	CleanupClonedOSVolumeOnFailure bool   `json:"cleanup_cloned_os_volume_on_failure"`
 }
 
@@ -182,6 +185,8 @@ func Deploy(ctx context.Context, client Client, opts DeployOptions) (*DeployResu
 			SourceOSVolumeLocked:           true,
 			SpotOnly:                       true,
 			SingleGPU:                      true,
+			AllowsCPU:                      true,
+			MaxGPUCount:                    MaxDeployGPUCount,
 			CleanupClonedOSVolumeOnFailure: !normalized.KeepClonedOSVolumeOnFailure,
 		},
 		SourceOSVolumeID: normalized.SourceOSVolumeID,
@@ -219,8 +224,8 @@ func Deploy(ctx context.Context, client Client, opts DeployOptions) (*DeployResu
 	if err != nil {
 		return nil, fmt.Errorf("get Verda instance type %q: %w", normalized.InstanceType, err)
 	}
-	if instanceType.GPUCount != 1 {
-		return nil, fmt.Errorf("instance type %q has %d GPUs; nnctl cloud deploy only accepts single-GPU instance types", normalized.InstanceType, instanceType.GPUCount)
+	if instanceType.GPUCount > MaxDeployGPUCount {
+		return nil, fmt.Errorf("instance type %q has %d GPUs; nnctl cloud deploy accepts CPU-only and single-GPU instance types", normalized.InstanceType, instanceType.GPUCount)
 	}
 	result.InstanceType = &instanceType
 

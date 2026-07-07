@@ -234,8 +234,8 @@ changes, so remote benchmark runs can be tied back to a specific git ref.`,
 func (a *App) newCloudCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "cloud <command>",
-		Short: "Deploy cloud GPU benchmark workers",
-		Long:  "Deploys cloud GPU benchmark workers for nnctl agents. Verda deployments are restricted to spot, single-GPU instances.",
+		Short: "Deploy cloud benchmark workers",
+		Long:  "Deploys cloud benchmark workers for nnctl agents. Verda deployments are restricted to spot CPU-only or single-GPU instances.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return cmd.Help()
 		},
@@ -257,10 +257,10 @@ func (a *App) newCloudDeployCommand() *cobra.Command {
 	}
 	cmd := &cobra.Command{
 		Use:   "deploy",
-		Short: "Deploy a Verda spot GPU worker",
-		Long: `Deploys one Verda GPU instance for nnctl benchmark work.
-The deployment policy is intentionally narrow: spot only and single-GPU instance
-types only. By default nnctl chooses the cheapest currently available spot
+		Short: "Deploy a Verda spot benchmark worker",
+		Long: `Deploys one Verda spot instance for nnctl benchmark work.
+The deployment policy is intentionally narrow: spot only, with CPU-only and
+single-GPU instance types accepted. By default nnctl uses the source OS volume
 location for the requested instance type. Userdata defaults to the embedded
 script from nnctl/internal/cloud/verda/bootstrap.sh.`,
 		Example: `  nnctl cloud deploy --instance-type 1V100.6V --source-os-volume-id volume_id --ssh-key-id ssh_key_id
@@ -279,7 +279,7 @@ script from nnctl/internal/cloud/verda/bootstrap.sh.`,
 	cmd.Flags().StringVar(&opts.Hostname, "hostname", opts.Hostname, "instance hostname")
 	cmd.Flags().StringVar(&opts.Description, "description", opts.Description, "instance description")
 	cmd.Flags().StringArrayVar(&opts.SSHKeyIDs, "ssh-key-id", opts.SSHKeyIDs, "Verda SSH key ID to attach (repeatable)")
-	cmd.Flags().StringVar(&opts.LocationCode, "location-code", opts.LocationCode, "Verda location code; defaults to cheapest currently available spot location")
+	cmd.Flags().StringVar(&opts.LocationCode, "location-code", opts.LocationCode, "Verda location code; defaults to source OS volume location")
 	cmd.Flags().StringVar(&opts.StartupScriptName, "startup-script-name", opts.StartupScriptName, "Verda startup script name")
 	cmd.Flags().StringVar(&opts.userDataFile, "user-data-file", opts.userDataFile, "read userdata from a file instead of the embedded script")
 	cmd.Flags().StringVar(&opts.BaseURL, "base-url", opts.BaseURL, "Verda API base URL")

@@ -54,7 +54,7 @@ func TestDeployDryRunBuildsSpotAutoPlacementRequestWithoutClient(t *testing.T) {
 	if !result.DryRun {
 		t.Fatal("DryRun = false")
 	}
-	if result.Policy.LocationCode != "" || result.Policy.LocationSelection != SourceOSVolumeLocation || !result.Policy.SourceOSVolumeLocked || !result.Policy.SpotOnly || !result.Policy.SingleGPU || !result.Policy.CleanupClonedOSVolumeOnFailure {
+	if result.Policy.LocationCode != "" || result.Policy.LocationSelection != SourceOSVolumeLocation || !result.Policy.SourceOSVolumeLocked || !result.Policy.SpotOnly || !result.Policy.AllowsCPU || result.Policy.MaxGPUCount != MaxDeployGPUCount || !result.Policy.CleanupClonedOSVolumeOnFailure {
 		t.Fatalf("unexpected policy: %#v", result.Policy)
 	}
 	if !result.Request.IsSpot || result.Request.Contract != SpotContract || result.Request.LocationCode != "" {
@@ -80,11 +80,43 @@ func TestDeployRejectsMultiGPUInstanceTypes(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected multi-GPU instance type error")
 	}
-	if !strings.Contains(err.Error(), "single-GPU") {
-		t.Fatalf("error did not mention single-GPU policy: %v", err)
+	if !strings.Contains(err.Error(), "CPU-only and single-GPU") {
+		t.Fatalf("error did not mention CPU/single-GPU policy: %v", err)
 	}
 	if client.createdScript {
 		t.Fatal("startup script should not be created for rejected instance type")
+	}
+}
+
+func TestDeployCreatesSpotCPUInstanceInSourceOSVolumeLocation(t *testing.T) {
+	client := &fakeClient{
+		sourceVolume: Volume{ID: "vol-golden", Name: "golden", Status: "detached", Location: FinlandLocationCode, IsOSVolume: true},
+		instanceType: InstanceType{InstanceType: "4C.16M", GPUCount: 0},
+		placements: []SpotPlacement{
+			{LocationCode: FinlandLocationCode, SpotPrice: 1, PriceKnown: true, Currency: "eur"},
+		},
+		script:       StartupScript{ID: "script-1", Name: "userdata"},
+		clonedVolume: Volume{ID: "vol-clone-1", Name: "worker-os", Status: "cloning", Location: FinlandLocationCode},
+		readyVolume:  Volume{ID: "vol-clone-1", Name: "worker-os", Status: "detached", Location: FinlandLocationCode},
+		instance:     Instance{ID: "inst-1", Hostname: "worker", Status: "new", InstanceType: "4C.16M", Location: FinlandLocationCode, IsSpot: true},
+	}
+	opts := DefaultDeployOptions("4C.16M")
+	opts.SourceOSVolumeID = "vol-golden"
+	opts.Hostname = "worker"
+
+	result, err := Deploy(context.Background(), client, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if result.InstanceType == nil || result.InstanceType.GPUCount != 0 {
+		t.Fatalf("unexpected instance type result: %#v", result.InstanceType)
+	}
+	if result.Policy.MaxGPUCount != MaxDeployGPUCount || !result.Policy.AllowsCPU {
+		t.Fatalf("unexpected policy: %#v", result.Policy)
+	}
+	if client.createRequest.InstanceType != "4C.16M" || client.createRequest.LocationCode != FinlandLocationCode {
+		t.Fatalf("unexpected create request: %#v", client.createRequest)
 	}
 }
 
