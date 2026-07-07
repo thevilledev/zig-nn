@@ -1,7 +1,9 @@
 package verdacloud
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -265,22 +267,49 @@ func (c *SDKClient) CreateStartupScript(ctx context.Context, name, script string
 }
 
 func (c *SDKClient) CloneVolume(ctx context.Context, req CloneVolumeRequest) (Volume, error) {
-	volumeID := strings.TrimSpace(req.SourceVolumeID)
-	if volumeID == "" {
+	actionReq := cloneVolumeActionRequest(req)
+	if actionReq.ID == "" {
 		return Volume{}, fmt.Errorf("source volume ID is required")
 	}
-	createdID, err := c.client.Volumes.CloneVolume(ctx, volumeID, sdkverda.VolumeCloneRequest{
-		Name:         req.Name,
-		LocationCode: req.LocationCode,
-	})
+	if actionReq.Name == "" {
+		return Volume{}, fmt.Errorf("clone volume name is required")
+	}
+
+	body, err := json.Marshal(actionReq)
+	if err != nil {
+		return Volume{}, fmt.Errorf("marshal clone volume request: %w", err)
+	}
+	httpReq, err := c.client.NewRequest(ctx, http.MethodPut, "/volumes", bytes.NewReader(body))
 	if err != nil {
 		return Volume{}, err
 	}
+
+	var volumeIDs []string
+	if _, err := c.client.Do(httpReq, &volumeIDs); err != nil {
+		return Volume{}, err
+	}
+	createdID := ""
+	if len(volumeIDs) > 0 {
+		createdID = strings.TrimSpace(volumeIDs[0])
+	}
+	if createdID == "" {
+		return Volume{}, fmt.Errorf("no volume ID returned from clone operation")
+	}
+
 	return Volume{
 		ID:       createdID,
-		Name:     req.Name,
-		Location: req.LocationCode,
+		Name:     actionReq.Name,
+		Location: actionReq.LocationCode,
 	}, nil
+}
+
+func cloneVolumeActionRequest(req CloneVolumeRequest) sdkverda.VolumeActionRequest {
+	return sdkverda.VolumeActionRequest{
+		ID:           strings.TrimSpace(req.SourceVolumeID),
+		Action:       sdkverda.VolumeActionClone,
+		Name:         strings.TrimSpace(req.Name),
+		LocationCode: strings.TrimSpace(req.LocationCode),
+	}
 }
 
 func (c *SDKClient) WaitVolumeReady(ctx context.Context, volumeID string) (Volume, error) {
