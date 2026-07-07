@@ -26,7 +26,7 @@ enum ZigNNCudaKernelId {
     ZIG_NN_CUDA_KERNEL_APPLY_SWISH_DERIVATIVE = 14,
 };
 
-CUDABackendRef cuda_backend_create(char* error_buffer, unsigned long error_buffer_len);
+CUDABackendRef cuda_backend_create(const char* kernel_source, char* error_buffer, unsigned long error_buffer_len);
 void cuda_backend_destroy(CUDABackendRef backend_ref);
 int cuda_backend_device_name(CUDABackendRef backend_ref, char* output, unsigned long output_len);
 

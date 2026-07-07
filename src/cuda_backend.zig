@@ -9,6 +9,7 @@ const Activation = @import("activation.zig").Activation;
 
 const build_options = @import("build_options");
 const enable_cuda = build_options.enable_cuda;
+const kernel_source = @embedFile("cuda/kernels.cu");
 
 pub const CUDAError = error{
     CUDANotEnabled,
@@ -69,7 +70,7 @@ const CUDA = if (enable_cuda) struct {
     pub fn createBackend() ?*Backend {
         var error_buffer: [4096]u8 = undefined;
         @memset(&error_buffer, 0);
-        const result = c.cuda_backend_create(error_buffer[0..].ptr, error_buffer.len);
+        const result = c.cuda_backend_create(kernel_source, error_buffer[0..].ptr, error_buffer.len);
         if (result == null) {
             logError("CUDA backend creation failed", error_buffer[0..]);
         }
