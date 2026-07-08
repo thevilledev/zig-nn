@@ -23,6 +23,12 @@ zig build run_serving
 Server listening on http://127.0.0.1:8080
 ```
 
+You can override the model, host, or port:
+
+```bash
+zig build run_serving -- --model=xor_model.bin --host=127.0.0.1 --port=8080
+```
+
 ## API Usage
 
 ### Single Prediction
@@ -58,13 +64,13 @@ curl -X POST http://localhost:8080/predict \
 Run the tests with:
 
 ```bash
-zig test examples/server.zig
+zig build test-serving
 ```
 
 ## Notes
 
 - The server expects the model file to be named `xor_model.bin` by default
-- Hardcoded to listen to 127.0.0.1 on port 8080
+- It listens on 127.0.0.1:8080 by default
 - Input dimensions must match the model's expected input size
 - The confidence value is currently derived from the first prediction value
-- The server supports concurrent connections
+- Error responses use a JSON `error` object with an HTTP status code
