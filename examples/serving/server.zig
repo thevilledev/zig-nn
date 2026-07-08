@@ -220,14 +220,14 @@ fn predictionResponse(allocator: std.mem.Allocator, inference: *InferenceService
     const prediction = try inference.predict(request.input);
     defer allocator.free(prediction);
 
-    var body = std.ArrayList(u8).empty;
-    errdefer body.deinit(allocator);
+    var body: std.Io.Writer.Allocating = .init(allocator);
+    errdefer body.deinit();
     const response = Response{
         .prediction = prediction,
         .confidence = if (prediction.len > 0) prediction[0] else 0.0,
     };
-    try response.writeJson(body.writer(allocator));
-    return body.toOwnedSlice(allocator);
+    try response.writeJson(&body.writer);
+    return body.toOwnedSlice();
 }
 
 fn pathOnly(target: []const u8) []const u8 {
