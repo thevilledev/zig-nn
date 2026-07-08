@@ -4,6 +4,11 @@ const Network = nn.Network;
 const Matrix = nn.Matrix;
 const Activation = nn.Activation;
 
+const image_size = 28 * 28;
+const digit_count = 10;
+const mnist_mean = 0.1307;
+const mnist_stddev = 0.3081;
+
 /// Structure to hold MNIST dataset
 /// images: Raw pixel data for all images (flattened 28x28 pixels)
 /// labels: Ground truth labels (0-9) for each image
@@ -81,8 +86,8 @@ fn readMnistData(allocator: std.mem.Allocator, images_path: []const u8, labels_p
     }
 
     // Read image data
-    const image_size = num_rows_be * num_cols_be;
-    const images = try allocator.alloc(u8, num_images_be * image_size);
+    const idx_image_size = num_rows_be * num_cols_be;
+    const images = try allocator.alloc(u8, num_images_be * idx_image_size);
     try images_in.readSliceAll(images);
 
     // Read label data
@@ -103,35 +108,134 @@ fn readMnistData(allocator: std.mem.Allocator, images_path: []const u8, labels_p
 ///   - start_idx: Starting index in the dataset (for batch processing)
 ///   - batch_size: Number of images to process in this batch
 /// Returns:
-///   - Input matrix: Normalized pixel values (-0.15 to 0.15)
+///   - Input matrix: Normalized pixel values using MNIST mean/std
 ///   - Target matrix: One-hot encoded labels (e.g., [0,1,0,0,0,0,0,0,0,0] for digit 1)
 fn prepareData(allocator: std.mem.Allocator, data: MnistData, start_idx: usize, batch_size: usize) !struct { Matrix, Matrix } {
-    const image_size = 28 * 28;
     var input = try Matrix.init(allocator, batch_size, image_size);
-    var target = try Matrix.init(allocator, batch_size, 10);
+    var target = try Matrix.init(allocator, batch_size, digit_count);
 
     var i: usize = 0;
     while (i < batch_size) : (i += 1) {
         const idx = start_idx + i;
         if (idx >= data.num_images) break;
 
-        // Normalize inputs considering weight initialization scale
         var j: usize = 0;
         while (j < image_size) : (j += 1) {
             const pixel = @as(f64, @floatFromInt(data.images[idx * image_size + j])) / 255.0;
-            // Keep inputs small but not too small, matching initialization scale
-            try input.set(i, j, (pixel - 0.5) * 0.3);
+            try input.set(i, j, (pixel - mnist_mean) / mnist_stddev);
         }
 
         // Create one-hot encoded target
         const label = data.labels[idx];
         var k: usize = 0;
-        while (k < 10) : (k += 1) {
+        while (k < digit_count) : (k += 1) {
             try target.set(i, k, if (k == label) 1.0 else 0.0);
         }
     }
 
     return .{ input, target };
+}
+
+const EvaluationResult = struct {
+    loss: f64,
+    accuracy: f64,
+};
+
+fn scheduledLearningRate(epoch: usize) f64 {
+    if (epoch < 3) return 0.001;
+    if (epoch < 6) return 0.0001;
+    return 0.00001;
+}
+
+fn gradientNorm(matrix: Matrix) f64 {
+    var squared_sum: f64 = 0.0;
+    for (matrix.data) |value| {
+        squared_sum += value * value;
+    }
+    return @sqrt(squared_sum);
+}
+
+fn backwardClipped(network: *Network, predicted: Matrix, target: Matrix, max_norm: f64) !void {
+    if (network.layers.items.len == 0) {
+        return error.EmptyNetwork;
+    }
+
+    var gradient = try network.calculateLossGradient(predicted, target);
+    errdefer gradient.deinit();
+
+    const norm = gradientNorm(gradient);
+    if (max_norm > 0.0 and norm > max_norm) {
+        const scale = max_norm / (norm + 1e-12);
+        const clipped = try gradient.scale(scale, network.allocator);
+        gradient.deinit();
+        gradient = clipped;
+    }
+
+    var i = network.layers.items.len;
+    while (i > 0) {
+        i -= 1;
+        const new_gradient = try network.layers.items[i].backward(gradient, network.learning_rate);
+        gradient.deinit();
+        if (i > 0) {
+            gradient = new_gradient;
+        } else {
+            new_gradient.deinit();
+        }
+    }
+}
+
+fn evaluate(
+    allocator: std.mem.Allocator,
+    network: *Network,
+    data: MnistData,
+    start_idx: usize,
+    sample_size: usize,
+    batch_size: usize,
+) !EvaluationResult {
+    const batches = sample_size / batch_size;
+    if (batches == 0) return error.EmptyInput;
+
+    var total_loss: f64 = 0.0;
+    var correct: usize = 0;
+    var total: usize = 0;
+
+    var batch: usize = 0;
+    while (batch < batches) : (batch += 1) {
+        const batch_data = try prepareData(allocator, data, start_idx + batch * batch_size, batch_size);
+        const input = batch_data[0];
+        const target = batch_data[1];
+        defer input.deinit();
+        defer target.deinit();
+
+        const output = try network.forward(input);
+        defer output.deinit();
+
+        total_loss += try network.calculateLoss(output, target);
+
+        var row: usize = 0;
+        while (row < output.rows) : (row += 1) {
+            var max_idx: usize = 0;
+            var max_val: f64 = try output.get(row, 0);
+            var col: usize = 1;
+            while (col < digit_count) : (col += 1) {
+                const value = try output.get(row, col);
+                if (value > max_val) {
+                    max_val = value;
+                    max_idx = col;
+                }
+            }
+
+            if (data.labels[start_idx + batch * batch_size + row] == max_idx) {
+                correct += 1;
+            }
+            total += 1;
+        }
+    }
+
+    return .{
+        .loss = total_loss / @as(f64, @floatFromInt(batches)),
+        .accuracy = @as(f64, @floatFromInt(correct)) / @as(f64, @floatFromInt(total)),
+    };
 }
 
 pub fn main() !void {
@@ -140,26 +244,19 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    // Create neural network with CrossEntropy loss
-    // Learning rate 0.0001 chosen empirically for stable training
-    var network = Network.init(allocator, 0.0001, .CrossEntropy);
+    // Create neural network with CrossEntropy loss. The epoch loop updates the
+    // learning rate with a simple schedule.
+    var network = Network.init(allocator, scheduledLearningRate(0), .CrossEntropy);
     defer network.deinit();
 
     // Network architecture:
     // 1. Input layer: 784 neurons (28x28 pixels flattened)
-    // 2. Hidden layer 1: 256 neurons with tanh activation
-    // 3. Hidden layer 2: 128 neurons with tanh activation
-    // 4. Hidden layer 3: 64 neurons with tanh activation
-    // 5. Output layer: 10 neurons (one per digit) with softmax activation
-    //
-    // Architecture design choices:
-    // - Gradually decreasing layer sizes help manage gradient flow
-    // - tanh activation provides good gradient properties
-    // - Final softmax layer outputs probability distribution over digits
-    try network.addLayer(784, 256, Activation.tanh, Activation.tanh_derivative);
-    try network.addLayer(256, 128, Activation.tanh, Activation.tanh_derivative);
-    try network.addLayer(128, 64, Activation.tanh, Activation.tanh_derivative);
-    try network.addLayer(64, 10, Activation.softmax, Activation.softmax_derivative);
+    // 2. Hidden layer 1: 256 neurons with ReLU activation
+    // 3. Hidden layer 2: 128 neurons with ReLU activation
+    // 4. Output layer: 10 neurons (one per digit) with softmax activation
+    try network.addLayer(image_size, 256, Activation.relu, Activation.relu_derivative);
+    try network.addLayer(256, 128, Activation.relu, Activation.relu_derivative);
+    try network.addLayer(128, digit_count, Activation.softmax, Activation.softmax_derivative);
 
     // Training configuration
     // - Using subset of data for faster training/testing
@@ -167,10 +264,12 @@ pub fn main() !void {
     //   * Training stability (larger batches = better gradient estimates)
     //   * Training speed (smaller batches = more weight updates)
     //   * Memory usage
+    const validation_sample_size: usize = 5000;
     const training_sample_size: usize = 50000; // Out of 60000 total training images
     const test_sample_size: usize = 10000; // Full test set
     const batch_size = 32;
     const num_epochs = 10;
+    const gradient_clip_norm = 5.0;
 
     // Load MNIST training and test datasets
     var train_data = try readMnistData(
@@ -188,11 +287,18 @@ pub fn main() !void {
     defer test_data.deinit(allocator);
 
     // Calculate effective dataset sizes and batches per epoch
-    const effective_train_size = @min(training_sample_size, train_data.num_images);
+    const effective_validation_size = @min(validation_sample_size, train_data.num_images);
+    const train_start_idx = effective_validation_size;
+    const available_train_size = train_data.num_images - effective_validation_size;
+    const effective_train_size = @min(training_sample_size, available_train_size);
     const effective_test_size = @min(test_sample_size, test_data.num_images);
     const batches_per_epoch = effective_train_size / batch_size;
 
-    std.debug.print("Training on {d} samples, testing on {d} samples\n", .{ effective_train_size, effective_test_size });
+    std.debug.print("Training on {d} samples, validating on {d} samples, testing on {d} samples\n", .{
+        effective_train_size,
+        effective_validation_size,
+        effective_test_size,
+    });
     std.debug.print("Will run {d} batches per epoch\n\n", .{batches_per_epoch});
 
     // Training loop
@@ -205,15 +311,16 @@ pub fn main() !void {
     while (epoch < num_epochs) : (epoch += 1) {
         var total_loss: f64 = 0.0;
         var batch: usize = 0;
+        network.learning_rate = scheduledLearningRate(epoch);
 
-        std.debug.print("Epoch {d}/{d}:\n", .{ epoch + 1, num_epochs });
+        std.debug.print("Epoch {d}/{d} - learning rate {d:.6}:\n", .{ epoch + 1, num_epochs, network.learning_rate });
 
         // Progress tracking - show updates every 10% of epoch
         const progress_interval = @max(batches_per_epoch / 10, 1);
 
         // Training loop for single epoch
         while (batch < batches_per_epoch) : (batch += 1) {
-            const start_idx = batch * batch_size;
+            const start_idx = train_start_idx + batch * batch_size;
             const batch_data = try prepareData(allocator, train_data, start_idx, batch_size);
             const input = batch_data[0];
             const target = batch_data[1];
@@ -271,59 +378,48 @@ pub fn main() !void {
                 std.debug.print("  Progress: {d:>3.0}% - Batch {d}/{d} - Running avg loss: {d:.4}\n", .{ progress, batch + 1, batches_per_epoch, running_avg_loss });
             }
 
-            // Backward pass - update network weights
-            _ = try network.backward(output, target);
+            try backwardClipped(&network, output, target, gradient_clip_norm);
         }
 
         // Report epoch results
         const avg_loss = total_loss / @as(f64, @floatFromInt(batches_per_epoch));
         std.debug.print("\nEpoch {d}/{d} completed - Final avg loss: {d:.4}\n", .{ epoch + 1, num_epochs, avg_loss });
 
-        // Evaluation phase
-        // Test network performance on held-out test set
-        std.debug.print("Evaluating on test set...\n", .{});
-        var correct: usize = 0;
-        var total: usize = 0;
+        const validation = try evaluate(allocator, &network, train_data, 0, effective_validation_size, batch_size);
+        const test_result = try evaluate(allocator, &network, test_data, 0, effective_test_size, batch_size);
 
-        // Process test set in batches
-        const test_batches = effective_test_size / batch_size;
-        var test_batch: usize = 0;
-        while (test_batch < test_batches) : (test_batch += 1) {
-            const test_batch_data = try prepareData(allocator, test_data, test_batch * batch_size, batch_size);
-            const test_input = test_batch_data[0];
-            const test_target = test_batch_data[1];
-            defer test_input.deinit();
-            defer test_target.deinit();
-
-            // Forward pass only (no training on test set)
-            const test_output = try network.forward(test_input);
-            defer test_output.deinit();
-
-            // Calculate accuracy
-            // For each image, find the digit with highest probability
-            // Compare with true label
-            var i: usize = 0;
-            while (i < test_output.rows) : (i += 1) {
-                var max_idx: usize = 0;
-                var max_val: f64 = try test_output.get(i, 0);
-                var j: usize = 1;
-                while (j < 10) : (j += 1) {
-                    const val = try test_output.get(i, j);
-                    if (val > max_val) {
-                        max_val = val;
-                        max_idx = j;
-                    }
-                }
-
-                if (test_data.labels[test_batch * batch_size + i] == max_idx) {
-                    correct += 1;
-                }
-                total += 1;
-            }
-        }
-
-        // Report test set accuracy
-        const accuracy = @as(f64, @floatFromInt(correct)) / @as(f64, @floatFromInt(total));
-        std.debug.print("Test accuracy: {d:.2}%\n\n", .{accuracy * 100.0});
+        std.debug.print("Validation loss: {d:.4}, accuracy: {d:.2}%\n", .{ validation.loss, validation.accuracy * 100.0 });
+        std.debug.print("Test loss: {d:.4}, accuracy: {d:.2}%\n\n", .{ test_result.loss, test_result.accuracy * 100.0 });
     }
+}
+
+test "scheduled learning rate decays every three epochs" {
+    try std.testing.expectApproxEqAbs(@as(f64, 0.001), scheduledLearningRate(0), 1e-12);
+    try std.testing.expectApproxEqAbs(@as(f64, 0.001), scheduledLearningRate(2), 1e-12);
+    try std.testing.expectApproxEqAbs(@as(f64, 0.0001), scheduledLearningRate(3), 1e-12);
+    try std.testing.expectApproxEqAbs(@as(f64, 0.00001), scheduledLearningRate(6), 1e-12);
+}
+
+test "prepareData applies MNIST mean and stddev normalization" {
+    const allocator = std.testing.allocator;
+
+    var images: [image_size]u8 = undefined;
+    @memset(images[0..], 0);
+    images[0] = 255;
+    var labels = [_]u8{3};
+    const data = MnistData{
+        .images = images[0..],
+        .labels = labels[0..],
+        .num_images = 1,
+    };
+
+    const batch_data = try prepareData(allocator, data, 0, 1);
+    const input = batch_data[0];
+    const target = batch_data[1];
+    defer input.deinit();
+    defer target.deinit();
+
+    try std.testing.expectApproxEqAbs((1.0 - mnist_mean) / mnist_stddev, try input.get(0, 0), 1e-12);
+    try std.testing.expectApproxEqAbs((0.0 - mnist_mean) / mnist_stddev, try input.get(0, 1), 1e-12);
+    try std.testing.expectApproxEqAbs(@as(f64, 1.0), try target.get(0, 3), 1e-12);
 }
