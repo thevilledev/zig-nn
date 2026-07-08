@@ -30,8 +30,9 @@ examples, backend-aware `Network.forwardBackend` / `Network.predictBackend`
 inference, and `Network.trainBatchBackend` / `Network.trainBackend` training.
 `BackendNetwork` snapshots provide persistent backend inference parameters, and
 `BackendTrainer` provides persistent backend training parameters for standard
-and gated network layers. `Network.trainBatchBackend` / `Network.trainBackend`
-remain available as CPU-owned backend training paths.
+and gated network layers, with optional backend-owned momentum optimizer state.
+`Network.trainBatchBackend` / `Network.trainBackend` remain available as
+CPU-owned backend training paths.
 
 ## Start Here
 

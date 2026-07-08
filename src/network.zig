@@ -129,6 +129,40 @@ pub const LossFunction = enum {
     BinaryCrossEntropy,
 };
 
+pub const BackendOptimizerKind = enum {
+    sgd,
+    momentum,
+};
+
+pub const BackendOptimizerConfig = struct {
+    kind: BackendOptimizerKind = .sgd,
+    momentum: f64 = 0.9,
+
+    pub fn sgd() BackendOptimizerConfig {
+        return .{};
+    }
+
+    pub fn withMomentum(coefficient: f64) BackendOptimizerConfig {
+        return .{
+            .kind = .momentum,
+            .momentum = coefficient,
+        };
+    }
+
+    fn validate(self: BackendOptimizerConfig) !void {
+        switch (self.kind) {
+            .sgd => {},
+            .momentum => {
+                if (std.math.isNan(self.momentum) or std.math.isInf(self.momentum) or
+                    self.momentum < 0.0 or self.momentum >= 1.0)
+                {
+                    return error.InvalidOptimizerMomentum;
+                }
+            },
+        }
+    }
+};
+
 fn addBackendBias(weighted_sum: *const BackendMatrix, bias: *const BackendMatrix, allocator: Allocator) !*BackendMatrix {
     if (bias.rows != 1 or bias.cols != weighted_sum.cols) {
         return error.DimensionMismatch;
@@ -277,6 +311,51 @@ fn softmaxWeightedGradientBackend(output_gradient: *const BackendMatrix, output:
     }
 
     return result;
+}
+
+fn zeroBackendMatrixLike(source: *const BackendMatrix, allocator: Allocator) !*BackendMatrix {
+    const result = try BackendMatrix.init(source.backend, allocator, source.rows, source.cols);
+    result.fill(0.0);
+    return result;
+}
+
+fn applyBackendOptimizer(
+    parameter: **BackendMatrix,
+    gradient: *const BackendMatrix,
+    velocity: *?*BackendMatrix,
+    config: BackendOptimizerConfig,
+    learning_rate: f64,
+    allocator: Allocator,
+) !void {
+    switch (config.kind) {
+        .sgd => {
+            const scaled_gradient = try gradient.scale(learning_rate, allocator);
+            defer scaled_gradient.deinit();
+
+            const updated = try parameter.*.subtract(scaled_gradient, allocator);
+            parameter.*.deinit();
+            parameter.* = updated;
+        },
+        .momentum => {
+            if (velocity.* == null) {
+                velocity.* = try zeroBackendMatrixLike(parameter.*, allocator);
+            }
+
+            const momentum_step = try velocity.*.?.scale(config.momentum, allocator);
+            defer momentum_step.deinit();
+
+            const gradient_step = try gradient.scale(learning_rate, allocator);
+            defer gradient_step.deinit();
+
+            const updated_velocity = try momentum_step.add(gradient_step, allocator);
+            velocity.*.?.deinit();
+            velocity.* = updated_velocity;
+
+            const updated = try parameter.*.subtract(updated_velocity, allocator);
+            parameter.*.deinit();
+            parameter.* = updated;
+        },
+    }
 }
 
 const BackendStandardLayer = struct {
@@ -503,6 +582,8 @@ pub const BackendNetwork = struct {
 const BackendTrainingStandardLayer = struct {
     weights: *BackendMatrix,
     bias: *BackendMatrix,
+    weights_velocity: ?*BackendMatrix,
+    bias_velocity: ?*BackendMatrix,
     activation_fn: *const fn (f64) f64,
     activation_derivative_fn: *const fn (f64) f64,
     last_input: ?*BackendMatrix,
@@ -518,6 +599,8 @@ const BackendTrainingStandardLayer = struct {
         return .{
             .weights = weights,
             .bias = bias,
+            .weights_velocity = null,
+            .bias_velocity = null,
             .activation_fn = source.activation_fn,
             .activation_derivative_fn = source.activation_derivative_fn,
             .last_input = null,
@@ -543,6 +626,14 @@ const BackendTrainingStandardLayer = struct {
 
     fn deinit(self: *BackendTrainingStandardLayer) void {
         self.clearCaches();
+        if (self.weights_velocity) |velocity| {
+            velocity.deinit();
+            self.weights_velocity = null;
+        }
+        if (self.bias_velocity) |velocity| {
+            velocity.deinit();
+            self.bias_velocity = null;
+        }
         self.weights.deinit();
         self.bias.deinit();
     }
@@ -592,7 +683,13 @@ const BackendTrainingStandardLayer = struct {
         return output;
     }
 
-    fn backward(self: *BackendTrainingStandardLayer, output_gradient: *const BackendMatrix, learning_rate: f64, allocator: Allocator) !*BackendMatrix {
+    fn backward(
+        self: *BackendTrainingStandardLayer,
+        output_gradient: *const BackendMatrix,
+        optimizer: BackendOptimizerConfig,
+        learning_rate: f64,
+        allocator: Allocator,
+    ) !*BackendMatrix {
         if (self.last_input == null or self.last_output == null or self.last_weighted_sum == null) {
             return error.NoForwardPassPerformed;
         }
@@ -622,19 +719,8 @@ const BackendTrainingStandardLayer = struct {
         const input_gradient = try weighted_sum_gradient.dotProduct(transposed_weights, allocator);
         errdefer input_gradient.deinit();
 
-        const scaled_weights_gradient = try weights_gradient.scale(learning_rate, allocator);
-        defer scaled_weights_gradient.deinit();
-
-        const new_weights = try self.weights.subtract(scaled_weights_gradient, allocator);
-        self.weights.deinit();
-        self.weights = new_weights;
-
-        const scaled_bias_gradient = try bias_gradient.scale(learning_rate, allocator);
-        defer scaled_bias_gradient.deinit();
-
-        const new_bias = try self.bias.subtract(scaled_bias_gradient, allocator);
-        self.bias.deinit();
-        self.bias = new_bias;
+        try applyBackendOptimizer(&self.weights, weights_gradient, &self.weights_velocity, optimizer, learning_rate, allocator);
+        try applyBackendOptimizer(&self.bias, bias_gradient, &self.bias_velocity, optimizer, learning_rate, allocator);
 
         return input_gradient;
     }
@@ -663,6 +749,10 @@ const BackendTrainingGatedLayer = struct {
     linear_bias: *BackendMatrix,
     gate_weights: *BackendMatrix,
     gate_bias: *BackendMatrix,
+    linear_weights_velocity: ?*BackendMatrix,
+    linear_bias_velocity: ?*BackendMatrix,
+    gate_weights_velocity: ?*BackendMatrix,
+    gate_bias_velocity: ?*BackendMatrix,
     use_swiglu: bool,
     last_input: ?*BackendMatrix,
     last_linear_output: ?*BackendMatrix,
@@ -684,6 +774,10 @@ const BackendTrainingGatedLayer = struct {
             .linear_bias = linear_bias,
             .gate_weights = gate_weights,
             .gate_bias = gate_bias,
+            .linear_weights_velocity = null,
+            .linear_bias_velocity = null,
+            .gate_weights_velocity = null,
+            .gate_bias_velocity = null,
             .use_swiglu = source.use_swiglu,
             .last_input = null,
             .last_linear_output = null,
@@ -713,6 +807,22 @@ const BackendTrainingGatedLayer = struct {
 
     fn deinit(self: *BackendTrainingGatedLayer) void {
         self.clearCaches();
+        if (self.linear_weights_velocity) |velocity| {
+            velocity.deinit();
+            self.linear_weights_velocity = null;
+        }
+        if (self.linear_bias_velocity) |velocity| {
+            velocity.deinit();
+            self.linear_bias_velocity = null;
+        }
+        if (self.gate_weights_velocity) |velocity| {
+            velocity.deinit();
+            self.gate_weights_velocity = null;
+        }
+        if (self.gate_bias_velocity) |velocity| {
+            velocity.deinit();
+            self.gate_bias_velocity = null;
+        }
         self.linear_weights.deinit();
         self.linear_bias.deinit();
         self.gate_weights.deinit();
@@ -772,7 +882,13 @@ const BackendTrainingGatedLayer = struct {
         return output;
     }
 
-    fn backward(self: *BackendTrainingGatedLayer, output_gradient: *const BackendMatrix, learning_rate: f64, allocator: Allocator) !*BackendMatrix {
+    fn backward(
+        self: *BackendTrainingGatedLayer,
+        output_gradient: *const BackendMatrix,
+        optimizer: BackendOptimizerConfig,
+        learning_rate: f64,
+        allocator: Allocator,
+    ) !*BackendMatrix {
         if (self.last_input == null or self.last_linear_output == null or
             self.last_gate_output == null or self.last_output == null)
         {
@@ -843,33 +959,10 @@ const BackendTrainingGatedLayer = struct {
         const input_gradient = try linear_input_gradient.add(gate_input_gradient, allocator);
         errdefer input_gradient.deinit();
 
-        const scaled_linear_weights_gradient = try linear_weights_gradient.scale(learning_rate, allocator);
-        defer scaled_linear_weights_gradient.deinit();
-
-        const scaled_gate_weights_gradient = try gate_weights_gradient.scale(learning_rate, allocator);
-        defer scaled_gate_weights_gradient.deinit();
-
-        const scaled_linear_bias_gradient = try linear_bias_gradient.scale(learning_rate, allocator);
-        defer scaled_linear_bias_gradient.deinit();
-
-        const scaled_gate_bias_gradient = try gate_bias_gradient.scale(learning_rate, allocator);
-        defer scaled_gate_bias_gradient.deinit();
-
-        const new_linear_weights = try self.linear_weights.subtract(scaled_linear_weights_gradient, allocator);
-        self.linear_weights.deinit();
-        self.linear_weights = new_linear_weights;
-
-        const new_gate_weights = try self.gate_weights.subtract(scaled_gate_weights_gradient, allocator);
-        self.gate_weights.deinit();
-        self.gate_weights = new_gate_weights;
-
-        const new_linear_bias = try self.linear_bias.subtract(scaled_linear_bias_gradient, allocator);
-        self.linear_bias.deinit();
-        self.linear_bias = new_linear_bias;
-
-        const new_gate_bias = try self.gate_bias.subtract(scaled_gate_bias_gradient, allocator);
-        self.gate_bias.deinit();
-        self.gate_bias = new_gate_bias;
+        try applyBackendOptimizer(&self.linear_weights, linear_weights_gradient, &self.linear_weights_velocity, optimizer, learning_rate, allocator);
+        try applyBackendOptimizer(&self.gate_weights, gate_weights_gradient, &self.gate_weights_velocity, optimizer, learning_rate, allocator);
+        try applyBackendOptimizer(&self.linear_bias, linear_bias_gradient, &self.linear_bias_velocity, optimizer, learning_rate, allocator);
+        try applyBackendOptimizer(&self.gate_bias, gate_bias_gradient, &self.gate_bias_velocity, optimizer, learning_rate, allocator);
 
         return input_gradient;
     }
@@ -942,10 +1035,16 @@ const BackendTrainingLayer = union(LayerType) {
         };
     }
 
-    fn backward(self: *BackendTrainingLayer, output_gradient: *const BackendMatrix, learning_rate: f64, allocator: Allocator) !*BackendMatrix {
+    fn backward(
+        self: *BackendTrainingLayer,
+        output_gradient: *const BackendMatrix,
+        optimizer: BackendOptimizerConfig,
+        learning_rate: f64,
+        allocator: Allocator,
+    ) !*BackendMatrix {
         return switch (self.*) {
-            .Standard => |*layer| layer.backward(output_gradient, learning_rate, allocator),
-            .Gated => |*layer| layer.backward(output_gradient, learning_rate, allocator),
+            .Standard => |*layer| layer.backward(output_gradient, optimizer, learning_rate, allocator),
+            .Gated => |*layer| layer.backward(output_gradient, optimizer, learning_rate, allocator),
         };
     }
 
@@ -972,14 +1071,27 @@ pub const BackendTrainer = struct {
     allocator: Allocator,
     backend_type: backend_mod.BackendType,
     learning_rate: f64,
+    optimizer: BackendOptimizerConfig,
     loss_function: LossFunction,
     layers: ArrayList(BackendTrainingLayer),
 
     pub fn init(allocator: Allocator, source: Network, backend_instance: anytype) !BackendTrainer {
+        return BackendTrainer.initWithOptimizer(allocator, source, backend_instance, BackendOptimizerConfig.sgd());
+    }
+
+    pub fn initWithOptimizer(
+        allocator: Allocator,
+        source: Network,
+        backend_instance: anytype,
+        optimizer: BackendOptimizerConfig,
+    ) !BackendTrainer {
+        try optimizer.validate();
+
         var trainer = BackendTrainer{
             .allocator = allocator,
             .backend_type = backend_instance.getBackendType(),
             .learning_rate = source.learning_rate,
+            .optimizer = optimizer,
             .loss_function = source.loss_function,
             .layers = .empty,
         };
@@ -1080,7 +1192,7 @@ pub const BackendTrainer = struct {
         var i = self.layers.items.len;
         while (i > 0) {
             i -= 1;
-            const new_gradient = try self.layers.items[i].backward(gradient, self.learning_rate, self.allocator);
+            const new_gradient = try self.layers.items[i].backward(gradient, self.optimizer, self.learning_rate, self.allocator);
             gradient.deinit();
             if (i > 0) {
                 gradient = new_gradient;
@@ -1654,6 +1766,15 @@ pub const Network = struct {
         return BackendTrainer.init(self.allocator, self, backend_instance);
     }
 
+    /// Creates a backend-owned trainer with explicit optimizer state.
+    pub fn backendTrainerWithOptimizer(
+        self: Network,
+        backend_instance: anytype,
+        optimizer: BackendOptimizerConfig,
+    ) !BackendTrainer {
+        return BackendTrainer.initWithOptimizer(self.allocator, self, backend_instance, optimizer);
+    }
+
     /// Get the input size required by the network
     pub fn getInputSize(self: Network) !usize {
         if (self.layers.items.len == 0) {
@@ -2198,6 +2319,7 @@ test "backend trainer keeps standard parameters on backend until sync" {
 
     var trainer = try network.backendTrainer(backend_instance);
     defer trainer.deinit();
+    try testing.expectEqual(BackendOptimizerKind.sgd, trainer.optimizer.kind);
 
     const before_predictions = try trainer.predict(backend_inputs);
     defer before_predictions.deinit();
@@ -2224,6 +2346,79 @@ test "backend trainer keeps standard parameters on backend until sync" {
     var cpu_after_sync = try network.predict(inputs);
     defer cpu_after_sync.deinit();
     try testing.expect((try cpu_after_sync.get(2, 0)) > (try cpu_still_unsynced.get(2, 0)) + 1.0);
+}
+
+test "backend trainer momentum keeps optimizer state on backend" {
+    const allocator = testing.allocator;
+
+    var network = Network.init(allocator, 0.05, .MeanSquaredError);
+    defer network.deinit();
+    try network.addLayer(1, 1, Activation.linear, Activation.linear_derivative);
+
+    const layer = network.layers.items[0].Standard;
+    layer.weights.fill(0.0);
+    layer.bias.fill(0.0);
+
+    var inputs = try Matrix.init(allocator, 4, 1);
+    defer inputs.deinit();
+    var targets = try Matrix.init(allocator, 4, 1);
+    defer targets.deinit();
+
+    for (0..4) |row| {
+        const x = @as(f64, @floatFromInt(row));
+        try inputs.set(row, 0, x);
+        try targets.set(row, 0, x * 2.0);
+    }
+
+    var backend_instance = try backend_mod.createBackend(allocator, .CPU);
+    defer backend_instance.deinit();
+
+    const backend_inputs = try BackendMatrix.fromMatrix(backend_instance, inputs, allocator);
+    defer backend_inputs.deinit();
+    const backend_targets = try BackendMatrix.fromMatrix(backend_instance, targets, allocator);
+    defer backend_targets.deinit();
+
+    var trainer = try network.backendTrainerWithOptimizer(backend_instance, .withMomentum(0.8));
+    defer trainer.deinit();
+    try testing.expectEqual(BackendOptimizerKind.momentum, trainer.optimizer.kind);
+
+    const before_predictions = try trainer.predict(backend_inputs);
+    defer before_predictions.deinit();
+    const before_loss = try trainer.calculateLoss(before_predictions, backend_targets);
+
+    _ = try trainer.trainBatch(backend_inputs, backend_targets);
+    _ = try trainer.trainBatch(backend_inputs, backend_targets);
+
+    switch (trainer.layers.items[0]) {
+        .Standard => |standard| {
+            try testing.expect(standard.weights_velocity != null);
+            try testing.expect(standard.bias_velocity != null);
+            try testing.expect(@abs(standard.weights_velocity.?.get(0, 0)) > 0.0);
+            try testing.expect(@abs(standard.bias_velocity.?.get(0, 0)) > 0.0);
+        },
+        .Gated => unreachable,
+    }
+
+    const after_predictions = try trainer.predict(backend_inputs);
+    defer after_predictions.deinit();
+    const after_loss = try trainer.calculateLoss(after_predictions, backend_targets);
+    try testing.expect(after_loss < before_loss);
+}
+
+test "backend trainer rejects invalid momentum" {
+    const allocator = testing.allocator;
+
+    var network = Network.init(allocator, 0.05, .MeanSquaredError);
+    defer network.deinit();
+    try network.addLayer(1, 1, Activation.linear, Activation.linear_derivative);
+
+    var backend_instance = try backend_mod.createBackend(allocator, .CPU);
+    defer backend_instance.deinit();
+
+    try testing.expectError(
+        error.InvalidOptimizerMomentum,
+        network.backendTrainerWithOptimizer(backend_instance, .withMomentum(1.0)),
+    );
 }
 
 test "backend trainer keeps gated parameters on backend until sync" {

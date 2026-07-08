@@ -63,7 +63,7 @@ fn runBackendTraining(allocator: std.mem.Allocator) !TrainingResult {
     const backend_targets = try BackendMatrix.fromMatrix(backend, targets, allocator);
     defer backend_targets.deinit();
 
-    var trainer = try network.backendTrainer(backend);
+    var trainer = try network.backendTrainerWithOptimizer(backend, nn.BackendOptimizerConfig.withMomentum(0.9));
     defer trainer.deinit();
 
     const before_predictions = try trainer.predict(backend_inputs);

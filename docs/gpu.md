@@ -20,6 +20,8 @@ backend-aware matrix path.
   re-copying CPU parameters on every forward pass.
 - `BackendTrainer` can train standard and gated networks while keeping
   trainable parameters on the backend across batches.
+- `BackendTrainer` uses plain SGD by default and can keep momentum optimizer
+  state on the backend through `Network.backendTrainerWithOptimizer`.
 - The default `Network.trainBatch` and `Network.train` methods still use the
   CPU `Matrix` path.
 - `Network.trainBatchBackend` and `Network.trainBackend` remain available for
@@ -89,9 +91,11 @@ machine.
 
 Use `BackendMatrix` when testing backend behavior directly. Use
 `Network.forwardBackend`, `Network.predictBackend`, `BackendNetwork`,
-`BackendTrainer`, `Network.trainBatchBackend`, or `Network.trainBackend` when
-testing backend-aware network execution. Use `Matrix`, `Network.forward`, and
-the default training methods when working on the learning-oriented CPU path.
+`BackendTrainer`, `Network.backendTrainerWithOptimizer`,
+`Network.trainBatchBackend`, or `Network.trainBackend` when testing
+backend-aware network execution. Use `Matrix`, `Network.forward`, and the
+default training methods when working on the learning-oriented CPU path.
 
-The next major bridge is adding optimizer state to backend trainers without
-losing the readability that makes the project useful as a learning repo.
+The next backend optimization target is reducing synchronous host/device
+transfers in larger training loops while keeping the code readable enough for a
+learning repo.

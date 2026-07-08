@@ -51,6 +51,7 @@ Two main layer types:
   backend inference
 - `BackendTrainer` keeps standard and gated trainable parameters on the
   backend across batches, then syncs them back to a CPU `Network` explicitly
+  and can keep momentum optimizer state on the backend when configured
 
 The default high-level `Network.forward`, `Network.trainBatch`, and
 `Network.train` paths still use the CPU `Matrix` implementation. Backend
