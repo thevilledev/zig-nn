@@ -30,6 +30,20 @@ extern "C" __global__ void matrix_add(
     C[index] = A[index] + B[index];
 }
 
+extern "C" __global__ void matrix_add_row_bias(
+    const float* input,
+    const float* bias,
+    float* result,
+    unsigned int rows,
+    unsigned int cols
+) {
+    unsigned int col = blockIdx.x * blockDim.x + threadIdx.x;
+    unsigned int row = blockIdx.y * blockDim.y + threadIdx.y;
+    if (col >= cols || row >= rows) return;
+    unsigned int index = row * cols + col;
+    result[index] = input[index] + bias[col];
+}
+
 extern "C" __global__ void matrix_subtract(
     const float* A,
     const float* B,
@@ -216,6 +230,48 @@ extern "C" __global__ void apply_swish_derivative(
     float value = A[index];
     float sigmoid = 1.0f / (1.0f + __expf(-value));
     B[index] = sigmoid + value * sigmoid * (1.0f - sigmoid);
+}
+
+extern "C" __global__ void apply_gelu(
+    const float* input,
+    float* result,
+    unsigned int size
+) {
+    unsigned int index = blockIdx.x * blockDim.x + threadIdx.x;
+    if (index >= size) return;
+    float x = input[index];
+    const float coefficient = 0.7978845608028654f;
+    float inner = coefficient * (x + 0.044715f * x * x * x);
+    result[index] = 0.5f * x * (1.0f + tanhf(inner));
+}
+
+extern "C" __global__ void matrix_layer_norm(
+    const float* input,
+    const float* gamma,
+    const float* beta,
+    float* result,
+    unsigned int rows,
+    unsigned int cols,
+    float epsilon
+) {
+    unsigned int row = blockIdx.x * blockDim.x + threadIdx.x;
+    if (row >= rows) return;
+    unsigned int offset = row * cols;
+    float mean = 0.0f;
+    for (unsigned int col = 0; col < cols; col++) mean += input[offset + col];
+    mean /= (float)cols;
+
+    float variance = 0.0f;
+    for (unsigned int col = 0; col < cols; col++) {
+        float centered = input[offset + col] - mean;
+        variance += centered * centered;
+    }
+    variance /= (float)cols;
+    float inverse_std = rsqrtf(variance + epsilon);
+    for (unsigned int col = 0; col < cols; col++) {
+        float normalized = (input[offset + col] - mean) * inverse_std;
+        result[offset + col] = normalized * gamma[col] + beta[col];
+    }
 }
 
 extern "C" __global__ void apply_glu(

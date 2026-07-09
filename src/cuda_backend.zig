@@ -48,6 +48,8 @@ const CUDA = if (enable_cuda) struct {
         apply_relu_derivative = c.ZIG_NN_CUDA_KERNEL_APPLY_RELU_DERIVATIVE,
         apply_tanh_derivative = c.ZIG_NN_CUDA_KERNEL_APPLY_TANH_DERIVATIVE,
         apply_swish_derivative = c.ZIG_NN_CUDA_KERNEL_APPLY_SWISH_DERIVATIVE,
+        matrix_add_row_bias = c.ZIG_NN_CUDA_KERNEL_MATRIX_ADD_ROW_BIAS,
+        apply_gelu = c.ZIG_NN_CUDA_KERNEL_APPLY_GELU,
     };
 
     pub const MatmulKind = enum {
@@ -150,6 +152,10 @@ const CUDA = if (enable_cuda) struct {
     pub fn launchGatedKernel(backend_ref: *Backend, kernel_id: KernelId, linear: *Buffer, gating: *Buffer, result: *Buffer, size: u32) bool {
         return c.cuda_launch_gated_kernel(toC(backend_ref), @intFromEnum(kernel_id), toC(linear), toC(gating), toC(result), size) != 0;
     }
+
+    pub fn launchLayerNorm(backend_ref: *Backend, input: *Buffer, gamma: *Buffer, beta: *Buffer, result: *Buffer, rows: u32, cols: u32, epsilon: f32) bool {
+        return c.cuda_launch_layer_norm(toC(backend_ref), toC(input), toC(gamma), toC(beta), toC(result), rows, cols, epsilon) != 0;
+    }
 } else struct {
     pub const Backend = anyopaque;
     pub const Buffer = anyopaque;
@@ -170,6 +176,8 @@ const CUDA = if (enable_cuda) struct {
         apply_relu_derivative,
         apply_tanh_derivative,
         apply_swish_derivative,
+        matrix_add_row_bias,
+        apply_gelu,
     };
 
     pub const MatmulKind = enum {
@@ -239,6 +247,10 @@ const CUDA = if (enable_cuda) struct {
     }
 
     pub fn launchGatedKernel(_: *Backend, _: KernelId, _: *Buffer, _: *Buffer, _: *Buffer, _: u32) bool {
+        return false;
+    }
+
+    pub fn launchLayerNorm(_: *Backend, _: *Buffer, _: *Buffer, _: *Buffer, _: *Buffer, _: u32, _: u32, _: f32) bool {
         return false;
     }
 };
@@ -626,6 +638,28 @@ pub const CUDABackend = struct {
         return true;
     }
 
+    fn dispatchLayerNorm(self: *CUDABackend, matrix: *const Matrix, gamma: *const Matrix, beta: *const Matrix, epsilon: f64, result: *Matrix) bool {
+        const backend_ref = self.backend orelse return false;
+        const matrix_cuda = getCUDAMatrix(matrix);
+        const gamma_cuda = getCUDAMatrix(gamma);
+        const beta_cuda = getCUDAMatrix(beta);
+        const result_cuda = getCUDAMatrix(result);
+
+        if (!matrix_cuda.syncToGPU() or !gamma_cuda.syncToGPU() or !beta_cuda.syncToGPU()) return false;
+        const matrix_buffer = matrix_cuda.buffer orelse return false;
+        const gamma_buffer = gamma_cuda.buffer orelse return false;
+        const beta_buffer = beta_cuda.buffer orelse return false;
+        const result_buffer = result_cuda.buffer orelse return false;
+
+        if (!CUDA.launchLayerNorm(backend_ref, matrix_buffer, gamma_buffer, beta_buffer, result_buffer, toU32(matrix.rows), toU32(matrix.cols), @floatCast(epsilon))) {
+            return false;
+        }
+
+        if (!self.completeSubmittedKernel()) return false;
+        result_cuda.markGPUModified();
+        return true;
+    }
+
     pub fn initMatrix(ptr: *anyopaque, allocator: Allocator, rows: usize, cols: usize) error{OutOfMemory}!*Matrix {
         const self = @as(*CUDABackend, @ptrCast(@alignCast(ptr)));
         const cuda_matrix = CUDAMatrix.init(allocator, rows, cols, self) catch |err| {
@@ -764,6 +798,31 @@ pub const CUDABackend = struct {
             result_cuda.host_data[i] = a_cuda.host_data[i] + b_cuda.host_data[i];
         }
         result_cuda.markHostModified();
+        return result;
+    }
+
+    pub fn addRowBias(ptr: *anyopaque, matrix: *const Matrix, bias: *const Matrix, allocator: Allocator) error{ OutOfMemory, DimensionMismatch }!*Matrix {
+        if (bias.rows != 1 or bias.cols != matrix.cols) return error.DimensionMismatch;
+
+        const self = @as(*CUDABackend, @ptrCast(@alignCast(ptr)));
+        const result = try initMatrix(ptr, allocator, matrix.rows, matrix.cols);
+        const input_data = getCUDAMatrix(matrix);
+        const bias_data = getCUDAMatrix(bias);
+        const result_data = getCUDAMatrix(result);
+
+        if (self.dispatchBinaryMatrixKernel(.matrix_add_row_bias, matrix, bias, result)) {
+            return result;
+        }
+
+        ensureHostData(input_data);
+        ensureHostData(bias_data);
+        for (0..matrix.rows) |row| {
+            for (0..matrix.cols) |col| {
+                const index = row * matrix.cols + col;
+                result_data.host_data[index] = input_data.host_data[index] + bias_data.host_data[col];
+            }
+        }
+        result_data.markHostModified();
         return result;
     }
 
@@ -933,6 +992,8 @@ pub const CUDABackend = struct {
             .apply_swish
         else if (activation == Activation.swish_derivative)
             .apply_swish_derivative
+        else if (activation == Activation.gelu)
+            .apply_gelu
         else
             null;
 
@@ -981,6 +1042,48 @@ pub const CUDABackend = struct {
             }
         }
         result_cuda.markHostModified();
+        return result;
+    }
+
+    pub fn layerNorm(ptr: *anyopaque, matrix: *const Matrix, gamma: *const Matrix, beta: *const Matrix, epsilon: f64, allocator: Allocator) error{ OutOfMemory, DimensionMismatch }!*Matrix {
+        if (gamma.rows != 1 or beta.rows != 1 or gamma.cols != matrix.cols or beta.cols != matrix.cols) {
+            return error.DimensionMismatch;
+        }
+
+        const self = @as(*CUDABackend, @ptrCast(@alignCast(ptr)));
+        const result = try initMatrix(ptr, allocator, matrix.rows, matrix.cols);
+        const input_data = getCUDAMatrix(matrix);
+        const gamma_data = getCUDAMatrix(gamma);
+        const beta_data = getCUDAMatrix(beta);
+        const result_data = getCUDAMatrix(result);
+
+        if (self.dispatchLayerNorm(matrix, gamma, beta, epsilon, result)) {
+            return result;
+        }
+
+        ensureHostData(input_data);
+        ensureHostData(gamma_data);
+        ensureHostData(beta_data);
+        const width = @as(f32, @floatFromInt(matrix.cols));
+        const epsilon_f32: f32 = @floatCast(epsilon);
+        for (0..matrix.rows) |row| {
+            const offset = row * matrix.cols;
+            var mean: f32 = 0.0;
+            for (0..matrix.cols) |col| mean += input_data.host_data[offset + col];
+            mean /= width;
+            var variance: f32 = 0.0;
+            for (0..matrix.cols) |col| {
+                const centered = input_data.host_data[offset + col] - mean;
+                variance += centered * centered;
+            }
+            variance /= width;
+            const inverse_std = 1.0 / @sqrt(variance + epsilon_f32);
+            for (0..matrix.cols) |col| {
+                const normalized = (input_data.host_data[offset + col] - mean) * inverse_std;
+                result_data.host_data[offset + col] = normalized * gamma_data.host_data[col] + beta_data.host_data[col];
+            }
+        }
+        result_data.markHostModified();
         return result;
     }
 

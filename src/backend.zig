@@ -273,6 +273,11 @@ pub const Matrix = struct {
         return self.backend.add(self, other, allocator);
     }
 
+    /// Broadcasts a 1 x cols bias across every matrix row.
+    pub fn addRowBias(self: *const Matrix, bias: *const Matrix, allocator: Allocator) !*Matrix {
+        return self.backend.addRowBias(self, bias, allocator);
+    }
+
     /// Performs element-wise matrix subtraction: C = A - B
     pub fn subtract(self: *const Matrix, other: *const Matrix, allocator: Allocator) !*Matrix {
         return self.backend.subtract(self, other, allocator);
@@ -312,6 +317,10 @@ pub const Matrix = struct {
 
     pub fn applySoftmax(self: *const Matrix, allocator: Allocator) !*Matrix {
         return self.backend.applySoftmax(self, allocator);
+    }
+
+    pub fn layerNorm(self: *const Matrix, gamma: *const Matrix, beta: *const Matrix, epsilon: f64, allocator: Allocator) !*Matrix {
+        return self.backend.layerNorm(self, gamma, beta, epsilon, allocator);
     }
 
     pub fn applyGLU(self: *const Matrix, gating_part: *const Matrix, allocator: Allocator) !*Matrix {

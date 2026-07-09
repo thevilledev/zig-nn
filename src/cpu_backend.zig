@@ -200,6 +200,23 @@ pub const CPUBackend = struct {
         return result;
     }
 
+    pub fn addRowBias(ptr: *anyopaque, matrix: *const Matrix, bias: *const Matrix, allocator: Allocator) error{ OutOfMemory, DimensionMismatch }!*Matrix {
+        if (bias.rows != 1 or bias.cols != matrix.cols) return error.DimensionMismatch;
+
+        const result = try initMatrix(ptr, allocator, matrix.rows, matrix.cols);
+        errdefer deinitMatrix(undefined, result);
+        const input_data = @as(*const CPUMatrix, @ptrCast(@alignCast(matrix.impl_data)));
+        const bias_data = @as(*const CPUMatrix, @ptrCast(@alignCast(bias.impl_data)));
+        const result_data = @as(*CPUMatrix, @ptrCast(@alignCast(result.impl_data)));
+        for (0..matrix.rows) |row| {
+            for (0..matrix.cols) |col| {
+                const index = row * matrix.cols + col;
+                result_data.data[index] = input_data.data[index] + bias_data.data[col];
+            }
+        }
+        return result;
+    }
+
     pub fn subtract(ptr: *anyopaque, a: *const Matrix, b: *const Matrix, allocator: Allocator) error{ OutOfMemory, DimensionMismatch }!*Matrix {
         if (a.rows != b.rows or a.cols != b.cols) {
             return error.DimensionMismatch;
@@ -374,6 +391,42 @@ pub const CPUBackend = struct {
             }
         }
 
+        return result;
+    }
+
+    pub fn layerNorm(ptr: *anyopaque, matrix: *const Matrix, gamma: *const Matrix, beta: *const Matrix, epsilon: f64, allocator: Allocator) error{ OutOfMemory, DimensionMismatch }!*Matrix {
+        if (gamma.rows != 1 or beta.rows != 1 or gamma.cols != matrix.cols or beta.cols != matrix.cols) {
+            return error.DimensionMismatch;
+        }
+
+        const result = try initMatrix(ptr, allocator, matrix.rows, matrix.cols);
+        errdefer deinitMatrix(undefined, result);
+        const input_data = @as(*const CPUMatrix, @ptrCast(@alignCast(matrix.impl_data)));
+        const gamma_data = @as(*const CPUMatrix, @ptrCast(@alignCast(gamma.impl_data)));
+        const beta_data = @as(*const CPUMatrix, @ptrCast(@alignCast(beta.impl_data)));
+        const result_data = @as(*CPUMatrix, @ptrCast(@alignCast(result.impl_data)));
+        const width = @as(f32, @floatFromInt(matrix.cols));
+        const epsilon_f32: f32 = @floatCast(epsilon);
+
+        for (0..matrix.rows) |row| {
+            const offset = row * matrix.cols;
+            var mean: f32 = 0.0;
+            for (0..matrix.cols) |col| mean += input_data.data[offset + col];
+            mean /= width;
+
+            var variance: f32 = 0.0;
+            for (0..matrix.cols) |col| {
+                const centered = input_data.data[offset + col] - mean;
+                variance += centered * centered;
+            }
+            variance /= width;
+            const inverse_std = 1.0 / @sqrt(variance + epsilon_f32);
+
+            for (0..matrix.cols) |col| {
+                const normalized = (input_data.data[offset + col] - mean) * inverse_std;
+                result_data.data[offset + col] = normalized * gamma_data.data[col] + beta_data.data[col];
+            }
+        }
         return result;
     }
 

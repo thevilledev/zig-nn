@@ -24,6 +24,8 @@ enum ZigNNCudaKernelId {
     ZIG_NN_CUDA_KERNEL_APPLY_RELU_DERIVATIVE = 12,
     ZIG_NN_CUDA_KERNEL_APPLY_TANH_DERIVATIVE = 13,
     ZIG_NN_CUDA_KERNEL_APPLY_SWISH_DERIVATIVE = 14,
+    ZIG_NN_CUDA_KERNEL_MATRIX_ADD_ROW_BIAS = 15,
+    ZIG_NN_CUDA_KERNEL_APPLY_GELU = 16,
 };
 
 CUDABackendRef cuda_backend_create(const char* kernel_source, char* error_buffer, unsigned long error_buffer_len);
@@ -45,6 +47,7 @@ int cuda_launch_extract_batch(CUDABackendRef backend_ref, CUDABufferRef input_re
 int cuda_launch_unary_kernel(CUDABackendRef backend_ref, int kernel_id, CUDABufferRef input_ref, CUDABufferRef result_ref, unsigned int size);
 int cuda_launch_softmax_rows(CUDABackendRef backend_ref, CUDABufferRef input_ref, CUDABufferRef result_ref, unsigned int rows, unsigned int cols);
 int cuda_launch_gated_kernel(CUDABackendRef backend_ref, int kernel_id, CUDABufferRef linear_ref, CUDABufferRef gating_ref, CUDABufferRef result_ref, unsigned int size);
+int cuda_launch_layer_norm(CUDABackendRef backend_ref, CUDABufferRef input_ref, CUDABufferRef gamma_ref, CUDABufferRef beta_ref, CUDABufferRef result_ref, unsigned int rows, unsigned int cols, float epsilon);
 
 #ifdef __cplusplus
 }

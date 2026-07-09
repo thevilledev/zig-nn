@@ -119,6 +119,23 @@ pub const Activation = struct {
         return sig + beta * x * sig * (1.0 - sig);
     }
 
+    /// Gaussian Error Linear Unit using the common tanh approximation.
+    pub fn gelu(x: f64) f64 {
+        const coefficient = @sqrt(2.0 / math.pi);
+        const inner = coefficient * (x + 0.044715 * x * x * x);
+        return 0.5 * x * (1.0 + math.tanh(inner));
+    }
+
+    /// Derivative of the tanh-approximated GELU activation.
+    pub fn gelu_derivative(x: f64) f64 {
+        const coefficient = @sqrt(2.0 / math.pi);
+        const inner = coefficient * (x + 0.044715 * x * x * x);
+        const tanh_inner = math.tanh(inner);
+        const inner_derivative = coefficient * (1.0 + 3.0 * 0.044715 * x * x);
+        return 0.5 * (1.0 + tanh_inner) +
+            0.5 * x * (1.0 - tanh_inner * tanh_inner) * inner_derivative;
+    }
+
     /// Softmax activation function (element-wise exponential)
     /// Note: This computes the exponential part of softmax.
     /// Properties:
@@ -292,6 +309,16 @@ test "swish function" {
     try testing.expectApproxEqAbs(@as(f64, 0.0), Activation.swish(0.0), 0.0001);
     try testing.expectApproxEqAbs(@as(f64, 0.7310585786300049), Activation.swish(1.0), 0.0001);
     try testing.expectApproxEqAbs(@as(f64, -0.2689414213699951), Activation.swish(-1.0), 0.0001);
+}
+
+test "gelu function and derivative" {
+    try testing.expectApproxEqAbs(@as(f64, 0.0), Activation.gelu(0.0), 1e-12);
+    try testing.expectApproxEqAbs(@as(f64, 0.5), Activation.gelu_derivative(0.0), 1e-12);
+
+    const x: f64 = 0.75;
+    const epsilon: f64 = 1e-6;
+    const numerical = (Activation.gelu(x + epsilon) - Activation.gelu(x - epsilon)) / (2.0 * epsilon);
+    try testing.expectApproxEqAbs(numerical, Activation.gelu_derivative(x), 1e-6);
 }
 
 test "activation function application to matrix" {

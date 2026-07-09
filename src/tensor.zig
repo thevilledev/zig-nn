@@ -8,6 +8,7 @@ const Allocator = std.mem.Allocator;
 const BackendInstance = root.BackendInstance;
 const BackendMatrix = backend_mod.Matrix;
 const BackendType = backend_mod.BackendType;
+const Activation = @import("activation.zig").Activation;
 
 pub const max_rank: usize = 4;
 
@@ -274,6 +275,54 @@ pub const ExecutionContext = struct {
         };
     }
 
+    pub fn addRowBias(self: *ExecutionContext, input: Tensor, bias: Tensor) !Tensor {
+        if (input.shape.rank != 2 or bias.shape.rank != 2) return error.InvalidRank;
+        if (bias.shape.dims[0] != 1 or bias.shape.dims[1] != input.shape.dims[1]) return error.DimensionMismatch;
+        if (input.backendType() != bias.backendType()) return error.BackendMismatch;
+
+        const matrix = try input.matrix.addRowBias(bias.matrix, self.device.allocator);
+        self.stats.kernels += 1;
+        return .{
+            .matrix = matrix,
+            .shape = input.shape,
+            .allocator = self.device.allocator,
+        };
+    }
+
+    pub fn linear(self: *ExecutionContext, input: Tensor, weights: Tensor, bias: Tensor) !Tensor {
+        var projected = try self.matmul(input, weights);
+        defer projected.deinit();
+        return self.addRowBias(projected, bias);
+    }
+
+    pub fn gelu(self: *ExecutionContext, input: Tensor) !Tensor {
+        const matrix = try input.matrix.applyActivation(Activation.gelu, self.device.allocator);
+        self.stats.kernels += 1;
+        return .{
+            .matrix = matrix,
+            .shape = input.shape,
+            .allocator = self.device.allocator,
+        };
+    }
+
+    pub fn layerNorm(self: *ExecutionContext, input: Tensor, gamma: Tensor, beta: Tensor, epsilon: f32) !Tensor {
+        if (input.shape.rank != 2 or gamma.shape.rank != 2 or beta.shape.rank != 2) return error.InvalidRank;
+        if (gamma.shape.dims[0] != 1 or beta.shape.dims[0] != 1 or
+            gamma.shape.dims[1] != input.shape.dims[1] or beta.shape.dims[1] != input.shape.dims[1])
+        {
+            return error.DimensionMismatch;
+        }
+        if (input.backendType() != gamma.backendType() or input.backendType() != beta.backendType()) return error.BackendMismatch;
+
+        const matrix = try input.matrix.layerNorm(gamma.matrix, beta.matrix, epsilon, self.device.allocator);
+        self.stats.kernels += 1;
+        return .{
+            .matrix = matrix,
+            .shape = input.shape,
+            .allocator = self.device.allocator,
+        };
+    }
+
     pub fn softmax(self: *ExecutionContext, input: Tensor) !Tensor {
         if (input.shape.rank != 2) return error.InvalidRank;
         const matrix = try input.matrix.applySoftmax(self.device.allocator);
@@ -466,6 +515,132 @@ test "execution batch shares one gpu synchronization" {
         try testing.expectEqual(@as(usize, 2), runtime_stats.host_to_device_transfers);
         try testing.expectEqual(@as(usize, 1), runtime_stats.device_to_host_transfers);
         try testing.expectEqual(@as(usize, 2), runtime_stats.kernel_launches);
+        try testing.expectEqual(@as(usize, 1), runtime_stats.vendor_gemm_launches);
+        try testing.expectEqual(@as(usize, 1), runtime_stats.synchronizations);
+    }
+}
+
+test "transformer tensor primitives match expected values" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var device = try Device.init(allocator, .cpu);
+    defer device.deinit();
+    var context = ExecutionContext.init(&device);
+
+    var input = try context.upload(&.{ 2, 2 }, &.{ 1, 2, 3, 4 });
+    defer input.deinit();
+    var weights = try context.upload(&.{ 2, 2 }, &.{ 1, 0, 0, 1 });
+    defer weights.deinit();
+    var bias = try context.upload(&.{ 1, 2 }, &.{ 0.5, -0.5 });
+    defer bias.deinit();
+    var projected = try context.linear(input, weights, bias);
+    defer projected.deinit();
+
+    var projected_values: [4]f32 = undefined;
+    try context.readback(projected, &projected_values);
+    try testing.expectEqualSlices(f32, &.{ 1.5, 1.5, 3.5, 3.5 }, &projected_values);
+
+    var gamma = try context.upload(&.{ 1, 2 }, &.{ 1, 1 });
+    defer gamma.deinit();
+    var beta = try context.upload(&.{ 1, 2 }, &.{ 0, 0 });
+    defer beta.deinit();
+    var normalized = try context.layerNorm(input, gamma, beta, 1e-5);
+    defer normalized.deinit();
+    var normalized_values: [4]f32 = undefined;
+    try context.readback(normalized, &normalized_values);
+    try testing.expectApproxEqAbs(@as(f32, -0.99998), normalized_values[0], 1e-4);
+    try testing.expectApproxEqAbs(@as(f32, 0.99998), normalized_values[1], 1e-4);
+
+    var activated = try context.gelu(input);
+    defer activated.deinit();
+    var activated_values: [4]f32 = undefined;
+    try context.readback(activated, &activated_values);
+    try testing.expectApproxEqAbs(@as(f32, @floatCast(Activation.gelu(1.0))), activated_values[0], 1e-5);
+}
+
+test "transformer pipeline stays device resident within a batch" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const input_values = [_]f32{ 1, -2, 0.5, -1, 3, 2 };
+    const weight_values = [_]f32{
+        0.5, -1,   0,    2,
+        1,   0.25, -0.5, 0,
+        -2,  1,    0.75, -1,
+    };
+    const bias_values = [_]f32{ 0.1, -0.2, 0.3, 0.4 };
+    const gamma_values = [_]f32{ 1, 0.5, 1.5, -1 };
+    const beta_values = [_]f32{ 0, 0.1, -0.2, 0.3 };
+
+    var device = try Device.init(allocator, .auto);
+    defer device.deinit();
+    var context = ExecutionContext.init(&device);
+    context.resetStats();
+
+    var input = try context.upload(&.{ 2, 3 }, &input_values);
+    defer input.deinit();
+    var weights = try context.upload(&.{ 3, 4 }, &weight_values);
+    defer weights.deinit();
+    var bias = try context.upload(&.{ 1, 4 }, &bias_values);
+    defer bias.deinit();
+    var gamma = try context.upload(&.{ 1, 4 }, &gamma_values);
+    defer gamma.deinit();
+    var beta = try context.upload(&.{ 1, 4 }, &beta_values);
+    defer beta.deinit();
+
+    try context.beginBatch();
+    var projected = try context.linear(input, weights, bias);
+    var activated = try context.gelu(projected);
+    projected.deinit();
+    var normalized = try context.layerNorm(activated, gamma, beta, 1e-5);
+    activated.deinit();
+    try context.endBatch();
+    defer normalized.deinit();
+
+    var actual: [8]f32 = undefined;
+    try context.readback(normalized, &actual);
+
+    var expected: [8]f32 = undefined;
+    for (0..2) |row| {
+        var activated_row: [4]f32 = undefined;
+        for (0..4) |col| {
+            var projected_value = bias_values[col];
+            for (0..3) |inner| {
+                projected_value += input_values[row * 3 + inner] * weight_values[inner * 4 + col];
+            }
+            activated_row[col] = @floatCast(Activation.gelu(projected_value));
+        }
+
+        var mean: f32 = 0;
+        for (activated_row) |value| mean += value;
+        mean /= 4;
+        var variance: f32 = 0;
+        for (activated_row) |value| {
+            const centered = value - mean;
+            variance += centered * centered;
+        }
+        variance /= 4;
+        const inverse_std = 1.0 / @sqrt(variance + 1e-5);
+        for (0..4) |col| {
+            expected[row * 4 + col] = (activated_row[col] - mean) * inverse_std * gamma_values[col] + beta_values[col];
+        }
+    }
+
+    for (actual, expected) |actual_value, expected_value| {
+        try testing.expectApproxEqAbs(expected_value, actual_value, 2e-4);
+    }
+    try testing.expectEqual(@as(usize, 4), context.stats.kernels);
+
+    const runtime_stats = context.backendStats();
+    try testing.expectEqual(@as(usize, 9), runtime_stats.buffer_allocations);
+    if (device.backendType() == .CPU) {
+        try testing.expectEqual(@as(usize, 0), runtime_stats.kernel_launches);
+        try testing.expectEqual(@as(usize, 0), runtime_stats.synchronizations);
+    } else {
+        try testing.expectEqual(@as(usize, 5), runtime_stats.host_to_device_transfers);
+        try testing.expectEqual(@as(usize, 1), runtime_stats.device_to_host_transfers);
+        try testing.expectEqual(@as(usize, 4), runtime_stats.kernel_launches);
         try testing.expectEqual(@as(usize, 1), runtime_stats.vendor_gemm_launches);
         try testing.expectEqual(@as(usize, 1), runtime_stats.synchronizations);
     }

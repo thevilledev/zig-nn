@@ -342,6 +342,7 @@ pub const MetalBackend = struct {
     // Pipeline states for different operations
     matrix_multiply_pipeline: ?*Metal.ComputePipelineState,
     element_wise_add_pipeline: ?*Metal.ComputePipelineState,
+    add_row_bias_pipeline: ?*Metal.ComputePipelineState,
     element_wise_subtract_pipeline: ?*Metal.ComputePipelineState,
     element_wise_multiply_pipeline: ?*Metal.ComputePipelineState,
     matrix_scale_pipeline: ?*Metal.ComputePipelineState,
@@ -360,6 +361,8 @@ pub const MetalBackend = struct {
     tanh_derivative_pipeline: ?*Metal.ComputePipelineState,
     swish_pipeline: ?*Metal.ComputePipelineState,
     swish_derivative_pipeline: ?*Metal.ComputePipelineState,
+    gelu_pipeline: ?*Metal.ComputePipelineState,
+    layer_norm_pipeline: ?*Metal.ComputePipelineState,
 
     // Softmax pipelines
     softmax_find_max_pipeline: ?*Metal.ComputePipelineState,
@@ -394,6 +397,7 @@ pub const MetalBackend = struct {
             .library = null,
             .matrix_multiply_pipeline = null,
             .element_wise_add_pipeline = null,
+            .add_row_bias_pipeline = null,
             .element_wise_subtract_pipeline = null,
             .element_wise_multiply_pipeline = null,
             .matrix_scale_pipeline = null,
@@ -410,6 +414,8 @@ pub const MetalBackend = struct {
             .tanh_derivative_pipeline = null,
             .swish_pipeline = null,
             .swish_derivative_pipeline = null,
+            .gelu_pipeline = null,
+            .layer_norm_pipeline = null,
             .softmax_find_max_pipeline = null,
             .softmax_exp_sum_pipeline = null,
             .softmax_normalize_pipeline = null,
@@ -433,6 +439,7 @@ pub const MetalBackend = struct {
         _ = self.synchronizeQueued();
         Metal.release(self.matrix_multiply_pipeline);
         Metal.release(self.element_wise_add_pipeline);
+        Metal.release(self.add_row_bias_pipeline);
         Metal.release(self.element_wise_subtract_pipeline);
         Metal.release(self.element_wise_multiply_pipeline);
         Metal.release(self.matrix_scale_pipeline);
@@ -449,6 +456,8 @@ pub const MetalBackend = struct {
         Metal.release(self.tanh_derivative_pipeline);
         Metal.release(self.swish_pipeline);
         Metal.release(self.swish_derivative_pipeline);
+        Metal.release(self.gelu_pipeline);
+        Metal.release(self.layer_norm_pipeline);
         Metal.release(self.softmax_find_max_pipeline);
         Metal.release(self.softmax_exp_sum_pipeline);
         Metal.release(self.softmax_normalize_pipeline);
@@ -464,6 +473,7 @@ pub const MetalBackend = struct {
     fn loadPipelines(self: *MetalBackend) !void {
         try self.loadPipeline(&self.matrix_multiply_pipeline, "matrix_multiply");
         try self.loadPipeline(&self.element_wise_add_pipeline, "matrix_add");
+        try self.loadPipeline(&self.add_row_bias_pipeline, "matrix_add_row_bias");
         try self.loadPipeline(&self.element_wise_subtract_pipeline, "matrix_subtract");
         try self.loadPipeline(&self.element_wise_multiply_pipeline, "matrix_element_wise_multiply");
         try self.loadPipeline(&self.matrix_scale_pipeline, "matrix_scale");
@@ -480,6 +490,8 @@ pub const MetalBackend = struct {
         try self.loadPipeline(&self.tanh_derivative_pipeline, "apply_tanh_derivative");
         try self.loadPipeline(&self.swish_pipeline, "apply_swish");
         try self.loadPipeline(&self.swish_derivative_pipeline, "apply_swish_derivative");
+        try self.loadPipeline(&self.gelu_pipeline, "apply_gelu");
+        try self.loadPipeline(&self.layer_norm_pipeline, "matrix_layer_norm");
         try self.loadPipeline(&self.softmax_find_max_pipeline, "softmax_find_max");
         try self.loadPipeline(&self.softmax_exp_sum_pipeline, "softmax_exp_and_sum");
         try self.loadPipeline(&self.softmax_normalize_pipeline, "softmax_normalize");
@@ -856,6 +868,35 @@ pub const MetalBackend = struct {
         return true;
     }
 
+    fn dispatchLayerNorm(self: *MetalBackend, matrix: *const Matrix, gamma: *const Matrix, beta: *const Matrix, epsilon: f64, result: *Matrix) bool {
+        const pipeline = self.layer_norm_pipeline orelse return false;
+        const command_queue = self.command_queue orelse return false;
+        const input_data = getMetalMatrix(matrix);
+        const gamma_data = getMetalMatrix(gamma);
+        const beta_data = getMetalMatrix(beta);
+        const result_data = getMetalMatrix(result);
+        if (!input_data.syncToGPU() or !gamma_data.syncToGPU() or !beta_data.syncToGPU()) return false;
+
+        const command_buffer = Metal.commandQueueCreateCommandBuffer(command_queue) orelse return false;
+        defer Metal.release(command_buffer);
+        const encoder = Metal.commandBufferCreateComputeCommandEncoder(command_buffer) orelse return false;
+        defer Metal.release(encoder);
+        Metal.computeEncoderSetPipelineState(encoder, pipeline);
+        Metal.computeEncoderSetBuffer(encoder, input_data.buffer orelse return false, 0, 0);
+        Metal.computeEncoderSetBuffer(encoder, gamma_data.buffer orelse return false, 0, 1);
+        Metal.computeEncoderSetBuffer(encoder, beta_data.buffer orelse return false, 0, 2);
+        Metal.computeEncoderSetBuffer(encoder, result_data.buffer orelse return false, 0, 3);
+        setU32(encoder, toU32(matrix.rows), 4);
+        setU32(encoder, toU32(matrix.cols), 5);
+        setF32(encoder, @floatCast(epsilon), 6);
+        Metal.computeEncoderDispatchThreads(encoder, pipeline, matrix.rows, 1, 1);
+        Metal.computeEncoderEndEncoding(encoder);
+        Metal.commandBufferCommit(command_buffer);
+        if (!self.completeSubmittedKernel(command_buffer)) return false;
+        result_data.markGPUModified();
+        return true;
+    }
+
     // --- Implementation Functions (Make Public) ---
 
     pub fn initMatrix(ptr: *anyopaque, allocator: Allocator, rows: usize, cols: usize) error{OutOfMemory}!*Matrix {
@@ -1029,6 +1070,28 @@ pub const MetalBackend = struct {
         }
         result_metal.markHostModified();
 
+        return result;
+    }
+
+    pub fn addRowBias(ptr: *anyopaque, matrix: *const Matrix, bias: *const Matrix, allocator: Allocator) error{ OutOfMemory, DimensionMismatch }!*Matrix {
+        if (bias.rows != 1 or bias.cols != matrix.cols) return error.DimensionMismatch;
+
+        const result = try initMatrix(ptr, allocator, matrix.rows, matrix.cols);
+        const input_data = getMetalMatrix(matrix);
+        const bias_data = getMetalMatrix(bias);
+        const result_data = getMetalMatrix(result);
+        const self = @as(*MetalBackend, @ptrCast(@alignCast(ptr)));
+        if (self.dispatchBinaryMatrixKernel(self.add_row_bias_pipeline, matrix, bias, result)) return result;
+
+        ensureHostData(input_data);
+        ensureHostData(bias_data);
+        for (0..matrix.rows) |row| {
+            for (0..matrix.cols) |col| {
+                const index = row * matrix.cols + col;
+                result_data.host_data[index] = input_data.host_data[index] + bias_data.host_data[col];
+            }
+        }
+        result_data.markHostModified();
         return result;
     }
 
@@ -1246,6 +1309,8 @@ pub const MetalBackend = struct {
             self.swish_pipeline
         else if (activation == Activation.swish_derivative)
             self.swish_derivative_pipeline
+        else if (activation == Activation.gelu)
+            self.gelu_pipeline
         else
             null;
 
@@ -1302,6 +1367,45 @@ pub const MetalBackend = struct {
         }
         result_metal.markHostModified();
 
+        return result;
+    }
+
+    pub fn layerNorm(ptr: *anyopaque, matrix: *const Matrix, gamma: *const Matrix, beta: *const Matrix, epsilon: f64, allocator: Allocator) error{ OutOfMemory, DimensionMismatch }!*Matrix {
+        if (gamma.rows != 1 or beta.rows != 1 or gamma.cols != matrix.cols or beta.cols != matrix.cols) {
+            return error.DimensionMismatch;
+        }
+
+        const result = try initMatrix(ptr, allocator, matrix.rows, matrix.cols);
+        const input_data = getMetalMatrix(matrix);
+        const gamma_data = getMetalMatrix(gamma);
+        const beta_data = getMetalMatrix(beta);
+        const result_data = getMetalMatrix(result);
+        const self = @as(*MetalBackend, @ptrCast(@alignCast(ptr)));
+        if (self.dispatchLayerNorm(matrix, gamma, beta, epsilon, result)) return result;
+
+        ensureHostData(input_data);
+        ensureHostData(gamma_data);
+        ensureHostData(beta_data);
+        const width = @as(f32, @floatFromInt(matrix.cols));
+        const epsilon_f32: f32 = @floatCast(epsilon);
+        for (0..matrix.rows) |row| {
+            const offset = row * matrix.cols;
+            var mean: f32 = 0.0;
+            for (0..matrix.cols) |col| mean += input_data.host_data[offset + col];
+            mean /= width;
+            var variance: f32 = 0.0;
+            for (0..matrix.cols) |col| {
+                const centered = input_data.host_data[offset + col] - mean;
+                variance += centered * centered;
+            }
+            variance /= width;
+            const inverse_std = 1.0 / @sqrt(variance + epsilon_f32);
+            for (0..matrix.cols) |col| {
+                const normalized = (input_data.host_data[offset + col] - mean) * inverse_std;
+                result_data.host_data[offset + col] = normalized * gamma_data.host_data[col] + beta_data.host_data[col];
+            }
+        }
+        result_data.markHostModified();
         return result;
     }
 

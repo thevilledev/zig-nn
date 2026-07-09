@@ -49,6 +49,19 @@ kernel void matrix_add(
     C[index] = A[index] + B[index];
 }
 
+kernel void matrix_add_row_bias(
+    device const float* input [[buffer(0)]],
+    device const float* bias [[buffer(1)]],
+    device float* result [[buffer(2)]],
+    constant uint& rows [[buffer(3)]],
+    constant uint& cols [[buffer(4)]],
+    uint2 position [[thread_position_in_grid]]
+) {
+    if (position.x >= cols || position.y >= rows) return;
+    uint index = position.y * cols + position.x;
+    result[index] = input[index] + bias[position.x];
+}
+
 // Element-wise subtraction compute kernel
 // C = A - B
 kernel void matrix_subtract(
@@ -340,6 +353,48 @@ kernel void apply_swish_derivative(
     float value = A[position];
     float sigmoid_val = 1.0f / (1.0f + exp(-value));
     B[position] = sigmoid_val + value * sigmoid_val * (1.0f - sigmoid_val);
+}
+
+kernel void apply_gelu(
+    device const float* input [[buffer(0)]],
+    device float* result [[buffer(1)]],
+    constant uint& size [[buffer(2)]],
+    uint position [[thread_position_in_grid]]
+) {
+    if (position >= size) return;
+    float x = input[position];
+    const float coefficient = 0.7978845608028654f;
+    float inner = coefficient * (x + 0.044715f * x * x * x);
+    result[position] = 0.5f * x * (1.0f + tanh(inner));
+}
+
+kernel void matrix_layer_norm(
+    device const float* input [[buffer(0)]],
+    device const float* gamma [[buffer(1)]],
+    device const float* beta [[buffer(2)]],
+    device float* result [[buffer(3)]],
+    constant uint& rows [[buffer(4)]],
+    constant uint& cols [[buffer(5)]],
+    constant float& epsilon [[buffer(6)]],
+    uint row [[thread_position_in_grid]]
+) {
+    if (row >= rows) return;
+    uint offset = row * cols;
+    float mean = 0.0f;
+    for (uint col = 0; col < cols; col++) mean += input[offset + col];
+    mean /= float(cols);
+
+    float variance = 0.0f;
+    for (uint col = 0; col < cols; col++) {
+        float centered = input[offset + col] - mean;
+        variance += centered * centered;
+    }
+    variance /= float(cols);
+    float inverse_std = rsqrt(variance + epsilon);
+    for (uint col = 0; col < cols; col++) {
+        float normalized = (input[offset + col] - mean) * inverse_std;
+        result[offset + col] = normalized * gamma[col] + beta[col];
+    }
 }
 
 // Gated Linear Unit

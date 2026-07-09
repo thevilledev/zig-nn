@@ -20,6 +20,7 @@ typedef struct ZigNNCUDABackend {
     cublasHandle_t cublas;
     CUfunction matrix_multiply;
     CUfunction matrix_add;
+    CUfunction matrix_add_row_bias;
     CUfunction matrix_subtract;
     CUfunction matrix_element_wise_multiply;
     CUfunction matrix_scale;
@@ -39,6 +40,8 @@ typedef struct ZigNNCUDABackend {
     CUfunction softmax_rows;
     CUfunction apply_glu;
     CUfunction apply_swiglu;
+    CUfunction apply_gelu;
+    CUfunction matrix_layer_norm;
     char device_name[256];
 } ZigNNCUDABackend;
 
@@ -187,6 +190,7 @@ static int cuda_get_function(CUmodule module, CUfunction* function, const char* 
 static int cuda_load_functions(ZigNNCUDABackend* backend, char* error_buffer, unsigned long error_buffer_len) {
     return cuda_get_function(backend->module, &backend->matrix_multiply, "matrix_multiply", error_buffer, error_buffer_len) &&
         cuda_get_function(backend->module, &backend->matrix_add, "matrix_add", error_buffer, error_buffer_len) &&
+        cuda_get_function(backend->module, &backend->matrix_add_row_bias, "matrix_add_row_bias", error_buffer, error_buffer_len) &&
         cuda_get_function(backend->module, &backend->matrix_subtract, "matrix_subtract", error_buffer, error_buffer_len) &&
         cuda_get_function(backend->module, &backend->matrix_element_wise_multiply, "matrix_element_wise_multiply", error_buffer, error_buffer_len) &&
         cuda_get_function(backend->module, &backend->matrix_scale, "matrix_scale", error_buffer, error_buffer_len) &&
@@ -205,7 +209,9 @@ static int cuda_load_functions(ZigNNCUDABackend* backend, char* error_buffer, un
         cuda_get_function(backend->module, &backend->apply_swish_derivative, "apply_swish_derivative", error_buffer, error_buffer_len) &&
         cuda_get_function(backend->module, &backend->softmax_rows, "softmax_rows", error_buffer, error_buffer_len) &&
         cuda_get_function(backend->module, &backend->apply_glu, "apply_glu", error_buffer, error_buffer_len) &&
-        cuda_get_function(backend->module, &backend->apply_swiglu, "apply_swiglu", error_buffer, error_buffer_len);
+        cuda_get_function(backend->module, &backend->apply_swiglu, "apply_swiglu", error_buffer, error_buffer_len) &&
+        cuda_get_function(backend->module, &backend->apply_gelu, "apply_gelu", error_buffer, error_buffer_len) &&
+        cuda_get_function(backend->module, &backend->matrix_layer_norm, "matrix_layer_norm", error_buffer, error_buffer_len);
 }
 
 static CUfunction cuda_function_for_kernel_id(ZigNNCUDABackend* backend, int kernel_id) {
@@ -244,6 +250,10 @@ static CUfunction cuda_function_for_kernel_id(ZigNNCUDABackend* backend, int ker
             return backend->apply_tanh_derivative;
         case ZIG_NN_CUDA_KERNEL_APPLY_SWISH_DERIVATIVE:
             return backend->apply_swish_derivative;
+        case ZIG_NN_CUDA_KERNEL_MATRIX_ADD_ROW_BIAS:
+            return backend->matrix_add_row_bias;
+        case ZIG_NN_CUDA_KERNEL_APPLY_GELU:
+            return backend->apply_gelu;
         default:
             return NULL;
     }
@@ -628,4 +638,22 @@ int cuda_launch_gated_kernel(CUDABackendRef backend_ref, int kernel_id, CUDABuff
     CUdeviceptr result_ptr = result->device_ptr;
     void* args[] = { &linear_ptr, &gating_ptr, &result_ptr, &size };
     return cuda_launch_1d(backend, cuda_function_for_kernel_id(backend, kernel_id), size, args);
+}
+
+int cuda_launch_layer_norm(CUDABackendRef backend_ref, CUDABufferRef input_ref, CUDABufferRef gamma_ref, CUDABufferRef beta_ref, CUDABufferRef result_ref, unsigned int rows, unsigned int cols, float epsilon) {
+    ZigNNCUDABackend* backend = (ZigNNCUDABackend*)backend_ref;
+    ZigNNCUDABuffer* input = (ZigNNCUDABuffer*)input_ref;
+    ZigNNCUDABuffer* gamma = (ZigNNCUDABuffer*)gamma_ref;
+    ZigNNCUDABuffer* beta = (ZigNNCUDABuffer*)beta_ref;
+    ZigNNCUDABuffer* result = (ZigNNCUDABuffer*)result_ref;
+    if (input == NULL || gamma == NULL || beta == NULL || result == NULL) {
+        return 0;
+    }
+
+    CUdeviceptr input_ptr = input->device_ptr;
+    CUdeviceptr gamma_ptr = gamma->device_ptr;
+    CUdeviceptr beta_ptr = beta->device_ptr;
+    CUdeviceptr result_ptr = result->device_ptr;
+    void* args[] = { &input_ptr, &gamma_ptr, &beta_ptr, &result_ptr, &rows, &cols, &epsilon };
+    return cuda_launch_1d(backend, backend != NULL ? backend->matrix_layer_norm : NULL, rows, args);
 }

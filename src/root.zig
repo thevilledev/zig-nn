@@ -219,6 +219,15 @@ pub const BackendInstance = union(BackendType) {
         return self.attachBackend(matrix);
     }
 
+    pub fn addRowBias(self: BackendInstance, matrix: *const BackendMatrix, bias: *const BackendMatrix, allocator: std.mem.Allocator) !*BackendMatrix {
+        const result = try switch (self) {
+            .CPU => |ptr| CPUBackend.addRowBias(ptr, matrix, bias, allocator),
+            .Metal => |ptr| MetalBackend.addRowBias(ptr, matrix, bias, allocator),
+            .CUDA => |ptr| CUDABackend.addRowBias(ptr, matrix, bias, allocator),
+        };
+        return self.attachBackend(result);
+    }
+
     pub fn subtract(self: BackendInstance, a: *const BackendMatrix, b: *const BackendMatrix, allocator: std.mem.Allocator) !*BackendMatrix {
         const matrix = try switch (self) {
             .CPU => |ptr| CPUBackend.subtract(ptr, a, b, allocator),
@@ -295,6 +304,15 @@ pub const BackendInstance = union(BackendType) {
             .CPU => |ptr| CPUBackend.applySoftmax(ptr, matrix, allocator),
             .Metal => |ptr| MetalBackend.applySoftmax(ptr, matrix, allocator),
             .CUDA => |ptr| CUDABackend.applySoftmax(ptr, matrix, allocator),
+        };
+        return self.attachBackend(result);
+    }
+
+    pub fn layerNorm(self: BackendInstance, matrix: *const BackendMatrix, gamma: *const BackendMatrix, beta: *const BackendMatrix, epsilon: f64, allocator: std.mem.Allocator) !*BackendMatrix {
+        const result = try switch (self) {
+            .CPU => |ptr| CPUBackend.layerNorm(ptr, matrix, gamma, beta, epsilon, allocator),
+            .Metal => |ptr| MetalBackend.layerNorm(ptr, matrix, gamma, beta, epsilon, allocator),
+            .CUDA => |ptr| CUDABackend.layerNorm(ptr, matrix, gamma, beta, epsilon, allocator),
         };
         return self.attachBackend(result);
     }
