@@ -4,98 +4,48 @@
 
 A small neural-network playground written in Zig.
 
-This is not trying to be a production ML framework. The point is to make the
-mechanics visible: matrix operations, layers, training loops, backend
-boundaries, and small experiments that can be checked against real output.
-
-## What This Repo Is For
-
-- Learning neural-network fundamentals by implementing the pieces directly
-- Practicing Zig memory management, error handling, and build tooling
-- Running small examples that expose the math instead of hiding it
-- Trying focused research ideas and comparing them with measured results
-- Exploring a CPU-first implementation with a separate backend-aware matrix path
-
-## Current Shape
-
-The repo has two matrix paths:
-
-- `Matrix` is the learning-oriented path used by the default `Network`,
-  `Layer`, examples, and training code.
-- `BackendMatrix` is the backend-aware path that can run operations through CPU,
-  Metal, or CUDA implementations.
-
-Metal and CUDA support currently applies to backend matrix operations, GPU
-examples, backend-aware `Network.forwardBackend` / `Network.predictBackend`
-inference, and `Network.trainBatchBackend` / `Network.trainBackend` training.
-`BackendNetwork` snapshots provide persistent backend inference parameters, and
-`BackendTrainer` provides persistent backend training parameters for standard
-and gated network layers, with optional backend-owned momentum optimizer state.
-`Network.trainBatchBackend` / `Network.trainBackend` remain available as
-CPU-owned backend training paths.
+This is for learning neural-network fundamentals by building the pieces
+directly: matrix math, layers, training loops, small examples, focused
+experiments, and a CPU-first path with separate backend-aware matrix operations
+for CPU, Metal, and CUDA. It is not trying to be a production ML framework.
 
 ## Start Here
 
-Make sure Zig `0.16.0` and Go `1.26` or newer are installed. From the
-repository root, install `nnctl` once, then use it for repo tasks.
+Install Zig `0.16.0` and Go `1.26` or newer, then from the repository root:
 
 ```bash
-# Install nnctl
 go install ./nnctl/cmd/nnctl
-nnctl help
-
-# Build, test, and build examples
 nnctl all
+nnctl run quick
+```
 
-# Run specific examples
+`nnctl all` builds the library, runs the tests, and builds the examples.
+`nnctl run quick` runs the small CPU examples that do not need downloaded data
+or a saved model.
+
+Try a specific example or workflow:
+
+```bash
 nnctl run simple-xor
 nnctl run tiny-gpt
 nnctl run backend-training
-
-# Download data for examples
 nnctl data mnist
-nnctl data tiny-gpt
-
-# Train and serve a TinyGPT checkpoint
 nnctl train tiny-gpt --preset coherent-small --output tiny-gpt.bin
 nnctl chat --model tiny-gpt.bin
-
-# Build with a different optimization mode
-nnctl build --mode ReleaseFast
-
-# Run readable benchmark comparisons
 nnctl benchmark
 ```
 
-For setup details and direct `zig build` commands, see
-[Getting Started](docs/getting-started.md).
-
-## Development Hooks
-
-Install Node dependencies, then install the local Git hooks with `prek`:
-
-```bash
-npm install
-npm run hooks:install
-```
-
-Run the same checks across the repository with:
-
-```bash
-npm run prek:all
-```
-
-Update hook revisions with the same seven-day cooldown used for dependency
-updates:
-
-```bash
-npm run prek:update
-```
+For direct `zig build` commands and data files, see
+[Getting Started](docs/getting-started.md). For local hooks and full-repository
+checks, see [Development Environment](docs/development.md). GPU details are in
+[GPU and Backend Notes](docs/gpu.md).
 
 ## Guide
 
 - [Getting Started](docs/getting-started.md) - prerequisites, build commands,
   tests, and common development tasks
+- [Development Environment](docs/development.md) - pinned tools, local hooks,
+  and full-repository checks
 - [Examples](docs/examples.md) - runnable demos and what each one is meant to
   show
 - [Benchmarks](docs/benchmarks.md) - repeatable CPU, GPU, and release-mode
@@ -111,13 +61,12 @@ npm run prek:update
 - [Research Resources](docs/research.md) - papers, official docs, datasets,
   and implementation references for topics covered by the repo
 
-## Repository Map
+## Where To Look
 
-- `src/` - reusable library code
-- `examples/` - runnable programs and acceptance-style example tests
-- `docs/` - guides and architecture notes
-- `nnctl/` - Go CLI for repository tasks
-- `build.zig` - Zig build graph, test steps, examples, and backend options
+Start with `examples/` when you want to see the code run. Read `src/matrix.zig`,
+`src/layer.zig`, and `src/network.zig` for the core learning path. Use
+[GPU and Backend Notes](docs/gpu.md) when you need the current backend
+boundaries, and `nnctl/` only when you are changing the helper CLI.
 
 ## License
 
