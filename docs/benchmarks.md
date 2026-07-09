@@ -182,9 +182,11 @@ spot instances running after the benchmark is captured.
   these cases can exceed practical CPU baseline sizes.
 - `training`: CPU `Network.trainBatch` loops plus `Network.trainBatchBackend`
   rows for Metal and CUDA when those backends are available.
-- `tiny_gpt`: CPU TinyGPT forward passes through the example model. TinyGPT also
-  uses the learning-oriented `Matrix` path today, with a larger four-layer
-  decoder row in the default suite.
+- `tiny_gpt`: legacy CPU TinyGPT forward passes through the example model, with
+  a larger four-layer decoder row in the default suite. The device decoder is
+  covered by transfer/kernel/synchronization assertions and deterministic
+  parity tests; add dedicated training and cached-generation timing rows before
+  using this suite for end-to-end GPU claims.
 - `quantization`: CPU uniform scalar quantization and TurboQuant encode,
   decode, error measurement, and KV-cache-shaped TurboQuant loops over
   per-head key/value vectors, including larger flat-vector and KV-cache rows.
@@ -242,7 +244,8 @@ than B300 and RTX PRO 6000 on CUDA absolute time. A100 40GB is consistently
 behind the newer GPUs here, but remains a useful baseline for older data-center
 hardware.
 
-Small training remains slower on CUDA across all measured GPUs. The larger
-training case is faster on CUDA, but this benchmark still uses simple f32
-kernels and synchronous host/device paths, so these numbers should be treated as
-backend smoke and trend data rather than a peak hardware measurement.
+Small training remains sensitive to launch overhead. The device runtime now
+batches synchronization and uses vendor GEMM, but these historical rows predate
+the Transformer tensor path. Treat them as backend smoke and trend data rather
+than peak hardware or current TinyGPT measurements, and record a fresh source
+commit whenever publishing new results.

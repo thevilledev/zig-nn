@@ -1,9 +1,9 @@
 # Tiny GPT Example
 
 This example is a tiny, readable decoder-only Transformer in the style of
-Karpathy's minGPT and nanoGPT demos. It uses this project's `nn.Matrix`
-operations for the linear projections and logits, while keeping the
-Transformer-specific code local to the example.
+Karpathy's minGPT and nanoGPT demos. The original `nn.Matrix` implementation
+remains the checkpoint and server compatibility path; a bidirectional adapter
+also runs the public `nn.Transformer.Decoder` on CPU, Metal, or CUDA.
 
 Run it with:
 
@@ -53,6 +53,20 @@ Reload a checkpoint for generation:
 nnctl run tiny-gpt -- --load-checkpoint tiny-gpt.bin --no-train \
   --prompt "to be" --tokens 120 --no-corpus-prior
 ```
+
+Run full-model SGD training and KV-cached generation on the selected tensor
+backend:
+
+```bash
+zig build run_tiny_gpt -Dgpu=auto -- \
+  --train-full --backend auto --optimizer sgd --full-batch-size 1 \
+  --weight-decay 0 --no-corpus-prior --prompt "to be"
+```
+
+`--backend metal` and `--backend cuda` require the requested accelerator;
+`--backend auto` may fall back to CPU. Device training currently supports SGD
+with one context window per update and no weight decay. The legacy trainer
+continues to provide AdamW, gradient clipping, and averaged mini-batches.
 
 Run the OpenAI-compatible inference service:
 
@@ -124,6 +138,9 @@ Implemented pieces:
 - manual next-token backpropagation for the full tiny Transformer
 - binary checkpoints for trained model weights and run metadata
 - temperature and top-k autoregressive sampling
+- backend-selectable full-model SGD training with checkpoint-compatible QKV
+  split/merge
+- native per-layer KV caching for backend-selected generation
 - data presets for toy, Tiny Shakespeare, TinyStories, and custom text files
 - deterministic JSON run summaries for experiment comparison
 - fast demo-corpus output-head training

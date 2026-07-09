@@ -26,6 +26,39 @@ backend-aware matrix path.
   CPU `Matrix` path.
 - `Network.trainBatchBackend` and `Network.trainBackend` remain available for
   direct CPU-owned backend training calls.
+- `Device`, `Tensor`, and `ExecutionContext` provide the backend-neutral f32
+  runtime for rank-aware model code. Explicit `metal` and `cuda` selections
+  fail when unavailable; only `auto` may fall back to CPU.
+- `Transformer.Decoder` keeps embeddings, decoder blocks, optimizer updates,
+  and KV caches on one backend. Linear/GELU/layer-normalization, causal
+  attention, their backward passes, and embedding gradients have native Metal
+  and CUDA kernels.
+- `ExecutionContext.beginBatch` and `endBatch` form an explicit synchronization
+  boundary. Runtime telemetry reports allocations, transfers, kernels, vendor
+  GEMMs, and synchronizations so tests can catch accidental host round trips.
+
+## TinyGPT On A Device
+
+The existing checkpoint and server format remains CPU `Matrix`-based. TinyGPT
+splits its combined QKV checkpoint weights into the public device decoder, runs
+the selected path, then merges weights back before saving or serving.
+
+Run full-model SGD training on the automatically selected backend:
+
+```bash
+zig build run_tiny_gpt -Dgpu=auto -- \
+  --train-full --backend auto --optimizer sgd --full-batch-size 1 \
+  --weight-decay 0 --no-corpus-prior
+```
+
+Use `--backend metal` or `--backend cuda` to require that exact accelerator.
+Device training currently supports SGD, one context window per update, and no
+weight decay. AdamW, gradient accumulation, and multi-window device batches
+remain on the CPU educational trainer for now.
+
+With `--no-corpus-prior`, backend-selected generation uses per-layer KV caches.
+The cache appends projected keys and values in place and replays the current
+window only when context rollover is required.
 
 ## Metal Verification
 
@@ -96,6 +129,7 @@ Use `BackendMatrix` when testing backend behavior directly. Use
 backend-aware network execution. Use `Matrix`, `Network.forward`, and the
 default training methods when working on the learning-oriented CPU path.
 
-The next backend optimization target is reducing synchronous host/device
-transfers in larger training loops while keeping the code readable enough for a
-learning repo.
+The next backend optimization targets are fused optimizer kernels, mixed
+precision, batched sequences, and tiled/reduction-optimized attention kernels.
+The current kernels prioritize explicit, testable semantics over peak hardware
+throughput.

@@ -7,7 +7,8 @@ A small neural-network playground written in Zig.
 This is for learning neural-network fundamentals by building the pieces
 directly: matrix math, layers, training loops, small examples, focused
 experiments, and a CPU-first path with separate backend-aware matrix operations
-for CPU, Metal, and CUDA. It is not trying to be a production ML framework.
+plus a device-resident f32 tensor and Transformer path for CPU, Metal, and CUDA.
+It is not trying to be a production ML framework.
 
 ## Start Here
 
