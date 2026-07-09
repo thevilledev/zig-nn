@@ -430,6 +430,63 @@ pub const CPUBackend = struct {
         return result;
     }
 
+    pub fn layerNormBackward(ptr: *anyopaque, input: *const Matrix, gamma: *const Matrix, output_gradient: *const Matrix, epsilon: f64, allocator: Allocator) error{ OutOfMemory, DimensionMismatch }!backend.LayerNormGradients {
+        if (gamma.rows != 1 or gamma.cols != input.cols or
+            output_gradient.rows != input.rows or output_gradient.cols != input.cols)
+        {
+            return error.DimensionMismatch;
+        }
+
+        const input_gradient = try initMatrix(ptr, allocator, input.rows, input.cols);
+        errdefer deinitMatrix(undefined, input_gradient);
+        const gamma_gradient = try initMatrix(ptr, allocator, 1, input.cols);
+        errdefer deinitMatrix(undefined, gamma_gradient);
+        const beta_gradient = try initMatrix(ptr, allocator, 1, input.cols);
+        errdefer deinitMatrix(undefined, beta_gradient);
+        const input_data = @as(*const CPUMatrix, @ptrCast(@alignCast(input.impl_data)));
+        const gamma_data = @as(*const CPUMatrix, @ptrCast(@alignCast(gamma.impl_data)));
+        const output_gradient_data = @as(*const CPUMatrix, @ptrCast(@alignCast(output_gradient.impl_data)));
+        const input_gradient_data = @as(*CPUMatrix, @ptrCast(@alignCast(input_gradient.impl_data)));
+        const gamma_gradient_data = @as(*CPUMatrix, @ptrCast(@alignCast(gamma_gradient.impl_data)));
+        const beta_gradient_data = @as(*CPUMatrix, @ptrCast(@alignCast(beta_gradient.impl_data)));
+        @memset(gamma_gradient_data.data, 0);
+        @memset(beta_gradient_data.data, 0);
+        const width = @as(f32, @floatFromInt(input.cols));
+        const epsilon_f32: f32 = @floatCast(epsilon);
+
+        for (0..input.rows) |row| {
+            const offset = row * input.cols;
+            var mean: f32 = 0;
+            for (0..input.cols) |col| mean += input_data.data[offset + col];
+            mean /= width;
+            var variance: f32 = 0;
+            for (0..input.cols) |col| {
+                const centered = input_data.data[offset + col] - mean;
+                variance += centered * centered;
+            }
+            variance /= width;
+            const inverse_std = 1.0 / @sqrt(variance + epsilon_f32);
+            var sum_gradient: f32 = 0;
+            var sum_gradient_normalized: f32 = 0;
+            for (0..input.cols) |col| {
+                const normalized = (input_data.data[offset + col] - mean) * inverse_std;
+                const gradient = output_gradient_data.data[offset + col];
+                const normalized_gradient = gradient * gamma_data.data[col];
+                sum_gradient += normalized_gradient;
+                sum_gradient_normalized += normalized_gradient * normalized;
+                gamma_gradient_data.data[col] += gradient * normalized;
+                beta_gradient_data.data[col] += gradient;
+            }
+            for (0..input.cols) |col| {
+                const normalized = (input_data.data[offset + col] - mean) * inverse_std;
+                const normalized_gradient = output_gradient_data.data[offset + col] * gamma_data.data[col];
+                input_gradient_data.data[offset + col] = inverse_std / width *
+                    (width * normalized_gradient - sum_gradient - normalized * sum_gradient_normalized);
+            }
+        }
+        return .{ .input = input_gradient, .gamma = gamma_gradient, .beta = beta_gradient };
+    }
+
     pub fn causalSelfAttention(ptr: *anyopaque, query: *const Matrix, key: *const Matrix, value: *const Matrix, heads: usize, allocator: Allocator) error{ OutOfMemory, DimensionMismatch }!*Matrix {
         if (heads == 0 or query.rows != key.rows or query.rows != value.rows or
             query.cols != key.cols or query.cols != value.cols or query.cols % heads != 0)
@@ -481,6 +538,82 @@ pub const CPUBackend = struct {
             }
         }
         return result;
+    }
+
+    pub fn causalSelfAttentionBackward(ptr: *anyopaque, query: *const Matrix, key: *const Matrix, value: *const Matrix, output_gradient: *const Matrix, heads: usize, allocator: Allocator) error{ OutOfMemory, DimensionMismatch }!backend.AttentionGradients {
+        if (heads == 0 or query.rows != key.rows or query.rows != value.rows or
+            query.cols != key.cols or query.cols != value.cols or query.cols % heads != 0 or
+            output_gradient.rows != query.rows or output_gradient.cols != query.cols)
+        {
+            return error.DimensionMismatch;
+        }
+        const query_gradient = try initMatrix(ptr, allocator, query.rows, query.cols);
+        errdefer deinitMatrix(undefined, query_gradient);
+        const key_gradient = try initMatrix(ptr, allocator, key.rows, key.cols);
+        errdefer deinitMatrix(undefined, key_gradient);
+        const value_gradient = try initMatrix(ptr, allocator, value.rows, value.cols);
+        errdefer deinitMatrix(undefined, value_gradient);
+        const query_data = @as(*const CPUMatrix, @ptrCast(@alignCast(query.impl_data)));
+        const key_data = @as(*const CPUMatrix, @ptrCast(@alignCast(key.impl_data)));
+        const value_data = @as(*const CPUMatrix, @ptrCast(@alignCast(value.impl_data)));
+        const output_gradient_data = @as(*const CPUMatrix, @ptrCast(@alignCast(output_gradient.impl_data)));
+        const query_gradient_data = @as(*CPUMatrix, @ptrCast(@alignCast(query_gradient.impl_data)));
+        const key_gradient_data = @as(*CPUMatrix, @ptrCast(@alignCast(key_gradient.impl_data)));
+        const value_gradient_data = @as(*CPUMatrix, @ptrCast(@alignCast(value_gradient.impl_data)));
+        @memset(query_gradient_data.data, 0);
+        @memset(key_gradient_data.data, 0);
+        @memset(value_gradient_data.data, 0);
+        const probabilities = try allocator.alloc(f32, query.rows);
+        defer allocator.free(probabilities);
+        const probability_gradients = try allocator.alloc(f32, query.rows);
+        defer allocator.free(probability_gradients);
+        const head_width = query.cols / heads;
+        const attention_scale = 1.0 / @sqrt(@as(f32, @floatFromInt(head_width)));
+
+        for (0..heads) |head| {
+            const channel_offset = head * head_width;
+            for (0..query.rows) |query_position| {
+                var max_score = -std.math.inf(f32);
+                for (0..query_position + 1) |key_position| {
+                    var score: f32 = 0;
+                    for (0..head_width) |channel| {
+                        score += query_data.data[query_position * query.cols + channel_offset + channel] *
+                            key_data.data[key_position * key.cols + channel_offset + channel];
+                    }
+                    score *= attention_scale;
+                    probabilities[key_position] = score;
+                    max_score = @max(max_score, score);
+                }
+                var denominator: f32 = 0;
+                for (0..query_position + 1) |key_position| {
+                    probabilities[key_position] = @exp(probabilities[key_position] - max_score);
+                    denominator += probabilities[key_position];
+                }
+                var weighted_probability_gradient: f32 = 0;
+                for (0..query_position + 1) |key_position| {
+                    probabilities[key_position] /= denominator;
+                    var probability_gradient: f32 = 0;
+                    for (0..head_width) |channel| {
+                        probability_gradient += output_gradient_data.data[query_position * query.cols + channel_offset + channel] *
+                            value_data.data[key_position * value.cols + channel_offset + channel];
+                    }
+                    probability_gradients[key_position] = probability_gradient;
+                    weighted_probability_gradient += probabilities[key_position] * probability_gradient;
+                }
+                for (0..query_position + 1) |key_position| {
+                    const score_gradient = probabilities[key_position] *
+                        (probability_gradients[key_position] - weighted_probability_gradient);
+                    for (0..head_width) |channel| {
+                        const query_index = query_position * query.cols + channel_offset + channel;
+                        const key_index = key_position * key.cols + channel_offset + channel;
+                        query_gradient_data.data[query_index] += score_gradient * key_data.data[key_index] * attention_scale;
+                        key_gradient_data.data[key_index] += score_gradient * query_data.data[query_index] * attention_scale;
+                        value_gradient_data.data[key_index] += probabilities[key_position] * output_gradient_data.data[query_index];
+                    }
+                }
+            }
+        }
+        return .{ .query = query_gradient, .key = key_gradient, .value = value_gradient };
     }
 
     pub fn applyGLU(ptr: *anyopaque, linear_part: *const Matrix, gating_part: *const Matrix, allocator: Allocator) error{ OutOfMemory, DimensionMismatch }!*Matrix {

@@ -319,6 +319,18 @@ pub const BackendInstance = union(BackendType) {
         return self.attachBackend(result);
     }
 
+    pub fn layerNormBackward(self: BackendInstance, input: *const BackendMatrix, gamma: *const BackendMatrix, output_gradient: *const BackendMatrix, epsilon: f64, allocator: std.mem.Allocator) !backend_mod.LayerNormGradients {
+        var gradients = try switch (self) {
+            .CPU => |ptr| CPUBackend.layerNormBackward(ptr, input, gamma, output_gradient, epsilon, allocator),
+            .Metal => |ptr| MetalBackend.layerNormBackward(ptr, input, gamma, output_gradient, epsilon, allocator),
+            .CUDA => |ptr| CUDABackend.layerNormBackward(ptr, input, gamma, output_gradient, epsilon, allocator),
+        };
+        gradients.input = self.attachBackend(gradients.input);
+        gradients.gamma = self.attachBackend(gradients.gamma);
+        gradients.beta = self.attachBackend(gradients.beta);
+        return gradients;
+    }
+
     pub fn causalSelfAttention(self: BackendInstance, query: *const BackendMatrix, key: *const BackendMatrix, value: *const BackendMatrix, heads: usize, allocator: std.mem.Allocator) !*BackendMatrix {
         const result = try switch (self) {
             .CPU => |ptr| CPUBackend.causalSelfAttention(ptr, query, key, value, heads, allocator),
@@ -326,6 +338,18 @@ pub const BackendInstance = union(BackendType) {
             .CUDA => |ptr| CUDABackend.causalSelfAttention(ptr, query, key, value, heads, allocator),
         };
         return self.attachBackend(result);
+    }
+
+    pub fn causalSelfAttentionBackward(self: BackendInstance, query: *const BackendMatrix, key: *const BackendMatrix, value: *const BackendMatrix, output_gradient: *const BackendMatrix, heads: usize, allocator: std.mem.Allocator) !backend_mod.AttentionGradients {
+        var gradients = try switch (self) {
+            .CPU => |ptr| CPUBackend.causalSelfAttentionBackward(ptr, query, key, value, output_gradient, heads, allocator),
+            .Metal => |ptr| MetalBackend.causalSelfAttentionBackward(ptr, query, key, value, output_gradient, heads, allocator),
+            .CUDA => |ptr| CUDABackend.causalSelfAttentionBackward(ptr, query, key, value, output_gradient, heads, allocator),
+        };
+        gradients.query = self.attachBackend(gradients.query);
+        gradients.key = self.attachBackend(gradients.key);
+        gradients.value = self.attachBackend(gradients.value);
+        return gradients;
     }
 
     pub fn applyGLU(self: BackendInstance, linear_part: *const BackendMatrix, gating_part: *const BackendMatrix, allocator: std.mem.Allocator) !*BackendMatrix {

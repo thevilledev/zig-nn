@@ -50,6 +50,7 @@ const CUDA = if (enable_cuda) struct {
         apply_swish_derivative = c.ZIG_NN_CUDA_KERNEL_APPLY_SWISH_DERIVATIVE,
         matrix_add_row_bias = c.ZIG_NN_CUDA_KERNEL_MATRIX_ADD_ROW_BIAS,
         apply_gelu = c.ZIG_NN_CUDA_KERNEL_APPLY_GELU,
+        apply_gelu_derivative = c.ZIG_NN_CUDA_KERNEL_APPLY_GELU_DERIVATIVE,
     };
 
     pub const MatmulKind = enum {
@@ -157,8 +158,20 @@ const CUDA = if (enable_cuda) struct {
         return c.cuda_launch_layer_norm(toC(backend_ref), toC(input), toC(gamma), toC(beta), toC(result), rows, cols, epsilon) != 0;
     }
 
+    pub fn launchLayerNormBackward(backend_ref: *Backend, input: *Buffer, gamma: *Buffer, output_gradient: *Buffer, input_gradient: *Buffer, gamma_gradient: *Buffer, beta_gradient: *Buffer, rows: u32, cols: u32, epsilon: f32) bool {
+        return c.cuda_launch_layer_norm_backward(toC(backend_ref), toC(input), toC(gamma), toC(output_gradient), toC(input_gradient), toC(gamma_gradient), toC(beta_gradient), rows, cols, epsilon) != 0;
+    }
+
     pub fn launchCausalSelfAttention(backend_ref: *Backend, query: *Buffer, key: *Buffer, value: *Buffer, result: *Buffer, tokens: u32, channels: u32, heads: u32) bool {
         return c.cuda_launch_causal_self_attention(toC(backend_ref), toC(query), toC(key), toC(value), toC(result), tokens, channels, heads) != 0;
+    }
+
+    pub fn launchCausalAttentionProbabilitiesBackward(backend_ref: *Backend, query: *Buffer, key: *Buffer, value: *Buffer, output_gradient: *Buffer, probabilities: *Buffer, score_gradients: *Buffer, tokens: u32, channels: u32, heads: u32) bool {
+        return c.cuda_launch_causal_attention_probabilities_backward(toC(backend_ref), toC(query), toC(key), toC(value), toC(output_gradient), toC(probabilities), toC(score_gradients), tokens, channels, heads) != 0;
+    }
+
+    pub fn launchCausalAttentionInputGradients(backend_ref: *Backend, query: *Buffer, key: *Buffer, output_gradient: *Buffer, probabilities: *Buffer, score_gradients: *Buffer, query_gradient: *Buffer, key_gradient: *Buffer, value_gradient: *Buffer, tokens: u32, channels: u32, heads: u32) bool {
+        return c.cuda_launch_causal_attention_input_gradients(toC(backend_ref), toC(query), toC(key), toC(output_gradient), toC(probabilities), toC(score_gradients), toC(query_gradient), toC(key_gradient), toC(value_gradient), tokens, channels, heads) != 0;
     }
 } else struct {
     pub const Backend = anyopaque;
@@ -182,6 +195,7 @@ const CUDA = if (enable_cuda) struct {
         apply_swish_derivative,
         matrix_add_row_bias,
         apply_gelu,
+        apply_gelu_derivative,
     };
 
     pub const MatmulKind = enum {
@@ -258,7 +272,19 @@ const CUDA = if (enable_cuda) struct {
         return false;
     }
 
+    pub fn launchLayerNormBackward(_: *Backend, _: *Buffer, _: *Buffer, _: *Buffer, _: *Buffer, _: *Buffer, _: *Buffer, _: u32, _: u32, _: f32) bool {
+        return false;
+    }
+
     pub fn launchCausalSelfAttention(_: *Backend, _: *Buffer, _: *Buffer, _: *Buffer, _: *Buffer, _: u32, _: u32, _: u32) bool {
+        return false;
+    }
+
+    pub fn launchCausalAttentionProbabilitiesBackward(_: *Backend, _: *Buffer, _: *Buffer, _: *Buffer, _: *Buffer, _: *Buffer, _: *Buffer, _: u32, _: u32, _: u32) bool {
+        return false;
+    }
+
+    pub fn launchCausalAttentionInputGradients(_: *Backend, _: *Buffer, _: *Buffer, _: *Buffer, _: *Buffer, _: *Buffer, _: *Buffer, _: *Buffer, _: *Buffer, _: u32, _: u32, _: u32) bool {
         return false;
     }
 };
@@ -668,6 +694,31 @@ pub const CUDABackend = struct {
         return true;
     }
 
+    fn dispatchLayerNormBackward(self: *CUDABackend, input: *const Matrix, gamma: *const Matrix, output_gradient: *const Matrix, epsilon: f64, gradients: backend.LayerNormGradients) bool {
+        const backend_ref = self.backend orelse return false;
+        const input_data = getCUDAMatrix(input);
+        const gamma_data = getCUDAMatrix(gamma);
+        const output_gradient_data = getCUDAMatrix(output_gradient);
+        const input_gradient_data = getCUDAMatrix(gradients.input);
+        const gamma_gradient_data = getCUDAMatrix(gradients.gamma);
+        const beta_gradient_data = getCUDAMatrix(gradients.beta);
+        if (!input_data.syncToGPU() or !gamma_data.syncToGPU() or !output_gradient_data.syncToGPU()) return false;
+        const input_buffer = input_data.buffer orelse return false;
+        const gamma_buffer = gamma_data.buffer orelse return false;
+        const output_gradient_buffer = output_gradient_data.buffer orelse return false;
+        const input_gradient_buffer = input_gradient_data.buffer orelse return false;
+        const gamma_gradient_buffer = gamma_gradient_data.buffer orelse return false;
+        const beta_gradient_buffer = beta_gradient_data.buffer orelse return false;
+        if (!CUDA.launchLayerNormBackward(backend_ref, input_buffer, gamma_buffer, output_gradient_buffer, input_gradient_buffer, gamma_gradient_buffer, beta_gradient_buffer, toU32(input.rows), toU32(input.cols), @floatCast(epsilon))) {
+            return false;
+        }
+        if (!self.completeSubmittedKernel()) return false;
+        input_gradient_data.markGPUModified();
+        gamma_gradient_data.markGPUModified();
+        beta_gradient_data.markGPUModified();
+        return true;
+    }
+
     fn dispatchCausalSelfAttention(self: *CUDABackend, query: *const Matrix, key: *const Matrix, value: *const Matrix, heads: usize, result: *Matrix) bool {
         const backend_ref = self.backend orelse return false;
         const query_cuda = getCUDAMatrix(query);
@@ -685,6 +736,53 @@ pub const CUDABackend = struct {
         }
         if (!self.completeSubmittedKernel()) return false;
         result_cuda.markGPUModified();
+        return true;
+    }
+
+    fn dispatchCausalSelfAttentionBackward(
+        self: *CUDABackend,
+        query: *const Matrix,
+        key: *const Matrix,
+        value: *const Matrix,
+        output_gradient: *const Matrix,
+        heads: usize,
+        probabilities: *Matrix,
+        score_gradients: *Matrix,
+        gradients: backend.AttentionGradients,
+    ) bool {
+        const backend_ref = self.backend orelse return false;
+        const query_data = getCUDAMatrix(query);
+        const key_data = getCUDAMatrix(key);
+        const value_data = getCUDAMatrix(value);
+        const output_gradient_data = getCUDAMatrix(output_gradient);
+        const probabilities_data = getCUDAMatrix(probabilities);
+        const score_gradients_data = getCUDAMatrix(score_gradients);
+        const query_gradient_data = getCUDAMatrix(gradients.query);
+        const key_gradient_data = getCUDAMatrix(gradients.key);
+        const value_gradient_data = getCUDAMatrix(gradients.value);
+        if (!query_data.syncToGPU() or !key_data.syncToGPU() or !value_data.syncToGPU() or !output_gradient_data.syncToGPU()) return false;
+        const query_buffer = query_data.buffer orelse return false;
+        const key_buffer = key_data.buffer orelse return false;
+        const value_buffer = value_data.buffer orelse return false;
+        const output_gradient_buffer = output_gradient_data.buffer orelse return false;
+        const probabilities_buffer = probabilities_data.buffer orelse return false;
+        const score_gradients_buffer = score_gradients_data.buffer orelse return false;
+        const query_gradient_buffer = query_gradient_data.buffer orelse return false;
+        const key_gradient_buffer = key_gradient_data.buffer orelse return false;
+        const value_gradient_buffer = value_gradient_data.buffer orelse return false;
+        if (!CUDA.launchCausalAttentionProbabilitiesBackward(backend_ref, query_buffer, key_buffer, value_buffer, output_gradient_buffer, probabilities_buffer, score_gradients_buffer, toU32(query.rows), toU32(query.cols), toU32(heads))) {
+            return false;
+        }
+        if (!self.completeSubmittedKernel()) return false;
+        probabilities_data.markGPUModified();
+        score_gradients_data.markGPUModified();
+        if (!CUDA.launchCausalAttentionInputGradients(backend_ref, query_buffer, key_buffer, output_gradient_buffer, probabilities_buffer, score_gradients_buffer, query_gradient_buffer, key_gradient_buffer, value_gradient_buffer, toU32(query.rows), toU32(query.cols), toU32(heads))) {
+            return false;
+        }
+        if (!self.completeSubmittedKernel()) return false;
+        query_gradient_data.markGPUModified();
+        key_gradient_data.markGPUModified();
+        value_gradient_data.markGPUModified();
         return true;
     }
 
@@ -1022,6 +1120,8 @@ pub const CUDABackend = struct {
             .apply_swish_derivative
         else if (activation == Activation.gelu)
             .apply_gelu
+        else if (activation == Activation.gelu_derivative)
+            .apply_gelu_derivative
         else
             null;
 
@@ -1115,6 +1215,75 @@ pub const CUDABackend = struct {
         return result;
     }
 
+    pub fn layerNormBackward(ptr: *anyopaque, input: *const Matrix, gamma: *const Matrix, output_gradient: *const Matrix, epsilon: f64, allocator: Allocator) error{ OutOfMemory, DimensionMismatch }!backend.LayerNormGradients {
+        if (gamma.rows != 1 or gamma.cols != input.cols or
+            output_gradient.rows != input.rows or output_gradient.cols != input.cols)
+        {
+            return error.DimensionMismatch;
+        }
+        const input_gradient = try initMatrix(ptr, allocator, input.rows, input.cols);
+        errdefer deinitMatrix(ptr, input_gradient);
+        const gamma_gradient = try initMatrix(ptr, allocator, 1, input.cols);
+        errdefer deinitMatrix(ptr, gamma_gradient);
+        const beta_gradient = try initMatrix(ptr, allocator, 1, input.cols);
+        errdefer deinitMatrix(ptr, beta_gradient);
+        const gradients: backend.LayerNormGradients = .{
+            .input = input_gradient,
+            .gamma = gamma_gradient,
+            .beta = beta_gradient,
+        };
+        const self = @as(*CUDABackend, @ptrCast(@alignCast(ptr)));
+        if (self.dispatchLayerNormBackward(input, gamma, output_gradient, epsilon, gradients)) return gradients;
+
+        const input_data = getCUDAMatrix(input);
+        const gamma_data = getCUDAMatrix(gamma);
+        const output_gradient_data = getCUDAMatrix(output_gradient);
+        const input_gradient_data = getCUDAMatrix(input_gradient);
+        const gamma_gradient_data = getCUDAMatrix(gamma_gradient);
+        const beta_gradient_data = getCUDAMatrix(beta_gradient);
+        ensureHostData(input_data);
+        ensureHostData(gamma_data);
+        ensureHostData(output_gradient_data);
+        @memset(gamma_gradient_data.host_data, 0);
+        @memset(beta_gradient_data.host_data, 0);
+        const width = @as(f32, @floatFromInt(input.cols));
+        const epsilon_f32: f32 = @floatCast(epsilon);
+        for (0..input.rows) |row| {
+            const offset = row * input.cols;
+            var mean: f32 = 0;
+            for (0..input.cols) |col| mean += input_data.host_data[offset + col];
+            mean /= width;
+            var variance: f32 = 0;
+            for (0..input.cols) |col| {
+                const centered = input_data.host_data[offset + col] - mean;
+                variance += centered * centered;
+            }
+            variance /= width;
+            const inverse_std = 1.0 / @sqrt(variance + epsilon_f32);
+            var sum_gradient: f32 = 0;
+            var sum_gradient_normalized: f32 = 0;
+            for (0..input.cols) |col| {
+                const normalized = (input_data.host_data[offset + col] - mean) * inverse_std;
+                const gradient = output_gradient_data.host_data[offset + col];
+                const normalized_gradient = gradient * gamma_data.host_data[col];
+                sum_gradient += normalized_gradient;
+                sum_gradient_normalized += normalized_gradient * normalized;
+                gamma_gradient_data.host_data[col] += gradient * normalized;
+                beta_gradient_data.host_data[col] += gradient;
+            }
+            for (0..input.cols) |col| {
+                const normalized = (input_data.host_data[offset + col] - mean) * inverse_std;
+                const normalized_gradient = output_gradient_data.host_data[offset + col] * gamma_data.host_data[col];
+                input_gradient_data.host_data[offset + col] = inverse_std / width *
+                    (width * normalized_gradient - sum_gradient - normalized * sum_gradient_normalized);
+            }
+        }
+        input_gradient_data.markHostModified();
+        gamma_gradient_data.markHostModified();
+        beta_gradient_data.markHostModified();
+        return gradients;
+    }
+
     pub fn causalSelfAttention(ptr: *anyopaque, query: *const Matrix, key: *const Matrix, value: *const Matrix, heads: usize, allocator: Allocator) error{ OutOfMemory, DimensionMismatch }!*Matrix {
         if (heads == 0 or query.rows != key.rows or query.rows != value.rows or
             query.cols != key.cols or query.cols != value.cols or query.cols % heads != 0)
@@ -1169,6 +1338,100 @@ pub const CUDABackend = struct {
         }
         result_data.markHostModified();
         return result;
+    }
+
+    pub fn causalSelfAttentionBackward(ptr: *anyopaque, query: *const Matrix, key: *const Matrix, value: *const Matrix, output_gradient: *const Matrix, heads: usize, allocator: Allocator) error{ OutOfMemory, DimensionMismatch }!backend.AttentionGradients {
+        if (heads == 0 or query.rows != key.rows or query.rows != value.rows or
+            query.cols != key.cols or query.cols != value.cols or query.cols % heads != 0 or
+            output_gradient.rows != query.rows or output_gradient.cols != query.cols)
+        {
+            return error.DimensionMismatch;
+        }
+        const query_gradient = try initMatrix(ptr, allocator, query.rows, query.cols);
+        errdefer deinitMatrix(ptr, query_gradient);
+        const key_gradient = try initMatrix(ptr, allocator, key.rows, key.cols);
+        errdefer deinitMatrix(ptr, key_gradient);
+        const value_gradient = try initMatrix(ptr, allocator, value.rows, value.cols);
+        errdefer deinitMatrix(ptr, value_gradient);
+        const probabilities = try initMatrix(ptr, allocator, heads * query.rows, query.rows);
+        defer deinitMatrix(ptr, probabilities);
+        const score_gradients = try initMatrix(ptr, allocator, heads * query.rows, query.rows);
+        defer deinitMatrix(ptr, score_gradients);
+        const gradients: backend.AttentionGradients = .{
+            .query = query_gradient,
+            .key = key_gradient,
+            .value = value_gradient,
+        };
+        const self = @as(*CUDABackend, @ptrCast(@alignCast(ptr)));
+        if (self.dispatchCausalSelfAttentionBackward(query, key, value, output_gradient, heads, probabilities, score_gradients, gradients)) return gradients;
+
+        const query_data = getCUDAMatrix(query);
+        const key_data = getCUDAMatrix(key);
+        const value_data = getCUDAMatrix(value);
+        const output_gradient_data = getCUDAMatrix(output_gradient);
+        const query_gradient_data = getCUDAMatrix(query_gradient);
+        const key_gradient_data = getCUDAMatrix(key_gradient);
+        const value_gradient_data = getCUDAMatrix(value_gradient);
+        ensureHostData(query_data);
+        ensureHostData(key_data);
+        ensureHostData(value_data);
+        ensureHostData(output_gradient_data);
+        @memset(query_gradient_data.host_data, 0);
+        @memset(key_gradient_data.host_data, 0);
+        @memset(value_gradient_data.host_data, 0);
+        const host_probabilities = try allocator.alloc(f32, query.rows);
+        defer allocator.free(host_probabilities);
+        const probability_gradients = try allocator.alloc(f32, query.rows);
+        defer allocator.free(probability_gradients);
+        const head_width = query.cols / heads;
+        const attention_scale = 1.0 / @sqrt(@as(f32, @floatFromInt(head_width)));
+        for (0..heads) |head| {
+            const channel_offset = head * head_width;
+            for (0..query.rows) |query_position| {
+                var max_score = -std.math.inf(f32);
+                for (0..query_position + 1) |key_position| {
+                    var score: f32 = 0;
+                    for (0..head_width) |channel| {
+                        score += query_data.host_data[query_position * query.cols + channel_offset + channel] *
+                            key_data.host_data[key_position * key.cols + channel_offset + channel];
+                    }
+                    score *= attention_scale;
+                    host_probabilities[key_position] = score;
+                    max_score = @max(max_score, score);
+                }
+                var denominator: f32 = 0;
+                for (0..query_position + 1) |key_position| {
+                    host_probabilities[key_position] = @exp(host_probabilities[key_position] - max_score);
+                    denominator += host_probabilities[key_position];
+                }
+                var weighted_probability_gradient: f32 = 0;
+                for (0..query_position + 1) |key_position| {
+                    host_probabilities[key_position] /= denominator;
+                    var probability_gradient: f32 = 0;
+                    for (0..head_width) |channel| {
+                        probability_gradient += output_gradient_data.host_data[query_position * query.cols + channel_offset + channel] *
+                            value_data.host_data[key_position * value.cols + channel_offset + channel];
+                    }
+                    probability_gradients[key_position] = probability_gradient;
+                    weighted_probability_gradient += host_probabilities[key_position] * probability_gradient;
+                }
+                for (0..query_position + 1) |key_position| {
+                    const score_gradient = host_probabilities[key_position] *
+                        (probability_gradients[key_position] - weighted_probability_gradient);
+                    for (0..head_width) |channel| {
+                        const query_index = query_position * query.cols + channel_offset + channel;
+                        const key_index = key_position * key.cols + channel_offset + channel;
+                        query_gradient_data.host_data[query_index] += score_gradient * key_data.host_data[key_index] * attention_scale;
+                        key_gradient_data.host_data[key_index] += score_gradient * query_data.host_data[query_index] * attention_scale;
+                        value_gradient_data.host_data[key_index] += host_probabilities[key_position] * output_gradient_data.host_data[query_index];
+                    }
+                }
+            }
+        }
+        query_gradient_data.markHostModified();
+        key_gradient_data.markHostModified();
+        value_gradient_data.markHostModified();
+        return gradients;
     }
 
     pub fn applyGLU(ptr: *anyopaque, linear_part: *const Matrix, gating_part: *const Matrix, allocator: Allocator) error{ OutOfMemory, DimensionMismatch }!*Matrix {

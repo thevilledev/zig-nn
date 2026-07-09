@@ -30,6 +30,32 @@ pub const RuntimeStats = struct {
     synchronizations: usize = 0,
 };
 
+pub const LayerNormGradients = struct {
+    input: *Matrix,
+    gamma: *Matrix,
+    beta: *Matrix,
+
+    pub fn deinit(self: *LayerNormGradients) void {
+        self.input.deinit();
+        self.gamma.deinit();
+        self.beta.deinit();
+        self.* = undefined;
+    }
+};
+
+pub const AttentionGradients = struct {
+    query: *Matrix,
+    key: *Matrix,
+    value: *Matrix,
+
+    pub fn deinit(self: *AttentionGradients) void {
+        self.query.deinit();
+        self.key.deinit();
+        self.value.deinit();
+        self.* = undefined;
+    }
+};
+
 /// ComputeBackend is an interface for different computation backends (CPU, GPU via Metal, GPU via CUDA)
 /// It abstracts away the details of how matrix operations and activation functions are implemented
 pub const ComputeBackend = struct {
@@ -323,9 +349,17 @@ pub const Matrix = struct {
         return self.backend.layerNorm(self, gamma, beta, epsilon, allocator);
     }
 
+    pub fn layerNormBackward(self: *const Matrix, gamma: *const Matrix, output_gradient: *const Matrix, epsilon: f64, allocator: Allocator) !LayerNormGradients {
+        return self.backend.layerNormBackward(self, gamma, output_gradient, epsilon, allocator);
+    }
+
     /// Computes scaled dot-product attention with a causal mask.
     pub fn causalSelfAttention(self: *const Matrix, key: *const Matrix, value: *const Matrix, heads: usize, allocator: Allocator) !*Matrix {
         return self.backend.causalSelfAttention(self, key, value, heads, allocator);
+    }
+
+    pub fn causalSelfAttentionBackward(self: *const Matrix, key: *const Matrix, value: *const Matrix, output_gradient: *const Matrix, heads: usize, allocator: Allocator) !AttentionGradients {
+        return self.backend.causalSelfAttentionBackward(self, key, value, output_gradient, heads, allocator);
     }
 
     pub fn applyGLU(self: *const Matrix, gating_part: *const Matrix, allocator: Allocator) !*Matrix {

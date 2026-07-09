@@ -114,6 +114,50 @@ pub const Sgd = struct {
         linear.weights = updated_weights;
         linear.bias = updated_bias;
     }
+
+    pub fn stepLayerNorm(self: Sgd, context: *ExecutionContext, layer_norm: *LayerNorm, gradients: tensor.LayerNormGradients) !void {
+        if (!layer_norm.gamma.shape.eql(gradients.gamma.shape) or !layer_norm.beta.shape.eql(gradients.beta.shape)) {
+            return error.DimensionMismatch;
+        }
+        var scaled_gamma = try context.scale(gradients.gamma, self.learning_rate);
+        defer scaled_gamma.deinit();
+        var scaled_beta = try context.scale(gradients.beta, self.learning_rate);
+        defer scaled_beta.deinit();
+        var updated_gamma = try context.subtract(layer_norm.gamma, scaled_gamma);
+        errdefer updated_gamma.deinit();
+        const updated_beta = try context.subtract(layer_norm.beta, scaled_beta);
+        layer_norm.gamma.deinit();
+        layer_norm.beta.deinit();
+        layer_norm.gamma = updated_gamma;
+        layer_norm.beta = updated_beta;
+    }
+
+    pub fn stepFeedForward(self: Sgd, context: *ExecutionContext, feed_forward: *FeedForward, gradients: FeedForwardGradients) !void {
+        try self.stepLinear(context, &feed_forward.expand, .{
+            .input = gradients.input,
+            .weights = gradients.expand_weights,
+            .bias = gradients.expand_bias,
+        });
+        try self.stepLinear(context, &feed_forward.project, .{
+            .input = gradients.input,
+            .weights = gradients.project_weights,
+            .bias = gradients.project_bias,
+        });
+    }
+
+    pub fn stepAttention(self: Sgd, context: *ExecutionContext, attention: *CausalSelfAttention, gradients: CausalSelfAttentionGradients) !void {
+        try self.stepLinear(context, &attention.query, .{ .input = gradients.input, .weights = gradients.query_weights, .bias = gradients.query_bias });
+        try self.stepLinear(context, &attention.key, .{ .input = gradients.input, .weights = gradients.key_weights, .bias = gradients.key_bias });
+        try self.stepLinear(context, &attention.value, .{ .input = gradients.input, .weights = gradients.value_weights, .bias = gradients.value_bias });
+        try self.stepLinear(context, &attention.output, .{ .input = gradients.input, .weights = gradients.output_weights, .bias = gradients.output_bias });
+    }
+
+    pub fn stepBlock(self: Sgd, context: *ExecutionContext, block: *Block, gradients: BlockGradients) !void {
+        try self.stepLayerNorm(context, &block.attention_norm, gradients.attention_norm);
+        try self.stepAttention(context, &block.attention, gradients.attention);
+        try self.stepLayerNorm(context, &block.feed_forward_norm, gradients.feed_forward_norm);
+        try self.stepFeedForward(context, &block.feed_forward, gradients.feed_forward);
+    }
 };
 
 pub const SoftmaxCrossEntropy = struct {
@@ -187,6 +231,10 @@ pub const LayerNorm = struct {
         return context.layerNorm(input, self.gamma, self.beta, self.epsilon);
     }
 
+    pub fn backward(self: *const LayerNorm, context: *ExecutionContext, input: Tensor, output_gradient: Tensor) !tensor.LayerNormGradients {
+        return context.layerNormBackward(input, self.gamma, output_gradient, self.epsilon);
+    }
+
     pub fn parameterCount(self: LayerNorm) usize {
         return self.gamma.elementCount() + self.beta.elementCount();
     }
@@ -241,9 +289,76 @@ pub const CausalSelfAttention = struct {
         return self.output.forward(context, attended);
     }
 
+    pub fn backward(self: *const CausalSelfAttention, context: *ExecutionContext, input: Tensor, output_gradient: Tensor) !CausalSelfAttentionGradients {
+        if (input.shape.rank != 2 or input.shape.dims[1] != self.channels or !input.shape.eql(output_gradient.shape)) {
+            return error.DimensionMismatch;
+        }
+        var query = try self.query.forward(context, input);
+        defer query.deinit();
+        var key = try self.key.forward(context, input);
+        defer key.deinit();
+        var value = try self.value.forward(context, input);
+        defer value.deinit();
+        var attended = try context.causalSelfAttention(query, key, value, self.heads);
+        defer attended.deinit();
+        var output_gradients = try self.output.backward(context, attended, output_gradient);
+        errdefer output_gradients.deinit();
+        var attention_gradients = try context.causalSelfAttentionBackward(query, key, value, output_gradients.input, self.heads);
+        defer attention_gradients.deinit();
+        var query_gradients = try self.query.backward(context, input, attention_gradients.query);
+        errdefer query_gradients.deinit();
+        var key_gradients = try self.key.backward(context, input, attention_gradients.key);
+        errdefer key_gradients.deinit();
+        var value_gradients = try self.value.backward(context, input, attention_gradients.value);
+        errdefer value_gradients.deinit();
+        var query_key_gradient = try context.add(query_gradients.input, key_gradients.input);
+        defer query_key_gradient.deinit();
+        const input_gradient = try context.add(query_key_gradient, value_gradients.input);
+        output_gradients.input.deinit();
+        query_gradients.input.deinit();
+        key_gradients.input.deinit();
+        value_gradients.input.deinit();
+        return .{
+            .input = input_gradient,
+            .query_weights = query_gradients.weights,
+            .query_bias = query_gradients.bias,
+            .key_weights = key_gradients.weights,
+            .key_bias = key_gradients.bias,
+            .value_weights = value_gradients.weights,
+            .value_bias = value_gradients.bias,
+            .output_weights = output_gradients.weights,
+            .output_bias = output_gradients.bias,
+        };
+    }
+
     pub fn parameterCount(self: CausalSelfAttention) usize {
         return self.query.parameterCount() + self.key.parameterCount() +
             self.value.parameterCount() + self.output.parameterCount();
+    }
+};
+
+pub const CausalSelfAttentionGradients = struct {
+    input: Tensor,
+    query_weights: Tensor,
+    query_bias: Tensor,
+    key_weights: Tensor,
+    key_bias: Tensor,
+    value_weights: Tensor,
+    value_bias: Tensor,
+    output_weights: Tensor,
+    output_bias: Tensor,
+
+    pub fn deinit(self: *CausalSelfAttentionGradients) void {
+        self.input.deinit();
+        self.query_weights.deinit();
+        self.query_bias.deinit();
+        self.key_weights.deinit();
+        self.key_bias.deinit();
+        self.value_weights.deinit();
+        self.value_bias.deinit();
+        self.output_weights.deinit();
+        self.output_bias.deinit();
+        self.* = undefined;
     }
 };
 
@@ -276,8 +391,48 @@ pub const FeedForward = struct {
         return self.project.forward(context, activated);
     }
 
+    pub fn backward(self: *const FeedForward, context: *ExecutionContext, input: Tensor, output_gradient: Tensor) !FeedForwardGradients {
+        if (input.shape.rank != 2 or input.shape.dims[1] != self.channels) return error.DimensionMismatch;
+        var expanded = try self.expand.forward(context, input);
+        defer expanded.deinit();
+        var activated = try context.gelu(expanded);
+        defer activated.deinit();
+        var project_gradients = try self.project.backward(context, activated, output_gradient);
+        errdefer project_gradients.deinit();
+        var derivative = try context.geluDerivative(expanded);
+        defer derivative.deinit();
+        var expanded_gradient = try context.multiply(project_gradients.input, derivative);
+        defer expanded_gradient.deinit();
+        const expand_gradients = try self.expand.backward(context, input, expanded_gradient);
+        project_gradients.input.deinit();
+        return .{
+            .input = expand_gradients.input,
+            .expand_weights = expand_gradients.weights,
+            .expand_bias = expand_gradients.bias,
+            .project_weights = project_gradients.weights,
+            .project_bias = project_gradients.bias,
+        };
+    }
+
     pub fn parameterCount(self: FeedForward) usize {
         return self.expand.parameterCount() + self.project.parameterCount();
+    }
+};
+
+pub const FeedForwardGradients = struct {
+    input: Tensor,
+    expand_weights: Tensor,
+    expand_bias: Tensor,
+    project_weights: Tensor,
+    project_bias: Tensor,
+
+    pub fn deinit(self: *FeedForwardGradients) void {
+        self.input.deinit();
+        self.expand_weights.deinit();
+        self.expand_bias.deinit();
+        self.project_weights.deinit();
+        self.project_bias.deinit();
+        self.* = undefined;
     }
 };
 
@@ -336,9 +491,72 @@ pub const Block = struct {
         return context.add(attention_residual, feed_forward_output);
     }
 
+    pub fn backward(self: *const Block, context: *ExecutionContext, input: Tensor, output_gradient: Tensor) !BlockGradients {
+        if (input.shape.rank != 2 or input.shape.dims[1] != self.channels or !input.shape.eql(output_gradient.shape)) {
+            return error.DimensionMismatch;
+        }
+        var normalized_attention = try self.attention_norm.forward(context, input);
+        defer normalized_attention.deinit();
+        var attention_output = try self.attention.forward(context, normalized_attention);
+        defer attention_output.deinit();
+        var attention_residual = try context.add(input, attention_output);
+        defer attention_residual.deinit();
+        var normalized_feed_forward = try self.feed_forward_norm.forward(context, attention_residual);
+        defer normalized_feed_forward.deinit();
+
+        const feed_forward_gradients = try self.feed_forward.backward(context, normalized_feed_forward, output_gradient);
+        errdefer {
+            var owned = feed_forward_gradients;
+            owned.deinit();
+        }
+        const feed_forward_norm_gradients = try self.feed_forward_norm.backward(context, attention_residual, feed_forward_gradients.input);
+        errdefer {
+            var owned = feed_forward_norm_gradients;
+            owned.deinit();
+        }
+        var attention_residual_gradient = try context.add(output_gradient, feed_forward_norm_gradients.input);
+        defer attention_residual_gradient.deinit();
+        const attention_gradients = try self.attention.backward(context, normalized_attention, attention_residual_gradient);
+        errdefer {
+            var owned = attention_gradients;
+            owned.deinit();
+        }
+        const attention_norm_gradients = try self.attention_norm.backward(context, input, attention_gradients.input);
+        errdefer {
+            var owned = attention_norm_gradients;
+            owned.deinit();
+        }
+        const input_gradient = try context.add(attention_residual_gradient, attention_norm_gradients.input);
+
+        return .{
+            .input = input_gradient,
+            .attention_norm = attention_norm_gradients,
+            .attention = attention_gradients,
+            .feed_forward_norm = feed_forward_norm_gradients,
+            .feed_forward = feed_forward_gradients,
+        };
+    }
+
     pub fn parameterCount(self: Block) usize {
         return self.attention_norm.parameterCount() + self.attention.parameterCount() +
             self.feed_forward_norm.parameterCount() + self.feed_forward.parameterCount();
+    }
+};
+
+pub const BlockGradients = struct {
+    input: Tensor,
+    attention_norm: tensor.LayerNormGradients,
+    attention: CausalSelfAttentionGradients,
+    feed_forward_norm: tensor.LayerNormGradients,
+    feed_forward: FeedForwardGradients,
+
+    pub fn deinit(self: *BlockGradients) void {
+        self.input.deinit();
+        self.attention_norm.deinit();
+        self.attention.deinit();
+        self.feed_forward_norm.deinit();
+        self.feed_forward.deinit();
+        self.* = undefined;
     }
 };
 
@@ -430,4 +648,38 @@ test "linear classifier trains with device-resident gradients" {
 
     try testing.expect(final_loss < initial_loss * 0.35);
     try testing.expect(final_loss < 0.2);
+}
+
+test "decoder block backward updates every parameter group" {
+    const testing = std.testing;
+    const allocator: Allocator = testing.allocator;
+    var device = try tensor.Device.init(allocator, .cpu);
+    defer device.deinit();
+    var context = ExecutionContext.init(&device);
+    var prng = std.Random.DefaultPrng.init(99);
+    var block = try Block.init(&context, 4, 2, 8, prng.random());
+    defer block.deinit();
+    const optimizer = try Sgd.init(0.01);
+    var input = try context.upload(&.{ 3, 4 }, &.{
+        0.1,  0.2,  -0.3, 0.4,
+        0.5,  -0.6, 0.7,  0.8,
+        -0.9, 1.0,  1.1,  -1.2,
+    });
+    defer input.deinit();
+    var output_gradient = try context.upload(&.{ 3, 4 }, &.{
+        0.2,  -0.1, 0.3,  -0.4,
+        -0.5, 0.6,  -0.7, 0.8,
+        0.9,  -1.0, 0.2,  0.1,
+    });
+    defer output_gradient.deinit();
+
+    try context.beginBatch();
+    var gradients = try block.backward(&context, input, output_gradient);
+    try optimizer.stepBlock(&context, &block, gradients);
+    try context.endBatch();
+    defer gradients.deinit();
+
+    var input_gradient: [12]f32 = undefined;
+    try context.readback(gradients.input, &input_gradient);
+    for (input_gradient) |value| try testing.expect(std.math.isFinite(value));
 }

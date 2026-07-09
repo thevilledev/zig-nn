@@ -362,8 +362,12 @@ pub const MetalBackend = struct {
     swish_pipeline: ?*Metal.ComputePipelineState,
     swish_derivative_pipeline: ?*Metal.ComputePipelineState,
     gelu_pipeline: ?*Metal.ComputePipelineState,
+    gelu_derivative_pipeline: ?*Metal.ComputePipelineState,
     layer_norm_pipeline: ?*Metal.ComputePipelineState,
+    layer_norm_backward_pipeline: ?*Metal.ComputePipelineState,
     causal_attention_pipeline: ?*Metal.ComputePipelineState,
+    causal_attention_backward_probabilities_pipeline: ?*Metal.ComputePipelineState,
+    causal_attention_backward_gradients_pipeline: ?*Metal.ComputePipelineState,
 
     // Softmax pipelines
     softmax_find_max_pipeline: ?*Metal.ComputePipelineState,
@@ -416,8 +420,12 @@ pub const MetalBackend = struct {
             .swish_pipeline = null,
             .swish_derivative_pipeline = null,
             .gelu_pipeline = null,
+            .gelu_derivative_pipeline = null,
             .layer_norm_pipeline = null,
+            .layer_norm_backward_pipeline = null,
             .causal_attention_pipeline = null,
+            .causal_attention_backward_probabilities_pipeline = null,
+            .causal_attention_backward_gradients_pipeline = null,
             .softmax_find_max_pipeline = null,
             .softmax_exp_sum_pipeline = null,
             .softmax_normalize_pipeline = null,
@@ -459,8 +467,12 @@ pub const MetalBackend = struct {
         Metal.release(self.swish_pipeline);
         Metal.release(self.swish_derivative_pipeline);
         Metal.release(self.gelu_pipeline);
+        Metal.release(self.gelu_derivative_pipeline);
         Metal.release(self.layer_norm_pipeline);
+        Metal.release(self.layer_norm_backward_pipeline);
         Metal.release(self.causal_attention_pipeline);
+        Metal.release(self.causal_attention_backward_probabilities_pipeline);
+        Metal.release(self.causal_attention_backward_gradients_pipeline);
         Metal.release(self.softmax_find_max_pipeline);
         Metal.release(self.softmax_exp_sum_pipeline);
         Metal.release(self.softmax_normalize_pipeline);
@@ -494,8 +506,12 @@ pub const MetalBackend = struct {
         try self.loadPipeline(&self.swish_pipeline, "apply_swish");
         try self.loadPipeline(&self.swish_derivative_pipeline, "apply_swish_derivative");
         try self.loadPipeline(&self.gelu_pipeline, "apply_gelu");
+        try self.loadPipeline(&self.gelu_derivative_pipeline, "apply_gelu_derivative");
         try self.loadPipeline(&self.layer_norm_pipeline, "matrix_layer_norm");
+        try self.loadPipeline(&self.layer_norm_backward_pipeline, "matrix_layer_norm_backward");
         try self.loadPipeline(&self.causal_attention_pipeline, "causal_self_attention");
+        try self.loadPipeline(&self.causal_attention_backward_probabilities_pipeline, "causal_attention_probabilities_backward");
+        try self.loadPipeline(&self.causal_attention_backward_gradients_pipeline, "causal_attention_input_gradients");
         try self.loadPipeline(&self.softmax_find_max_pipeline, "softmax_find_max");
         try self.loadPipeline(&self.softmax_exp_sum_pipeline, "softmax_exp_and_sum");
         try self.loadPipeline(&self.softmax_normalize_pipeline, "softmax_normalize");
@@ -901,6 +917,41 @@ pub const MetalBackend = struct {
         return true;
     }
 
+    fn dispatchLayerNormBackward(self: *MetalBackend, input: *const Matrix, gamma: *const Matrix, output_gradient: *const Matrix, epsilon: f64, gradients: backend.LayerNormGradients) bool {
+        const pipeline = self.layer_norm_backward_pipeline orelse return false;
+        const command_queue = self.command_queue orelse return false;
+        const input_data = getMetalMatrix(input);
+        const gamma_data = getMetalMatrix(gamma);
+        const output_gradient_data = getMetalMatrix(output_gradient);
+        const input_gradient_data = getMetalMatrix(gradients.input);
+        const gamma_gradient_data = getMetalMatrix(gradients.gamma);
+        const beta_gradient_data = getMetalMatrix(gradients.beta);
+        if (!input_data.syncToGPU() or !gamma_data.syncToGPU() or !output_gradient_data.syncToGPU()) return false;
+
+        const command_buffer = Metal.commandQueueCreateCommandBuffer(command_queue) orelse return false;
+        defer Metal.release(command_buffer);
+        const encoder = Metal.commandBufferCreateComputeCommandEncoder(command_buffer) orelse return false;
+        defer Metal.release(encoder);
+        Metal.computeEncoderSetPipelineState(encoder, pipeline);
+        Metal.computeEncoderSetBuffer(encoder, input_data.buffer orelse return false, 0, 0);
+        Metal.computeEncoderSetBuffer(encoder, gamma_data.buffer orelse return false, 0, 1);
+        Metal.computeEncoderSetBuffer(encoder, output_gradient_data.buffer orelse return false, 0, 2);
+        Metal.computeEncoderSetBuffer(encoder, input_gradient_data.buffer orelse return false, 0, 3);
+        Metal.computeEncoderSetBuffer(encoder, gamma_gradient_data.buffer orelse return false, 0, 4);
+        Metal.computeEncoderSetBuffer(encoder, beta_gradient_data.buffer orelse return false, 0, 5);
+        setU32(encoder, toU32(input.rows), 6);
+        setU32(encoder, toU32(input.cols), 7);
+        setF32(encoder, @floatCast(epsilon), 8);
+        Metal.computeEncoderDispatchThreads(encoder, pipeline, @max(input.rows, input.cols), 1, 1);
+        Metal.computeEncoderEndEncoding(encoder);
+        Metal.commandBufferCommit(command_buffer);
+        if (!self.completeSubmittedKernel(command_buffer)) return false;
+        input_gradient_data.markGPUModified();
+        gamma_gradient_data.markGPUModified();
+        beta_gradient_data.markGPUModified();
+        return true;
+    }
+
     fn dispatchCausalSelfAttention(self: *MetalBackend, query: *const Matrix, key: *const Matrix, value: *const Matrix, heads: usize, result: *Matrix) bool {
         const pipeline = self.causal_attention_pipeline orelse return false;
         const command_queue = self.command_queue orelse return false;
@@ -927,6 +978,78 @@ pub const MetalBackend = struct {
         Metal.commandBufferCommit(command_buffer);
         if (!self.completeSubmittedKernel(command_buffer)) return false;
         result_data.markGPUModified();
+        return true;
+    }
+
+    fn dispatchCausalSelfAttentionBackward(
+        self: *MetalBackend,
+        query: *const Matrix,
+        key: *const Matrix,
+        value: *const Matrix,
+        output_gradient: *const Matrix,
+        heads: usize,
+        probabilities: *Matrix,
+        score_gradients: *Matrix,
+        gradients: backend.AttentionGradients,
+    ) bool {
+        const probabilities_pipeline = self.causal_attention_backward_probabilities_pipeline orelse return false;
+        const gradients_pipeline = self.causal_attention_backward_gradients_pipeline orelse return false;
+        const command_queue = self.command_queue orelse return false;
+        const query_data = getMetalMatrix(query);
+        const key_data = getMetalMatrix(key);
+        const value_data = getMetalMatrix(value);
+        const output_gradient_data = getMetalMatrix(output_gradient);
+        const probabilities_data = getMetalMatrix(probabilities);
+        const score_gradients_data = getMetalMatrix(score_gradients);
+        const query_gradient_data = getMetalMatrix(gradients.query);
+        const key_gradient_data = getMetalMatrix(gradients.key);
+        const value_gradient_data = getMetalMatrix(gradients.value);
+        if (!query_data.syncToGPU() or !key_data.syncToGPU() or !value_data.syncToGPU() or !output_gradient_data.syncToGPU()) return false;
+
+        const probabilities_command = Metal.commandQueueCreateCommandBuffer(command_queue) orelse return false;
+        defer Metal.release(probabilities_command);
+        const probabilities_encoder = Metal.commandBufferCreateComputeCommandEncoder(probabilities_command) orelse return false;
+        defer Metal.release(probabilities_encoder);
+        Metal.computeEncoderSetPipelineState(probabilities_encoder, probabilities_pipeline);
+        Metal.computeEncoderSetBuffer(probabilities_encoder, query_data.buffer orelse return false, 0, 0);
+        Metal.computeEncoderSetBuffer(probabilities_encoder, key_data.buffer orelse return false, 0, 1);
+        Metal.computeEncoderSetBuffer(probabilities_encoder, value_data.buffer orelse return false, 0, 2);
+        Metal.computeEncoderSetBuffer(probabilities_encoder, output_gradient_data.buffer orelse return false, 0, 3);
+        Metal.computeEncoderSetBuffer(probabilities_encoder, probabilities_data.buffer orelse return false, 0, 4);
+        Metal.computeEncoderSetBuffer(probabilities_encoder, score_gradients_data.buffer orelse return false, 0, 5);
+        setU32(probabilities_encoder, toU32(query.rows), 6);
+        setU32(probabilities_encoder, toU32(query.cols), 7);
+        setU32(probabilities_encoder, toU32(heads), 8);
+        Metal.computeEncoderDispatchThreads(probabilities_encoder, probabilities_pipeline, query.rows, heads, 1);
+        Metal.computeEncoderEndEncoding(probabilities_encoder);
+        Metal.commandBufferCommit(probabilities_command);
+        if (!self.completeSubmittedKernel(probabilities_command)) return false;
+        probabilities_data.markGPUModified();
+        score_gradients_data.markGPUModified();
+
+        const gradients_command = Metal.commandQueueCreateCommandBuffer(command_queue) orelse return false;
+        defer Metal.release(gradients_command);
+        const gradients_encoder = Metal.commandBufferCreateComputeCommandEncoder(gradients_command) orelse return false;
+        defer Metal.release(gradients_encoder);
+        Metal.computeEncoderSetPipelineState(gradients_encoder, gradients_pipeline);
+        Metal.computeEncoderSetBuffer(gradients_encoder, query_data.buffer orelse return false, 0, 0);
+        Metal.computeEncoderSetBuffer(gradients_encoder, key_data.buffer orelse return false, 0, 1);
+        Metal.computeEncoderSetBuffer(gradients_encoder, output_gradient_data.buffer orelse return false, 0, 2);
+        Metal.computeEncoderSetBuffer(gradients_encoder, probabilities_data.buffer orelse return false, 0, 3);
+        Metal.computeEncoderSetBuffer(gradients_encoder, score_gradients_data.buffer orelse return false, 0, 4);
+        Metal.computeEncoderSetBuffer(gradients_encoder, query_gradient_data.buffer orelse return false, 0, 5);
+        Metal.computeEncoderSetBuffer(gradients_encoder, key_gradient_data.buffer orelse return false, 0, 6);
+        Metal.computeEncoderSetBuffer(gradients_encoder, value_gradient_data.buffer orelse return false, 0, 7);
+        setU32(gradients_encoder, toU32(query.rows), 8);
+        setU32(gradients_encoder, toU32(query.cols), 9);
+        setU32(gradients_encoder, toU32(heads), 10);
+        Metal.computeEncoderDispatchThreads(gradients_encoder, gradients_pipeline, query.cols, query.rows, 1);
+        Metal.computeEncoderEndEncoding(gradients_encoder);
+        Metal.commandBufferCommit(gradients_command);
+        if (!self.completeSubmittedKernel(gradients_command)) return false;
+        query_gradient_data.markGPUModified();
+        key_gradient_data.markGPUModified();
+        value_gradient_data.markGPUModified();
         return true;
     }
 
@@ -1344,6 +1467,8 @@ pub const MetalBackend = struct {
             self.swish_derivative_pipeline
         else if (activation == Activation.gelu)
             self.gelu_pipeline
+        else if (activation == Activation.gelu_derivative)
+            self.gelu_derivative_pipeline
         else
             null;
 
@@ -1442,6 +1567,75 @@ pub const MetalBackend = struct {
         return result;
     }
 
+    pub fn layerNormBackward(ptr: *anyopaque, input: *const Matrix, gamma: *const Matrix, output_gradient: *const Matrix, epsilon: f64, allocator: Allocator) error{ OutOfMemory, DimensionMismatch }!backend.LayerNormGradients {
+        if (gamma.rows != 1 or gamma.cols != input.cols or
+            output_gradient.rows != input.rows or output_gradient.cols != input.cols)
+        {
+            return error.DimensionMismatch;
+        }
+        const input_gradient = try initMatrix(ptr, allocator, input.rows, input.cols);
+        errdefer deinitMatrix(ptr, input_gradient);
+        const gamma_gradient = try initMatrix(ptr, allocator, 1, input.cols);
+        errdefer deinitMatrix(ptr, gamma_gradient);
+        const beta_gradient = try initMatrix(ptr, allocator, 1, input.cols);
+        errdefer deinitMatrix(ptr, beta_gradient);
+        const gradients: backend.LayerNormGradients = .{
+            .input = input_gradient,
+            .gamma = gamma_gradient,
+            .beta = beta_gradient,
+        };
+        const self = @as(*MetalBackend, @ptrCast(@alignCast(ptr)));
+        if (self.dispatchLayerNormBackward(input, gamma, output_gradient, epsilon, gradients)) return gradients;
+
+        const input_data = getMetalMatrix(input);
+        const gamma_data = getMetalMatrix(gamma);
+        const output_gradient_data = getMetalMatrix(output_gradient);
+        const input_gradient_data = getMetalMatrix(input_gradient);
+        const gamma_gradient_data = getMetalMatrix(gamma_gradient);
+        const beta_gradient_data = getMetalMatrix(beta_gradient);
+        ensureHostData(input_data);
+        ensureHostData(gamma_data);
+        ensureHostData(output_gradient_data);
+        @memset(gamma_gradient_data.host_data, 0);
+        @memset(beta_gradient_data.host_data, 0);
+        const width = @as(f32, @floatFromInt(input.cols));
+        const epsilon_f32: f32 = @floatCast(epsilon);
+        for (0..input.rows) |row| {
+            const offset = row * input.cols;
+            var mean: f32 = 0;
+            for (0..input.cols) |col| mean += input_data.host_data[offset + col];
+            mean /= width;
+            var variance: f32 = 0;
+            for (0..input.cols) |col| {
+                const centered = input_data.host_data[offset + col] - mean;
+                variance += centered * centered;
+            }
+            variance /= width;
+            const inverse_std = 1.0 / @sqrt(variance + epsilon_f32);
+            var sum_gradient: f32 = 0;
+            var sum_gradient_normalized: f32 = 0;
+            for (0..input.cols) |col| {
+                const normalized = (input_data.host_data[offset + col] - mean) * inverse_std;
+                const gradient = output_gradient_data.host_data[offset + col];
+                const normalized_gradient = gradient * gamma_data.host_data[col];
+                sum_gradient += normalized_gradient;
+                sum_gradient_normalized += normalized_gradient * normalized;
+                gamma_gradient_data.host_data[col] += gradient * normalized;
+                beta_gradient_data.host_data[col] += gradient;
+            }
+            for (0..input.cols) |col| {
+                const normalized = (input_data.host_data[offset + col] - mean) * inverse_std;
+                const normalized_gradient = output_gradient_data.host_data[offset + col] * gamma_data.host_data[col];
+                input_gradient_data.host_data[offset + col] = inverse_std / width *
+                    (width * normalized_gradient - sum_gradient - normalized * sum_gradient_normalized);
+            }
+        }
+        input_gradient_data.markHostModified();
+        gamma_gradient_data.markHostModified();
+        beta_gradient_data.markHostModified();
+        return gradients;
+    }
+
     pub fn causalSelfAttention(ptr: *anyopaque, query: *const Matrix, key: *const Matrix, value: *const Matrix, heads: usize, allocator: Allocator) error{ OutOfMemory, DimensionMismatch }!*Matrix {
         if (heads == 0 or query.rows != key.rows or query.rows != value.rows or
             query.cols != key.cols or query.cols != value.cols or query.cols % heads != 0)
@@ -1496,6 +1690,100 @@ pub const MetalBackend = struct {
         }
         result_data.markHostModified();
         return result;
+    }
+
+    pub fn causalSelfAttentionBackward(ptr: *anyopaque, query: *const Matrix, key: *const Matrix, value: *const Matrix, output_gradient: *const Matrix, heads: usize, allocator: Allocator) error{ OutOfMemory, DimensionMismatch }!backend.AttentionGradients {
+        if (heads == 0 or query.rows != key.rows or query.rows != value.rows or
+            query.cols != key.cols or query.cols != value.cols or query.cols % heads != 0 or
+            output_gradient.rows != query.rows or output_gradient.cols != query.cols)
+        {
+            return error.DimensionMismatch;
+        }
+        const query_gradient = try initMatrix(ptr, allocator, query.rows, query.cols);
+        errdefer deinitMatrix(ptr, query_gradient);
+        const key_gradient = try initMatrix(ptr, allocator, key.rows, key.cols);
+        errdefer deinitMatrix(ptr, key_gradient);
+        const value_gradient = try initMatrix(ptr, allocator, value.rows, value.cols);
+        errdefer deinitMatrix(ptr, value_gradient);
+        const probabilities = try initMatrix(ptr, allocator, heads * query.rows, query.rows);
+        defer deinitMatrix(ptr, probabilities);
+        const score_gradients = try initMatrix(ptr, allocator, heads * query.rows, query.rows);
+        defer deinitMatrix(ptr, score_gradients);
+        const gradients: backend.AttentionGradients = .{
+            .query = query_gradient,
+            .key = key_gradient,
+            .value = value_gradient,
+        };
+        const self = @as(*MetalBackend, @ptrCast(@alignCast(ptr)));
+        if (self.dispatchCausalSelfAttentionBackward(query, key, value, output_gradient, heads, probabilities, score_gradients, gradients)) return gradients;
+
+        const query_data = getMetalMatrix(query);
+        const key_data = getMetalMatrix(key);
+        const value_data = getMetalMatrix(value);
+        const output_gradient_data = getMetalMatrix(output_gradient);
+        const query_gradient_data = getMetalMatrix(query_gradient);
+        const key_gradient_data = getMetalMatrix(key_gradient);
+        const value_gradient_data = getMetalMatrix(value_gradient);
+        ensureHostData(query_data);
+        ensureHostData(key_data);
+        ensureHostData(value_data);
+        ensureHostData(output_gradient_data);
+        @memset(query_gradient_data.host_data, 0);
+        @memset(key_gradient_data.host_data, 0);
+        @memset(value_gradient_data.host_data, 0);
+        const host_probabilities = try allocator.alloc(f32, query.rows);
+        defer allocator.free(host_probabilities);
+        const probability_gradients = try allocator.alloc(f32, query.rows);
+        defer allocator.free(probability_gradients);
+        const head_width = query.cols / heads;
+        const attention_scale = 1.0 / @sqrt(@as(f32, @floatFromInt(head_width)));
+        for (0..heads) |head| {
+            const channel_offset = head * head_width;
+            for (0..query.rows) |query_position| {
+                var max_score = -std.math.inf(f32);
+                for (0..query_position + 1) |key_position| {
+                    var score: f32 = 0;
+                    for (0..head_width) |channel| {
+                        score += query_data.host_data[query_position * query.cols + channel_offset + channel] *
+                            key_data.host_data[key_position * key.cols + channel_offset + channel];
+                    }
+                    score *= attention_scale;
+                    host_probabilities[key_position] = score;
+                    max_score = @max(max_score, score);
+                }
+                var denominator: f32 = 0;
+                for (0..query_position + 1) |key_position| {
+                    host_probabilities[key_position] = @exp(host_probabilities[key_position] - max_score);
+                    denominator += host_probabilities[key_position];
+                }
+                var weighted_probability_gradient: f32 = 0;
+                for (0..query_position + 1) |key_position| {
+                    host_probabilities[key_position] /= denominator;
+                    var probability_gradient: f32 = 0;
+                    for (0..head_width) |channel| {
+                        probability_gradient += output_gradient_data.host_data[query_position * query.cols + channel_offset + channel] *
+                            value_data.host_data[key_position * value.cols + channel_offset + channel];
+                    }
+                    probability_gradients[key_position] = probability_gradient;
+                    weighted_probability_gradient += host_probabilities[key_position] * probability_gradient;
+                }
+                for (0..query_position + 1) |key_position| {
+                    const score_gradient = host_probabilities[key_position] *
+                        (probability_gradients[key_position] - weighted_probability_gradient);
+                    for (0..head_width) |channel| {
+                        const query_index = query_position * query.cols + channel_offset + channel;
+                        const key_index = key_position * key.cols + channel_offset + channel;
+                        query_gradient_data.host_data[query_index] += score_gradient * key_data.host_data[key_index] * attention_scale;
+                        key_gradient_data.host_data[key_index] += score_gradient * query_data.host_data[query_index] * attention_scale;
+                        value_gradient_data.host_data[key_index] += host_probabilities[key_position] * output_gradient_data.host_data[query_index];
+                    }
+                }
+            }
+        }
+        query_gradient_data.markHostModified();
+        key_gradient_data.markHostModified();
+        value_gradient_data.markHostModified();
+        return gradients;
     }
 
     pub fn applyGLU(ptr: *anyopaque, linear_part: *const Matrix, gating_part: *const Matrix, allocator: Allocator) error{ OutOfMemory, DimensionMismatch }!*Matrix {

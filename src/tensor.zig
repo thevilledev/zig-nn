@@ -213,6 +213,32 @@ pub const ExecutionStats = struct {
     synchronizations: usize = 0,
 };
 
+pub const LayerNormGradients = struct {
+    input: Tensor,
+    gamma: Tensor,
+    beta: Tensor,
+
+    pub fn deinit(self: *LayerNormGradients) void {
+        self.input.deinit();
+        self.gamma.deinit();
+        self.beta.deinit();
+        self.* = undefined;
+    }
+};
+
+pub const AttentionGradients = struct {
+    query: Tensor,
+    key: Tensor,
+    value: Tensor,
+
+    pub fn deinit(self: *AttentionGradients) void {
+        self.query.deinit();
+        self.key.deinit();
+        self.value.deinit();
+        self.* = undefined;
+    }
+};
+
 /// Explicit execution boundary for tensor construction, operations, readback,
 /// and instrumentation. Backend command batching can be implemented behind
 /// this API without another model-code migration.
@@ -363,6 +389,16 @@ pub const ExecutionContext = struct {
         };
     }
 
+    pub fn geluDerivative(self: *ExecutionContext, input: Tensor) !Tensor {
+        const matrix = try input.matrix.applyActivation(Activation.gelu_derivative, self.device.allocator);
+        self.stats.kernels += 1;
+        return .{
+            .matrix = matrix,
+            .shape = input.shape,
+            .allocator = self.device.allocator,
+        };
+    }
+
     pub fn layerNorm(self: *ExecutionContext, input: Tensor, gamma: Tensor, beta: Tensor, epsilon: f32) !Tensor {
         if (input.shape.rank != 2 or gamma.shape.rank != 2 or beta.shape.rank != 2) return error.InvalidRank;
         if (gamma.shape.dims[0] != 1 or beta.shape.dims[0] != 1 or
@@ -381,6 +417,21 @@ pub const ExecutionContext = struct {
         };
     }
 
+    pub fn layerNormBackward(self: *ExecutionContext, input: Tensor, gamma: Tensor, output_gradient: Tensor, epsilon: f32) !LayerNormGradients {
+        if (input.shape.rank != 2 or gamma.shape.rank != 2 or output_gradient.shape.rank != 2) return error.InvalidRank;
+        if (!input.shape.eql(output_gradient.shape) or gamma.shape.dims[0] != 1 or gamma.shape.dims[1] != input.shape.dims[1]) {
+            return error.DimensionMismatch;
+        }
+        if (input.backendType() != gamma.backendType() or input.backendType() != output_gradient.backendType()) return error.BackendMismatch;
+        const gradients = try input.matrix.layerNormBackward(gamma.matrix, output_gradient.matrix, epsilon, self.device.allocator);
+        self.stats.kernels += 1;
+        return .{
+            .input = .{ .matrix = gradients.input, .shape = input.shape, .allocator = self.device.allocator },
+            .gamma = .{ .matrix = gradients.gamma, .shape = gamma.shape, .allocator = self.device.allocator },
+            .beta = .{ .matrix = gradients.beta, .shape = gamma.shape, .allocator = self.device.allocator },
+        };
+    }
+
     pub fn causalSelfAttention(self: *ExecutionContext, query: Tensor, key: Tensor, value: Tensor, heads: usize) !Tensor {
         if (query.shape.rank != 2 or key.shape.rank != 2 or value.shape.rank != 2) return error.InvalidRank;
         if (!query.shape.eql(key.shape) or !query.shape.eql(value.shape) or
@@ -396,6 +447,27 @@ pub const ExecutionContext = struct {
             .matrix = matrix,
             .shape = query.shape,
             .allocator = self.device.allocator,
+        };
+    }
+
+    pub fn causalSelfAttentionBackward(self: *ExecutionContext, query: Tensor, key: Tensor, value: Tensor, output_gradient: Tensor, heads: usize) !AttentionGradients {
+        if (query.shape.rank != 2 or key.shape.rank != 2 or value.shape.rank != 2 or output_gradient.shape.rank != 2) return error.InvalidRank;
+        if (!query.shape.eql(key.shape) or !query.shape.eql(value.shape) or !query.shape.eql(output_gradient.shape) or
+            heads == 0 or query.shape.dims[1] % heads != 0)
+        {
+            return error.DimensionMismatch;
+        }
+        if (query.backendType() != key.backendType() or query.backendType() != value.backendType() or
+            query.backendType() != output_gradient.backendType())
+        {
+            return error.BackendMismatch;
+        }
+        const gradients = try query.matrix.causalSelfAttentionBackward(key.matrix, value.matrix, output_gradient.matrix, heads, self.device.allocator);
+        self.stats.kernels += 2;
+        return .{
+            .query = .{ .matrix = gradients.query, .shape = query.shape, .allocator = self.device.allocator },
+            .key = .{ .matrix = gradients.key, .shape = key.shape, .allocator = self.device.allocator },
+            .value = .{ .matrix = gradients.value, .shape = value.shape, .allocator = self.device.allocator },
         };
     }
 
@@ -440,6 +512,64 @@ pub const ExecutionContext = struct {
         return self.device.runtimeStats();
     }
 };
+
+fn referenceLayerNormObjective(input: []const f32, gamma: []const f32, beta: []const f32, output_gradient: []const f32, rows: usize, cols: usize, epsilon: f32) f32 {
+    var objective: f32 = 0;
+    for (0..rows) |row| {
+        const offset = row * cols;
+        var mean: f32 = 0;
+        for (0..cols) |col| mean += input[offset + col];
+        mean /= @as(f32, @floatFromInt(cols));
+        var variance: f32 = 0;
+        for (0..cols) |col| {
+            const centered = input[offset + col] - mean;
+            variance += centered * centered;
+        }
+        variance /= @as(f32, @floatFromInt(cols));
+        const inverse_std = 1.0 / @sqrt(variance + epsilon);
+        for (0..cols) |col| {
+            const normalized = (input[offset + col] - mean) * inverse_std;
+            objective += (normalized * gamma[col] + beta[col]) * output_gradient[offset + col];
+        }
+    }
+    return objective;
+}
+
+fn referenceAttentionObjective(query: []const f32, key: []const f32, value: []const f32, output_gradient: []const f32, tokens: usize, channels: usize, heads: usize) f32 {
+    std.debug.assert(tokens <= 16);
+    var scores: [16]f32 = undefined;
+    const head_width = channels / heads;
+    const attention_scale = 1.0 / @sqrt(@as(f32, @floatFromInt(head_width)));
+    var objective: f32 = 0;
+    for (0..heads) |head| {
+        const channel_offset = head * head_width;
+        for (0..tokens) |query_position| {
+            var max_score = -std.math.inf(f32);
+            for (0..query_position + 1) |key_position| {
+                var score: f32 = 0;
+                for (0..head_width) |channel| {
+                    score += query[query_position * channels + channel_offset + channel] *
+                        key[key_position * channels + channel_offset + channel];
+                }
+                scores[key_position] = score * attention_scale;
+                max_score = @max(max_score, scores[key_position]);
+            }
+            var denominator: f32 = 0;
+            for (0..query_position + 1) |key_position| {
+                scores[key_position] = @exp(scores[key_position] - max_score);
+                denominator += scores[key_position];
+            }
+            for (0..head_width) |channel| {
+                var output: f32 = 0;
+                for (0..query_position + 1) |key_position| {
+                    output += scores[key_position] / denominator * value[key_position * channels + channel_offset + channel];
+                }
+                objective += output * output_gradient[query_position * channels + channel_offset + channel];
+            }
+        }
+    }
+    return objective;
+}
 
 test "shape validates rank dimensions and overflow" {
     const testing = std.testing;
@@ -762,6 +892,163 @@ test "causal self attention masks future tokens on device" {
         try testing.expectEqual(@as(usize, 3), runtime_stats.host_to_device_transfers);
         try testing.expectEqual(@as(usize, 1), runtime_stats.device_to_host_transfers);
         try testing.expectEqual(@as(usize, 1), runtime_stats.kernel_launches);
+        try testing.expectEqual(@as(usize, 1), runtime_stats.synchronizations);
+    }
+}
+
+test "layer norm backward matches finite differences" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+    var device = try Device.init(allocator, .cpu);
+    defer device.deinit();
+    var context = ExecutionContext.init(&device);
+
+    const input_values = [_]f32{ 0.2, -0.4, 1.1, 0.7, -1.2, 0.3 };
+    const gamma_values = [_]f32{ 1.2, -0.7, 0.5 };
+    const beta_values = [_]f32{ 0.1, 0.2, -0.3 };
+    const output_gradient_values = [_]f32{ 0.5, -0.2, 0.8, -0.4, 0.7, 0.3 };
+    var input = try context.upload(&.{ 2, 3 }, &input_values);
+    defer input.deinit();
+    var gamma = try context.upload(&.{ 1, 3 }, &gamma_values);
+    defer gamma.deinit();
+    var output_gradient = try context.upload(&.{ 2, 3 }, &output_gradient_values);
+    defer output_gradient.deinit();
+    var gradients = try context.layerNormBackward(input, gamma, output_gradient, 1e-5);
+    defer gradients.deinit();
+    var input_gradient: [6]f32 = undefined;
+    var gamma_gradient: [3]f32 = undefined;
+    var beta_gradient: [3]f32 = undefined;
+    try context.readback(gradients.input, &input_gradient);
+    try context.readback(gradients.gamma, &gamma_gradient);
+    try context.readback(gradients.beta, &beta_gradient);
+
+    const finite_difference: f32 = 1e-3;
+    for (0..input_values.len) |index| {
+        var plus = input_values;
+        var minus = input_values;
+        plus[index] += finite_difference;
+        minus[index] -= finite_difference;
+        const numerical = (referenceLayerNormObjective(&plus, &gamma_values, &beta_values, &output_gradient_values, 2, 3, 1e-5) -
+            referenceLayerNormObjective(&minus, &gamma_values, &beta_values, &output_gradient_values, 2, 3, 1e-5)) / (2 * finite_difference);
+        try testing.expectApproxEqAbs(numerical, input_gradient[index], 2e-3);
+    }
+    for (0..gamma_values.len) |index| {
+        var plus = gamma_values;
+        var minus = gamma_values;
+        plus[index] += finite_difference;
+        minus[index] -= finite_difference;
+        const numerical = (referenceLayerNormObjective(&input_values, &plus, &beta_values, &output_gradient_values, 2, 3, 1e-5) -
+            referenceLayerNormObjective(&input_values, &minus, &beta_values, &output_gradient_values, 2, 3, 1e-5)) / (2 * finite_difference);
+        try testing.expectApproxEqAbs(numerical, gamma_gradient[index], 2e-3);
+    }
+    for (0..beta_values.len) |index| {
+        var plus = beta_values;
+        var minus = beta_values;
+        plus[index] += finite_difference;
+        minus[index] -= finite_difference;
+        const numerical = (referenceLayerNormObjective(&input_values, &gamma_values, &plus, &output_gradient_values, 2, 3, 1e-5) -
+            referenceLayerNormObjective(&input_values, &gamma_values, &minus, &output_gradient_values, 2, 3, 1e-5)) / (2 * finite_difference);
+        try testing.expectApproxEqAbs(numerical, beta_gradient[index], 2e-3);
+    }
+}
+
+test "causal attention backward matches finite differences" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+    var device = try Device.init(allocator, .cpu);
+    defer device.deinit();
+    var context = ExecutionContext.init(&device);
+
+    const query_values = [_]f32{ 0.2, -0.4, 0.7, 0.3 };
+    const key_values = [_]f32{ -0.5, 0.1, 0.6, -0.2 };
+    const value_values = [_]f32{ 0.8, -0.7, 0.4, 1.1 };
+    const output_gradient_values = [_]f32{ 0.3, -0.6, 0.9, 0.2 };
+    var query = try context.upload(&.{ 2, 2 }, &query_values);
+    defer query.deinit();
+    var key = try context.upload(&.{ 2, 2 }, &key_values);
+    defer key.deinit();
+    var value = try context.upload(&.{ 2, 2 }, &value_values);
+    defer value.deinit();
+    var output_gradient = try context.upload(&.{ 2, 2 }, &output_gradient_values);
+    defer output_gradient.deinit();
+    var gradients = try context.causalSelfAttentionBackward(query, key, value, output_gradient, 1);
+    defer gradients.deinit();
+    var query_gradient: [4]f32 = undefined;
+    var key_gradient: [4]f32 = undefined;
+    var value_gradient: [4]f32 = undefined;
+    try context.readback(gradients.query, &query_gradient);
+    try context.readback(gradients.key, &key_gradient);
+    try context.readback(gradients.value, &value_gradient);
+
+    const finite_difference: f32 = 1e-3;
+    for (0..query_values.len) |index| {
+        var plus = query_values;
+        var minus = query_values;
+        plus[index] += finite_difference;
+        minus[index] -= finite_difference;
+        const numerical = (referenceAttentionObjective(&plus, &key_values, &value_values, &output_gradient_values, 2, 2, 1) -
+            referenceAttentionObjective(&minus, &key_values, &value_values, &output_gradient_values, 2, 2, 1)) / (2 * finite_difference);
+        try testing.expectApproxEqAbs(numerical, query_gradient[index], 2e-3);
+    }
+    for (0..key_values.len) |index| {
+        var plus = key_values;
+        var minus = key_values;
+        plus[index] += finite_difference;
+        minus[index] -= finite_difference;
+        const numerical = (referenceAttentionObjective(&query_values, &plus, &value_values, &output_gradient_values, 2, 2, 1) -
+            referenceAttentionObjective(&query_values, &minus, &value_values, &output_gradient_values, 2, 2, 1)) / (2 * finite_difference);
+        try testing.expectApproxEqAbs(numerical, key_gradient[index], 2e-3);
+    }
+    for (0..value_values.len) |index| {
+        var plus = value_values;
+        var minus = value_values;
+        plus[index] += finite_difference;
+        minus[index] -= finite_difference;
+        const numerical = (referenceAttentionObjective(&query_values, &key_values, &plus, &output_gradient_values, 2, 2, 1) -
+            referenceAttentionObjective(&query_values, &key_values, &minus, &output_gradient_values, 2, 2, 1)) / (2 * finite_difference);
+        try testing.expectApproxEqAbs(numerical, value_gradient[index], 2e-3);
+    }
+}
+
+test "transformer backward kernels share one device synchronization" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+    var device = try Device.init(allocator, .auto);
+    defer device.deinit();
+    var context = ExecutionContext.init(&device);
+    context.resetStats();
+
+    var input = try context.upload(&.{ 2, 2 }, &.{ 0.2, -0.4, 0.7, 0.3 });
+    defer input.deinit();
+    var gamma = try context.upload(&.{ 1, 2 }, &.{ 1.2, -0.7 });
+    defer gamma.deinit();
+    var output_gradient = try context.upload(&.{ 2, 2 }, &.{ 0.3, -0.6, 0.9, 0.2 });
+    defer output_gradient.deinit();
+    var key = try context.upload(&.{ 2, 2 }, &.{ -0.5, 0.1, 0.6, -0.2 });
+    defer key.deinit();
+    var value = try context.upload(&.{ 2, 2 }, &.{ 0.8, -0.7, 0.4, 1.1 });
+    defer value.deinit();
+
+    try context.beginBatch();
+    var norm_gradients = try context.layerNormBackward(input, gamma, output_gradient, 1e-5);
+    var attention_gradients = try context.causalSelfAttentionBackward(input, key, value, output_gradient, 1);
+    try context.endBatch();
+    defer norm_gradients.deinit();
+    defer attention_gradients.deinit();
+
+    var norm_values: [4]f32 = undefined;
+    var attention_values: [4]f32 = undefined;
+    try context.readback(norm_gradients.input, &norm_values);
+    try context.readback(attention_gradients.query, &attention_values);
+    for (norm_values ++ attention_values) |value_item| try testing.expect(std.math.isFinite(value_item));
+
+    const runtime_stats = context.backendStats();
+    if (device.backendType() == .CPU) {
+        try testing.expectEqual(@as(usize, 0), runtime_stats.kernel_launches);
+    } else {
+        try testing.expectEqual(@as(usize, 5), runtime_stats.host_to_device_transfers);
+        try testing.expectEqual(@as(usize, 2), runtime_stats.device_to_host_transfers);
+        try testing.expectEqual(@as(usize, 3), runtime_stats.kernel_launches);
         try testing.expectEqual(@as(usize, 1), runtime_stats.synchronizations);
     }
 }

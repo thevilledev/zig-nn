@@ -368,6 +368,22 @@ kernel void apply_gelu(
     result[position] = 0.5f * x * (1.0f + tanh(inner));
 }
 
+kernel void apply_gelu_derivative(
+    device const float* input [[buffer(0)]],
+    device float* result [[buffer(1)]],
+    constant uint& size [[buffer(2)]],
+    uint position [[thread_position_in_grid]]
+) {
+    if (position >= size) return;
+    float x = input[position];
+    const float coefficient = 0.7978845608028654f;
+    float inner = coefficient * (x + 0.044715f * x * x * x);
+    float tanh_inner = tanh(inner);
+    float inner_derivative = coefficient * (1.0f + 3.0f * 0.044715f * x * x);
+    result[position] = 0.5f * (1.0f + tanh_inner) +
+        0.5f * x * (1.0f - tanh_inner * tanh_inner) * inner_derivative;
+}
+
 kernel void matrix_layer_norm(
     device const float* input [[buffer(0)]],
     device const float* gamma [[buffer(1)]],
@@ -394,6 +410,70 @@ kernel void matrix_layer_norm(
     for (uint col = 0; col < cols; col++) {
         float normalized = (input[offset + col] - mean) * inverse_std;
         result[offset + col] = normalized * gamma[col] + beta[col];
+    }
+}
+
+kernel void matrix_layer_norm_backward(
+    device const float* input [[buffer(0)]],
+    device const float* gamma [[buffer(1)]],
+    device const float* output_gradient [[buffer(2)]],
+    device float* input_gradient [[buffer(3)]],
+    device float* gamma_gradient [[buffer(4)]],
+    device float* beta_gradient [[buffer(5)]],
+    constant uint& rows [[buffer(6)]],
+    constant uint& cols [[buffer(7)]],
+    constant float& epsilon [[buffer(8)]],
+    uint position [[thread_position_in_grid]]
+) {
+    if (position < rows) {
+        uint offset = position * cols;
+        float mean = 0.0f;
+        for (uint col = 0; col < cols; col++) mean += input[offset + col];
+        mean /= float(cols);
+        float variance = 0.0f;
+        for (uint col = 0; col < cols; col++) {
+            float centered = input[offset + col] - mean;
+            variance += centered * centered;
+        }
+        variance /= float(cols);
+        float inverse_std = rsqrt(variance + epsilon);
+        float sum_gradient = 0.0f;
+        float sum_gradient_normalized = 0.0f;
+        for (uint col = 0; col < cols; col++) {
+            float normalized = (input[offset + col] - mean) * inverse_std;
+            float gradient = output_gradient[offset + col] * gamma[col];
+            sum_gradient += gradient;
+            sum_gradient_normalized += gradient * normalized;
+        }
+        for (uint col = 0; col < cols; col++) {
+            float normalized = (input[offset + col] - mean) * inverse_std;
+            float gradient = output_gradient[offset + col] * gamma[col];
+            input_gradient[offset + col] = inverse_std / float(cols) *
+                (float(cols) * gradient - sum_gradient - normalized * sum_gradient_normalized);
+        }
+    }
+
+    if (position < cols) {
+        float gamma_sum = 0.0f;
+        float beta_sum = 0.0f;
+        for (uint row = 0; row < rows; row++) {
+            uint offset = row * cols;
+            float mean = 0.0f;
+            for (uint col = 0; col < cols; col++) mean += input[offset + col];
+            mean /= float(cols);
+            float variance = 0.0f;
+            for (uint col = 0; col < cols; col++) {
+                float centered = input[offset + col] - mean;
+                variance += centered * centered;
+            }
+            variance /= float(cols);
+            float normalized = (input[offset + position] - mean) * rsqrt(variance + epsilon);
+            float gradient = output_gradient[offset + position];
+            gamma_sum += gradient * normalized;
+            beta_sum += gradient;
+        }
+        gamma_gradient[position] = gamma_sum;
+        beta_gradient[position] = beta_sum;
     }
 }
 
@@ -447,6 +527,108 @@ kernel void causal_self_attention(
         }
         result[query_position * channels + channel_offset + output_channel] = output;
     }
+}
+
+kernel void causal_attention_probabilities_backward(
+    device const float* query [[buffer(0)]],
+    device const float* key [[buffer(1)]],
+    device const float* value [[buffer(2)]],
+    device const float* output_gradient [[buffer(3)]],
+    device float* probabilities [[buffer(4)]],
+    device float* score_gradients [[buffer(5)]],
+    constant uint& tokens [[buffer(6)]],
+    constant uint& channels [[buffer(7)]],
+    constant uint& heads [[buffer(8)]],
+    uint2 position [[thread_position_in_grid]]
+) {
+    uint query_position = position.x;
+    uint head = position.y;
+    if (query_position >= tokens || head >= heads) return;
+    uint head_width = channels / heads;
+    uint channel_offset = head * head_width;
+    float scale = rsqrt(float(head_width));
+    float max_score = -INFINITY;
+    for (uint key_position = 0; key_position <= query_position; key_position++) {
+        float score = 0.0f;
+        for (uint channel = 0; channel < head_width; channel++) {
+            score += query[query_position * channels + channel_offset + channel] *
+                key[key_position * channels + channel_offset + channel];
+        }
+        max_score = max(max_score, score * scale);
+    }
+    float denominator = 0.0f;
+    for (uint key_position = 0; key_position <= query_position; key_position++) {
+        float score = 0.0f;
+        for (uint channel = 0; channel < head_width; channel++) {
+            score += query[query_position * channels + channel_offset + channel] *
+                key[key_position * channels + channel_offset + channel];
+        }
+        denominator += exp(score * scale - max_score);
+    }
+    float weighted_probability_gradient = 0.0f;
+    for (uint key_position = 0; key_position <= query_position; key_position++) {
+        float score = 0.0f;
+        float probability_gradient = 0.0f;
+        for (uint channel = 0; channel < head_width; channel++) {
+            score += query[query_position * channels + channel_offset + channel] *
+                key[key_position * channels + channel_offset + channel];
+            probability_gradient += output_gradient[query_position * channels + channel_offset + channel] *
+                value[key_position * channels + channel_offset + channel];
+        }
+        float probability = exp(score * scale - max_score) / denominator;
+        uint index = (head * tokens + query_position) * tokens + key_position;
+        probabilities[index] = probability;
+        score_gradients[index] = probability_gradient;
+        weighted_probability_gradient += probability * probability_gradient;
+    }
+    for (uint key_position = 0; key_position < tokens; key_position++) {
+        uint index = (head * tokens + query_position) * tokens + key_position;
+        if (key_position <= query_position) {
+            score_gradients[index] = probabilities[index] *
+                (score_gradients[index] - weighted_probability_gradient);
+        } else {
+            probabilities[index] = 0.0f;
+            score_gradients[index] = 0.0f;
+        }
+    }
+}
+
+kernel void causal_attention_input_gradients(
+    device const float* query [[buffer(0)]],
+    device const float* key [[buffer(1)]],
+    device const float* output_gradient [[buffer(2)]],
+    device const float* probabilities [[buffer(3)]],
+    device const float* score_gradients [[buffer(4)]],
+    device float* query_gradient [[buffer(5)]],
+    device float* key_gradient [[buffer(6)]],
+    device float* value_gradient [[buffer(7)]],
+    constant uint& tokens [[buffer(8)]],
+    constant uint& channels [[buffer(9)]],
+    constant uint& heads [[buffer(10)]],
+    uint2 position [[thread_position_in_grid]]
+) {
+    uint channel = position.x;
+    uint token = position.y;
+    if (channel >= channels || token >= tokens) return;
+    uint head_width = channels / heads;
+    uint head = channel / head_width;
+    float scale = rsqrt(float(head_width));
+    float query_sum = 0.0f;
+    for (uint key_position = 0; key_position <= token; key_position++) {
+        uint index = (head * tokens + token) * tokens + key_position;
+        query_sum += score_gradients[index] * key[key_position * channels + channel] * scale;
+    }
+    float key_sum = 0.0f;
+    float value_sum = 0.0f;
+    for (uint query_position = token; query_position < tokens; query_position++) {
+        uint index = (head * tokens + query_position) * tokens + token;
+        key_sum += score_gradients[index] * query[query_position * channels + channel] * scale;
+        value_sum += probabilities[index] * output_gradient[query_position * channels + channel];
+    }
+    uint output_index = token * channels + channel;
+    query_gradient[output_index] = query_sum;
+    key_gradient[output_index] = key_sum;
+    value_gradient[output_index] = value_sum;
 }
 
 // Gated Linear Unit

@@ -26,6 +26,7 @@ enum ZigNNCudaKernelId {
     ZIG_NN_CUDA_KERNEL_APPLY_SWISH_DERIVATIVE = 14,
     ZIG_NN_CUDA_KERNEL_MATRIX_ADD_ROW_BIAS = 15,
     ZIG_NN_CUDA_KERNEL_APPLY_GELU = 16,
+    ZIG_NN_CUDA_KERNEL_APPLY_GELU_DERIVATIVE = 17,
 };
 
 CUDABackendRef cuda_backend_create(const char* kernel_source, char* error_buffer, unsigned long error_buffer_len);
@@ -48,7 +49,10 @@ int cuda_launch_unary_kernel(CUDABackendRef backend_ref, int kernel_id, CUDABuff
 int cuda_launch_softmax_rows(CUDABackendRef backend_ref, CUDABufferRef input_ref, CUDABufferRef result_ref, unsigned int rows, unsigned int cols);
 int cuda_launch_gated_kernel(CUDABackendRef backend_ref, int kernel_id, CUDABufferRef linear_ref, CUDABufferRef gating_ref, CUDABufferRef result_ref, unsigned int size);
 int cuda_launch_layer_norm(CUDABackendRef backend_ref, CUDABufferRef input_ref, CUDABufferRef gamma_ref, CUDABufferRef beta_ref, CUDABufferRef result_ref, unsigned int rows, unsigned int cols, float epsilon);
+int cuda_launch_layer_norm_backward(CUDABackendRef backend_ref, CUDABufferRef input_ref, CUDABufferRef gamma_ref, CUDABufferRef output_gradient_ref, CUDABufferRef input_gradient_ref, CUDABufferRef gamma_gradient_ref, CUDABufferRef beta_gradient_ref, unsigned int rows, unsigned int cols, float epsilon);
 int cuda_launch_causal_self_attention(CUDABackendRef backend_ref, CUDABufferRef query_ref, CUDABufferRef key_ref, CUDABufferRef value_ref, CUDABufferRef result_ref, unsigned int tokens, unsigned int channels, unsigned int heads);
+int cuda_launch_causal_attention_probabilities_backward(CUDABackendRef backend_ref, CUDABufferRef query_ref, CUDABufferRef key_ref, CUDABufferRef value_ref, CUDABufferRef output_gradient_ref, CUDABufferRef probabilities_ref, CUDABufferRef score_gradients_ref, unsigned int tokens, unsigned int channels, unsigned int heads);
+int cuda_launch_causal_attention_input_gradients(CUDABackendRef backend_ref, CUDABufferRef query_ref, CUDABufferRef key_ref, CUDABufferRef output_gradient_ref, CUDABufferRef probabilities_ref, CUDABufferRef score_gradients_ref, CUDABufferRef query_gradient_ref, CUDABufferRef key_gradient_ref, CUDABufferRef value_gradient_ref, unsigned int tokens, unsigned int channels, unsigned int heads);
 
 #ifdef __cplusplus
 }
