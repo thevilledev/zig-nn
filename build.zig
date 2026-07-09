@@ -182,6 +182,7 @@ pub fn build(b: *std.Build) void {
     var prev_step = addTestStep(b, test_step, "matrix", "src/matrix.zig", null, target, optimize, build_options, enable_metal, enable_cuda, cuda_path, null);
     prev_step = addTestStep(b, test_step, "activation", "src/activation.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, cuda_path, null);
     prev_step = addTestStep(b, test_step, "tensor", "src/tensor.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, cuda_path, null);
+    prev_step = addTestStep(b, test_step, "transformer", "src/transformer.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, cuda_path, null);
     prev_step = addTestStep(b, test_step, "layer", "src/layer.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, cuda_path, null);
     prev_step = addTestStep(b, test_step, "layer_norm", "src/layer_norm.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, cuda_path, null);
     prev_step = addTestStep(b, test_step, "network", "src/network.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, cuda_path, null);

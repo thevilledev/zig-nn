@@ -323,6 +323,24 @@ pub const ExecutionContext = struct {
         };
     }
 
+    pub fn causalSelfAttention(self: *ExecutionContext, query: Tensor, key: Tensor, value: Tensor, heads: usize) !Tensor {
+        if (query.shape.rank != 2 or key.shape.rank != 2 or value.shape.rank != 2) return error.InvalidRank;
+        if (!query.shape.eql(key.shape) or !query.shape.eql(value.shape) or
+            heads == 0 or query.shape.dims[1] % heads != 0)
+        {
+            return error.DimensionMismatch;
+        }
+        if (query.backendType() != key.backendType() or query.backendType() != value.backendType()) return error.BackendMismatch;
+
+        const matrix = try query.matrix.causalSelfAttention(key.matrix, value.matrix, heads, self.device.allocator);
+        self.stats.kernels += 1;
+        return .{
+            .matrix = matrix,
+            .shape = query.shape,
+            .allocator = self.device.allocator,
+        };
+    }
+
     pub fn softmax(self: *ExecutionContext, input: Tensor) !Tensor {
         if (input.shape.rank != 2) return error.InvalidRank;
         const matrix = try input.matrix.applySoftmax(self.device.allocator);
@@ -454,27 +472,21 @@ test "auto device supports bulk f32 round trip" {
     const runtime_stats = context.backendStats();
     try testing.expectEqual(@as(usize, 3), runtime_stats.buffer_allocations);
 
-    if (builtin.os.tag == .macos and build_options.enable_metal) {
-        try testing.expectEqual(BackendType.Metal, device.backendType());
-        try testing.expectEqual(@as(usize, 2), runtime_stats.host_to_device_transfers);
-        try testing.expectEqual(@as(usize, 1), runtime_stats.device_to_host_transfers);
-        try testing.expectEqual(@as(usize, 1), runtime_stats.kernel_launches);
-        try testing.expectEqual(@as(usize, 1), runtime_stats.vendor_gemm_launches);
-        try testing.expectEqual(@as(usize, 1), runtime_stats.synchronizations);
-    } else if (builtin.os.tag == .linux and build_options.enable_cuda) {
-        try testing.expectEqual(BackendType.CUDA, device.backendType());
-        try testing.expectEqual(@as(usize, 2), runtime_stats.host_to_device_transfers);
-        try testing.expectEqual(@as(usize, 1), runtime_stats.device_to_host_transfers);
-        try testing.expectEqual(@as(usize, 1), runtime_stats.kernel_launches);
-        try testing.expectEqual(@as(usize, 1), runtime_stats.vendor_gemm_launches);
-        try testing.expectEqual(@as(usize, 1), runtime_stats.synchronizations);
-    } else {
-        try testing.expectEqual(BackendType.CPU, device.backendType());
-        try testing.expectEqual(@as(usize, 0), runtime_stats.host_to_device_transfers);
-        try testing.expectEqual(@as(usize, 0), runtime_stats.device_to_host_transfers);
-        try testing.expectEqual(@as(usize, 0), runtime_stats.kernel_launches);
-        try testing.expectEqual(@as(usize, 0), runtime_stats.vendor_gemm_launches);
-        try testing.expectEqual(@as(usize, 0), runtime_stats.synchronizations);
+    switch (device.backendType()) {
+        .Metal, .CUDA => {
+            try testing.expectEqual(@as(usize, 2), runtime_stats.host_to_device_transfers);
+            try testing.expectEqual(@as(usize, 1), runtime_stats.device_to_host_transfers);
+            try testing.expectEqual(@as(usize, 1), runtime_stats.kernel_launches);
+            try testing.expectEqual(@as(usize, 1), runtime_stats.vendor_gemm_launches);
+            try testing.expectEqual(@as(usize, 1), runtime_stats.synchronizations);
+        },
+        .CPU => {
+            try testing.expectEqual(@as(usize, 0), runtime_stats.host_to_device_transfers);
+            try testing.expectEqual(@as(usize, 0), runtime_stats.device_to_host_transfers);
+            try testing.expectEqual(@as(usize, 0), runtime_stats.kernel_launches);
+            try testing.expectEqual(@as(usize, 0), runtime_stats.vendor_gemm_launches);
+            try testing.expectEqual(@as(usize, 0), runtime_stats.synchronizations);
+        },
     }
 }
 
@@ -642,6 +654,56 @@ test "transformer pipeline stays device resident within a batch" {
         try testing.expectEqual(@as(usize, 1), runtime_stats.device_to_host_transfers);
         try testing.expectEqual(@as(usize, 4), runtime_stats.kernel_launches);
         try testing.expectEqual(@as(usize, 1), runtime_stats.vendor_gemm_launches);
+        try testing.expectEqual(@as(usize, 1), runtime_stats.synchronizations);
+    }
+}
+
+test "causal self attention masks future tokens on device" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var device = try Device.init(allocator, .auto);
+    defer device.deinit();
+    var context = ExecutionContext.init(&device);
+    context.resetStats();
+
+    var query = try context.upload(&.{ 3, 4 }, &([_]f32{0} ** 12));
+    defer query.deinit();
+    var key = try context.upload(&.{ 3, 4 }, &([_]f32{0} ** 12));
+    defer key.deinit();
+    var value = try context.upload(&.{ 3, 4 }, &.{
+        1, 2, 10, 20,
+        3, 4, 30, 40,
+        5, 6, 50, 60,
+    });
+    defer value.deinit();
+
+    try testing.expectError(error.DimensionMismatch, context.causalSelfAttention(query, key, value, 3));
+    try context.beginBatch();
+    var attended = try context.causalSelfAttention(query, key, value, 2);
+    try context.endBatch();
+    defer attended.deinit();
+
+    var actual: [12]f32 = undefined;
+    try context.readback(attended, &actual);
+    const expected = [_]f32{
+        1, 2, 10, 20,
+        2, 3, 20, 30,
+        3, 4, 30, 40,
+    };
+    for (actual, expected) |actual_value, expected_value| {
+        try testing.expectApproxEqAbs(expected_value, actual_value, 1e-5);
+    }
+
+    const runtime_stats = context.backendStats();
+    try testing.expectEqual(@as(usize, 4), runtime_stats.buffer_allocations);
+    if (device.backendType() == .CPU) {
+        try testing.expectEqual(@as(usize, 0), runtime_stats.kernel_launches);
+        try testing.expectEqual(@as(usize, 0), runtime_stats.synchronizations);
+    } else {
+        try testing.expectEqual(@as(usize, 3), runtime_stats.host_to_device_transfers);
+        try testing.expectEqual(@as(usize, 1), runtime_stats.device_to_host_transfers);
+        try testing.expectEqual(@as(usize, 1), runtime_stats.kernel_launches);
         try testing.expectEqual(@as(usize, 1), runtime_stats.synchronizations);
     }
 }

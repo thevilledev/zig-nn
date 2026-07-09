@@ -363,6 +363,7 @@ pub const MetalBackend = struct {
     swish_derivative_pipeline: ?*Metal.ComputePipelineState,
     gelu_pipeline: ?*Metal.ComputePipelineState,
     layer_norm_pipeline: ?*Metal.ComputePipelineState,
+    causal_attention_pipeline: ?*Metal.ComputePipelineState,
 
     // Softmax pipelines
     softmax_find_max_pipeline: ?*Metal.ComputePipelineState,
@@ -416,6 +417,7 @@ pub const MetalBackend = struct {
             .swish_derivative_pipeline = null,
             .gelu_pipeline = null,
             .layer_norm_pipeline = null,
+            .causal_attention_pipeline = null,
             .softmax_find_max_pipeline = null,
             .softmax_exp_sum_pipeline = null,
             .softmax_normalize_pipeline = null,
@@ -458,6 +460,7 @@ pub const MetalBackend = struct {
         Metal.release(self.swish_derivative_pipeline);
         Metal.release(self.gelu_pipeline);
         Metal.release(self.layer_norm_pipeline);
+        Metal.release(self.causal_attention_pipeline);
         Metal.release(self.softmax_find_max_pipeline);
         Metal.release(self.softmax_exp_sum_pipeline);
         Metal.release(self.softmax_normalize_pipeline);
@@ -492,6 +495,7 @@ pub const MetalBackend = struct {
         try self.loadPipeline(&self.swish_derivative_pipeline, "apply_swish_derivative");
         try self.loadPipeline(&self.gelu_pipeline, "apply_gelu");
         try self.loadPipeline(&self.layer_norm_pipeline, "matrix_layer_norm");
+        try self.loadPipeline(&self.causal_attention_pipeline, "causal_self_attention");
         try self.loadPipeline(&self.softmax_find_max_pipeline, "softmax_find_max");
         try self.loadPipeline(&self.softmax_exp_sum_pipeline, "softmax_exp_and_sum");
         try self.loadPipeline(&self.softmax_normalize_pipeline, "softmax_normalize");
@@ -890,6 +894,35 @@ pub const MetalBackend = struct {
         setU32(encoder, toU32(matrix.cols), 5);
         setF32(encoder, @floatCast(epsilon), 6);
         Metal.computeEncoderDispatchThreads(encoder, pipeline, matrix.rows, 1, 1);
+        Metal.computeEncoderEndEncoding(encoder);
+        Metal.commandBufferCommit(command_buffer);
+        if (!self.completeSubmittedKernel(command_buffer)) return false;
+        result_data.markGPUModified();
+        return true;
+    }
+
+    fn dispatchCausalSelfAttention(self: *MetalBackend, query: *const Matrix, key: *const Matrix, value: *const Matrix, heads: usize, result: *Matrix) bool {
+        const pipeline = self.causal_attention_pipeline orelse return false;
+        const command_queue = self.command_queue orelse return false;
+        const query_data = getMetalMatrix(query);
+        const key_data = getMetalMatrix(key);
+        const value_data = getMetalMatrix(value);
+        const result_data = getMetalMatrix(result);
+        if (!query_data.syncToGPU() or !key_data.syncToGPU() or !value_data.syncToGPU()) return false;
+
+        const command_buffer = Metal.commandQueueCreateCommandBuffer(command_queue) orelse return false;
+        defer Metal.release(command_buffer);
+        const encoder = Metal.commandBufferCreateComputeCommandEncoder(command_buffer) orelse return false;
+        defer Metal.release(encoder);
+        Metal.computeEncoderSetPipelineState(encoder, pipeline);
+        Metal.computeEncoderSetBuffer(encoder, query_data.buffer orelse return false, 0, 0);
+        Metal.computeEncoderSetBuffer(encoder, key_data.buffer orelse return false, 0, 1);
+        Metal.computeEncoderSetBuffer(encoder, value_data.buffer orelse return false, 0, 2);
+        Metal.computeEncoderSetBuffer(encoder, result_data.buffer orelse return false, 0, 3);
+        setU32(encoder, toU32(query.rows), 4);
+        setU32(encoder, toU32(query.cols), 5);
+        setU32(encoder, toU32(heads), 6);
+        Metal.computeEncoderDispatchThreads(encoder, pipeline, query.rows, heads, 1);
         Metal.computeEncoderEndEncoding(encoder);
         Metal.commandBufferCommit(command_buffer);
         if (!self.completeSubmittedKernel(command_buffer)) return false;
@@ -1403,6 +1436,62 @@ pub const MetalBackend = struct {
             for (0..matrix.cols) |col| {
                 const normalized = (input_data.host_data[offset + col] - mean) * inverse_std;
                 result_data.host_data[offset + col] = normalized * gamma_data.host_data[col] + beta_data.host_data[col];
+            }
+        }
+        result_data.markHostModified();
+        return result;
+    }
+
+    pub fn causalSelfAttention(ptr: *anyopaque, query: *const Matrix, key: *const Matrix, value: *const Matrix, heads: usize, allocator: Allocator) error{ OutOfMemory, DimensionMismatch }!*Matrix {
+        if (heads == 0 or query.rows != key.rows or query.rows != value.rows or
+            query.cols != key.cols or query.cols != value.cols or query.cols % heads != 0)
+        {
+            return error.DimensionMismatch;
+        }
+
+        const self = @as(*MetalBackend, @ptrCast(@alignCast(ptr)));
+        const result = try initMatrix(ptr, allocator, query.rows, query.cols);
+        const query_data = getMetalMatrix(query);
+        const key_data = getMetalMatrix(key);
+        const value_data = getMetalMatrix(value);
+        const result_data = getMetalMatrix(result);
+        if (self.dispatchCausalSelfAttention(query, key, value, heads, result)) return result;
+
+        ensureHostData(query_data);
+        ensureHostData(key_data);
+        ensureHostData(value_data);
+        const probabilities = try allocator.alloc(f32, query.rows);
+        defer allocator.free(probabilities);
+        const head_width = query.cols / heads;
+        const attention_scale = 1.0 / @sqrt(@as(f32, @floatFromInt(head_width)));
+        for (0..query.rows) |query_position| {
+            for (0..heads) |head| {
+                const channel_offset = head * head_width;
+                var max_score = -std.math.inf(f32);
+                for (0..query_position + 1) |key_position| {
+                    var score: f32 = 0;
+                    for (0..head_width) |channel| {
+                        score += query_data.host_data[query_position * query.cols + channel_offset + channel] *
+                            key_data.host_data[key_position * key.cols + channel_offset + channel];
+                    }
+                    score *= attention_scale;
+                    probabilities[key_position] = score;
+                    max_score = @max(max_score, score);
+                }
+                var denominator: f32 = 0;
+                for (0..query_position + 1) |key_position| {
+                    const probability = @exp(probabilities[key_position] - max_score);
+                    probabilities[key_position] = probability;
+                    denominator += probability;
+                }
+                for (0..head_width) |channel| {
+                    var output: f32 = 0;
+                    for (0..query_position + 1) |key_position| {
+                        output += probabilities[key_position] / denominator *
+                            value_data.host_data[key_position * value.cols + channel_offset + channel];
+                    }
+                    result_data.host_data[query_position * result.cols + channel_offset + channel] = output;
+                }
             }
         }
         result_data.markHostModified();

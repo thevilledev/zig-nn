@@ -323,6 +323,11 @@ pub const Matrix = struct {
         return self.backend.layerNorm(self, gamma, beta, epsilon, allocator);
     }
 
+    /// Computes scaled dot-product attention with a causal mask.
+    pub fn causalSelfAttention(self: *const Matrix, key: *const Matrix, value: *const Matrix, heads: usize, allocator: Allocator) !*Matrix {
+        return self.backend.causalSelfAttention(self, key, value, heads, allocator);
+    }
+
     pub fn applyGLU(self: *const Matrix, gating_part: *const Matrix, allocator: Allocator) !*Matrix {
         // Assuming GLU is self * sigmoid(gating_part)
         return self.backend.applyGLU(self, gating_part, allocator);

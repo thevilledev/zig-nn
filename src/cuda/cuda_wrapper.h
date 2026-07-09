@@ -48,6 +48,7 @@ int cuda_launch_unary_kernel(CUDABackendRef backend_ref, int kernel_id, CUDABuff
 int cuda_launch_softmax_rows(CUDABackendRef backend_ref, CUDABufferRef input_ref, CUDABufferRef result_ref, unsigned int rows, unsigned int cols);
 int cuda_launch_gated_kernel(CUDABackendRef backend_ref, int kernel_id, CUDABufferRef linear_ref, CUDABufferRef gating_ref, CUDABufferRef result_ref, unsigned int size);
 int cuda_launch_layer_norm(CUDABackendRef backend_ref, CUDABufferRef input_ref, CUDABufferRef gamma_ref, CUDABufferRef beta_ref, CUDABufferRef result_ref, unsigned int rows, unsigned int cols, float epsilon);
+int cuda_launch_causal_self_attention(CUDABackendRef backend_ref, CUDABufferRef query_ref, CUDABufferRef key_ref, CUDABufferRef value_ref, CUDABufferRef result_ref, unsigned int tokens, unsigned int channels, unsigned int heads);
 
 #ifdef __cplusplus
 }

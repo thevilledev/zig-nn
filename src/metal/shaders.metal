@@ -397,6 +397,58 @@ kernel void matrix_layer_norm(
     }
 }
 
+kernel void causal_self_attention(
+    device const float* query [[buffer(0)]],
+    device const float* key [[buffer(1)]],
+    device const float* value [[buffer(2)]],
+    device float* result [[buffer(3)]],
+    constant uint& tokens [[buffer(4)]],
+    constant uint& channels [[buffer(5)]],
+    constant uint& heads [[buffer(6)]],
+    uint2 position [[thread_position_in_grid]]
+) {
+    uint query_position = position.x;
+    uint head = position.y;
+    if (query_position >= tokens || head >= heads) return;
+
+    uint head_width = channels / heads;
+    uint channel_offset = head * head_width;
+    float scale = rsqrt(float(head_width));
+    float max_score = -INFINITY;
+    for (uint key_position = 0; key_position <= query_position; key_position++) {
+        float score = 0.0f;
+        for (uint channel = 0; channel < head_width; channel++) {
+            score += query[query_position * channels + channel_offset + channel] *
+                key[key_position * channels + channel_offset + channel];
+        }
+        max_score = max(max_score, score * scale);
+    }
+
+    float denominator = 0.0f;
+    for (uint key_position = 0; key_position <= query_position; key_position++) {
+        float score = 0.0f;
+        for (uint channel = 0; channel < head_width; channel++) {
+            score += query[query_position * channels + channel_offset + channel] *
+                key[key_position * channels + channel_offset + channel];
+        }
+        denominator += exp(score * scale - max_score);
+    }
+
+    for (uint output_channel = 0; output_channel < head_width; output_channel++) {
+        float output = 0.0f;
+        for (uint key_position = 0; key_position <= query_position; key_position++) {
+            float score = 0.0f;
+            for (uint channel = 0; channel < head_width; channel++) {
+                score += query[query_position * channels + channel_offset + channel] *
+                    key[key_position * channels + channel_offset + channel];
+            }
+            float probability = exp(score * scale - max_score) / denominator;
+            output += probability * value[key_position * channels + channel_offset + output_channel];
+        }
+        result[query_position * channels + channel_offset + output_channel] = output;
+    }
+}
+
 // Gated Linear Unit
 // result[i] = linear[i] * sigmoid(gating[i])
 kernel void apply_glu(

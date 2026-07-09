@@ -19,6 +19,7 @@ const metal_backend_mod = @import("metal_backend.zig");
 const cuda_backend_mod = @import("cuda_backend.zig");
 const quantization_mod = @import("quantization.zig");
 const tensor_mod = @import("tensor.zig");
+const transformer_mod = @import("transformer.zig");
 
 /// Library usage example:
 ///
@@ -70,6 +71,7 @@ pub const DevicePreference = tensor_mod.DevicePreference;
 pub const ExecutionContext = tensor_mod.ExecutionContext;
 pub const ExecutionStats = tensor_mod.ExecutionStats;
 pub const BackendRuntimeStats = backend_mod.RuntimeStats;
+pub const Transformer = transformer_mod;
 
 // Export backend interface types
 pub const BackendMatrix = backend_mod.Matrix;
@@ -313,6 +315,15 @@ pub const BackendInstance = union(BackendType) {
             .CPU => |ptr| CPUBackend.layerNorm(ptr, matrix, gamma, beta, epsilon, allocator),
             .Metal => |ptr| MetalBackend.layerNorm(ptr, matrix, gamma, beta, epsilon, allocator),
             .CUDA => |ptr| CUDABackend.layerNorm(ptr, matrix, gamma, beta, epsilon, allocator),
+        };
+        return self.attachBackend(result);
+    }
+
+    pub fn causalSelfAttention(self: BackendInstance, query: *const BackendMatrix, key: *const BackendMatrix, value: *const BackendMatrix, heads: usize, allocator: std.mem.Allocator) !*BackendMatrix {
+        const result = try switch (self) {
+            .CPU => |ptr| CPUBackend.causalSelfAttention(ptr, query, key, value, heads, allocator),
+            .Metal => |ptr| MetalBackend.causalSelfAttention(ptr, query, key, value, heads, allocator),
+            .CUDA => |ptr| CUDABackend.causalSelfAttention(ptr, query, key, value, heads, allocator),
         };
         return self.attachBackend(result);
     }

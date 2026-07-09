@@ -42,6 +42,7 @@ typedef struct ZigNNCUDABackend {
     CUfunction apply_swiglu;
     CUfunction apply_gelu;
     CUfunction matrix_layer_norm;
+    CUfunction causal_self_attention;
     char device_name[256];
 } ZigNNCUDABackend;
 
@@ -211,7 +212,8 @@ static int cuda_load_functions(ZigNNCUDABackend* backend, char* error_buffer, un
         cuda_get_function(backend->module, &backend->apply_glu, "apply_glu", error_buffer, error_buffer_len) &&
         cuda_get_function(backend->module, &backend->apply_swiglu, "apply_swiglu", error_buffer, error_buffer_len) &&
         cuda_get_function(backend->module, &backend->apply_gelu, "apply_gelu", error_buffer, error_buffer_len) &&
-        cuda_get_function(backend->module, &backend->matrix_layer_norm, "matrix_layer_norm", error_buffer, error_buffer_len);
+        cuda_get_function(backend->module, &backend->matrix_layer_norm, "matrix_layer_norm", error_buffer, error_buffer_len) &&
+        cuda_get_function(backend->module, &backend->causal_self_attention, "causal_self_attention", error_buffer, error_buffer_len);
 }
 
 static CUfunction cuda_function_for_kernel_id(ZigNNCUDABackend* backend, int kernel_id) {
@@ -656,4 +658,22 @@ int cuda_launch_layer_norm(CUDABackendRef backend_ref, CUDABufferRef input_ref, 
     CUdeviceptr result_ptr = result->device_ptr;
     void* args[] = { &input_ptr, &gamma_ptr, &beta_ptr, &result_ptr, &rows, &cols, &epsilon };
     return cuda_launch_1d(backend, backend != NULL ? backend->matrix_layer_norm : NULL, rows, args);
+}
+
+int cuda_launch_causal_self_attention(CUDABackendRef backend_ref, CUDABufferRef query_ref, CUDABufferRef key_ref, CUDABufferRef value_ref, CUDABufferRef result_ref, unsigned int tokens, unsigned int channels, unsigned int heads) {
+    ZigNNCUDABackend* backend = (ZigNNCUDABackend*)backend_ref;
+    ZigNNCUDABuffer* query = (ZigNNCUDABuffer*)query_ref;
+    ZigNNCUDABuffer* key = (ZigNNCUDABuffer*)key_ref;
+    ZigNNCUDABuffer* value = (ZigNNCUDABuffer*)value_ref;
+    ZigNNCUDABuffer* result = (ZigNNCUDABuffer*)result_ref;
+    if (query == NULL || key == NULL || value == NULL || result == NULL) {
+        return 0;
+    }
+
+    CUdeviceptr query_ptr = query->device_ptr;
+    CUdeviceptr key_ptr = key->device_ptr;
+    CUdeviceptr value_ptr = value->device_ptr;
+    CUdeviceptr result_ptr = result->device_ptr;
+    void* args[] = { &query_ptr, &key_ptr, &value_ptr, &result_ptr, &tokens, &channels, &heads };
+    return cuda_launch_2d(backend, backend != NULL ? backend->causal_self_attention : NULL, tokens, heads, args);
 }

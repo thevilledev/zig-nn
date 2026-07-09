@@ -156,6 +156,10 @@ const CUDA = if (enable_cuda) struct {
     pub fn launchLayerNorm(backend_ref: *Backend, input: *Buffer, gamma: *Buffer, beta: *Buffer, result: *Buffer, rows: u32, cols: u32, epsilon: f32) bool {
         return c.cuda_launch_layer_norm(toC(backend_ref), toC(input), toC(gamma), toC(beta), toC(result), rows, cols, epsilon) != 0;
     }
+
+    pub fn launchCausalSelfAttention(backend_ref: *Backend, query: *Buffer, key: *Buffer, value: *Buffer, result: *Buffer, tokens: u32, channels: u32, heads: u32) bool {
+        return c.cuda_launch_causal_self_attention(toC(backend_ref), toC(query), toC(key), toC(value), toC(result), tokens, channels, heads) != 0;
+    }
 } else struct {
     pub const Backend = anyopaque;
     pub const Buffer = anyopaque;
@@ -251,6 +255,10 @@ const CUDA = if (enable_cuda) struct {
     }
 
     pub fn launchLayerNorm(_: *Backend, _: *Buffer, _: *Buffer, _: *Buffer, _: *Buffer, _: u32, _: u32, _: f32) bool {
+        return false;
+    }
+
+    pub fn launchCausalSelfAttention(_: *Backend, _: *Buffer, _: *Buffer, _: *Buffer, _: *Buffer, _: u32, _: u32, _: u32) bool {
         return false;
     }
 };
@@ -655,6 +663,26 @@ pub const CUDABackend = struct {
             return false;
         }
 
+        if (!self.completeSubmittedKernel()) return false;
+        result_cuda.markGPUModified();
+        return true;
+    }
+
+    fn dispatchCausalSelfAttention(self: *CUDABackend, query: *const Matrix, key: *const Matrix, value: *const Matrix, heads: usize, result: *Matrix) bool {
+        const backend_ref = self.backend orelse return false;
+        const query_cuda = getCUDAMatrix(query);
+        const key_cuda = getCUDAMatrix(key);
+        const value_cuda = getCUDAMatrix(value);
+        const result_cuda = getCUDAMatrix(result);
+        if (!query_cuda.syncToGPU() or !key_cuda.syncToGPU() or !value_cuda.syncToGPU()) return false;
+        const query_buffer = query_cuda.buffer orelse return false;
+        const key_buffer = key_cuda.buffer orelse return false;
+        const value_buffer = value_cuda.buffer orelse return false;
+        const result_buffer = result_cuda.buffer orelse return false;
+
+        if (!CUDA.launchCausalSelfAttention(backend_ref, query_buffer, key_buffer, value_buffer, result_buffer, toU32(query.rows), toU32(query.cols), toU32(heads))) {
+            return false;
+        }
         if (!self.completeSubmittedKernel()) return false;
         result_cuda.markGPUModified();
         return true;
@@ -1081,6 +1109,62 @@ pub const CUDABackend = struct {
             for (0..matrix.cols) |col| {
                 const normalized = (input_data.host_data[offset + col] - mean) * inverse_std;
                 result_data.host_data[offset + col] = normalized * gamma_data.host_data[col] + beta_data.host_data[col];
+            }
+        }
+        result_data.markHostModified();
+        return result;
+    }
+
+    pub fn causalSelfAttention(ptr: *anyopaque, query: *const Matrix, key: *const Matrix, value: *const Matrix, heads: usize, allocator: Allocator) error{ OutOfMemory, DimensionMismatch }!*Matrix {
+        if (heads == 0 or query.rows != key.rows or query.rows != value.rows or
+            query.cols != key.cols or query.cols != value.cols or query.cols % heads != 0)
+        {
+            return error.DimensionMismatch;
+        }
+
+        const self = @as(*CUDABackend, @ptrCast(@alignCast(ptr)));
+        const result = try initMatrix(ptr, allocator, query.rows, query.cols);
+        const query_data = getCUDAMatrix(query);
+        const key_data = getCUDAMatrix(key);
+        const value_data = getCUDAMatrix(value);
+        const result_data = getCUDAMatrix(result);
+        if (self.dispatchCausalSelfAttention(query, key, value, heads, result)) return result;
+
+        ensureHostData(query_data);
+        ensureHostData(key_data);
+        ensureHostData(value_data);
+        const probabilities = try allocator.alloc(f32, query.rows);
+        defer allocator.free(probabilities);
+        const head_width = query.cols / heads;
+        const attention_scale = 1.0 / @sqrt(@as(f32, @floatFromInt(head_width)));
+        for (0..query.rows) |query_position| {
+            for (0..heads) |head| {
+                const channel_offset = head * head_width;
+                var max_score = -std.math.inf(f32);
+                for (0..query_position + 1) |key_position| {
+                    var score: f32 = 0;
+                    for (0..head_width) |channel| {
+                        score += query_data.host_data[query_position * query.cols + channel_offset + channel] *
+                            key_data.host_data[key_position * key.cols + channel_offset + channel];
+                    }
+                    score *= attention_scale;
+                    probabilities[key_position] = score;
+                    max_score = @max(max_score, score);
+                }
+                var denominator: f32 = 0;
+                for (0..query_position + 1) |key_position| {
+                    const probability = @exp(probabilities[key_position] - max_score);
+                    probabilities[key_position] = probability;
+                    denominator += probability;
+                }
+                for (0..head_width) |channel| {
+                    var output: f32 = 0;
+                    for (0..query_position + 1) |key_position| {
+                        output += probabilities[key_position] / denominator *
+                            value_data.host_data[key_position * value.cols + channel_offset + channel];
+                    }
+                    result_data.host_data[query_position * result.cols + channel_offset + channel] = output;
+                }
             }
         }
         result_data.markHostModified();

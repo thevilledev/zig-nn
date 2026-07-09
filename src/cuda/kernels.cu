@@ -274,6 +274,57 @@ extern "C" __global__ void matrix_layer_norm(
     }
 }
 
+extern "C" __global__ void causal_self_attention(
+    const float* query,
+    const float* key,
+    const float* value,
+    float* result,
+    unsigned int tokens,
+    unsigned int channels,
+    unsigned int heads
+) {
+    unsigned int query_position = blockIdx.x * blockDim.x + threadIdx.x;
+    unsigned int head = blockIdx.y * blockDim.y + threadIdx.y;
+    if (query_position >= tokens || head >= heads) return;
+
+    unsigned int head_width = channels / heads;
+    unsigned int channel_offset = head * head_width;
+    float scale = rsqrtf((float)head_width);
+    float max_score = -INFINITY;
+    for (unsigned int key_position = 0; key_position <= query_position; key_position++) {
+        float score = 0.0f;
+        for (unsigned int channel = 0; channel < head_width; channel++) {
+            score += query[query_position * channels + channel_offset + channel] *
+                key[key_position * channels + channel_offset + channel];
+        }
+        max_score = fmaxf(max_score, score * scale);
+    }
+
+    float denominator = 0.0f;
+    for (unsigned int key_position = 0; key_position <= query_position; key_position++) {
+        float score = 0.0f;
+        for (unsigned int channel = 0; channel < head_width; channel++) {
+            score += query[query_position * channels + channel_offset + channel] *
+                key[key_position * channels + channel_offset + channel];
+        }
+        denominator += __expf(score * scale - max_score);
+    }
+
+    for (unsigned int output_channel = 0; output_channel < head_width; output_channel++) {
+        float output = 0.0f;
+        for (unsigned int key_position = 0; key_position <= query_position; key_position++) {
+            float score = 0.0f;
+            for (unsigned int channel = 0; channel < head_width; channel++) {
+                score += query[query_position * channels + channel_offset + channel] *
+                    key[key_position * channels + channel_offset + channel];
+            }
+            float probability = __expf(score * scale - max_score) / denominator;
+            output += probability * value[key_position * channels + channel_offset + output_channel];
+        }
+        result[query_position * channels + channel_offset + output_channel] = output;
+    }
+}
+
 extern "C" __global__ void apply_glu(
     const float* linear,
     const float* gating,
