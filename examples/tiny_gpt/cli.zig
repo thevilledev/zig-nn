@@ -800,7 +800,16 @@ pub fn main(init: std.process.Init) !void {
     else
         null;
 
-    const generated_tokens = if (options.corpus_prior)
+    const generated_tokens = if (options.device_preference != null and !options.corpus_prior)
+        try model.generateTokensDevice(
+            allocator,
+            options.prompt,
+            options.tokens,
+            options.temperature,
+            options.top_k,
+            options.device_preference.?,
+        )
+    else if (options.corpus_prior)
         try model.generateTokensWithCorpusPrior(
             allocator,
             options.prompt,

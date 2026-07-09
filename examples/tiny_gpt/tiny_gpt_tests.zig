@@ -364,3 +364,22 @@ test "device TinyGPT training syncs learned parameters back" {
     try testing.expectEqual(@as(usize, 30), stats.updates);
     try testing.expectEqual(@as(usize, 90), stats.tokens_seen);
 }
+
+test "device KV generation matches greedy legacy generation" {
+    const allocator = testing.allocator;
+    const config: Config = .{
+        .block_size = 4,
+        .n_layer = 1,
+        .n_head = 2,
+        .n_embd = 8,
+    };
+    var legacy = try TinyGPT.init(allocator, config, 44);
+    defer legacy.deinit();
+    var device_model = try TinyGPT.init(allocator, config, 44);
+    defer device_model.deinit();
+    const expected = try legacy.generateTokens(allocator, "ab", 6, 1.0, 1);
+    defer allocator.free(expected);
+    const actual = try device_model.generateTokensDevice(allocator, "ab", 6, 1.0, 1, .cpu);
+    defer allocator.free(actual);
+    try testing.expectEqualSlices(usize, expected, actual);
+}

@@ -378,6 +378,59 @@ pub const TinyGPT = struct {
         return tokens;
     }
 
+    pub fn generateTokensDevice(
+        self: *TinyGPT,
+        allocator: std.mem.Allocator,
+        prompt: []const u8,
+        max_new_tokens: usize,
+        temperature: f64,
+        top_k: usize,
+        preference: nn.DevicePreference,
+    ) ![]usize {
+        const prompt_len = if (prompt.len == 0) 1 else prompt.len;
+        var tokens = try allocator.alloc(usize, prompt_len + max_new_tokens);
+        errdefer allocator.free(tokens);
+        if (prompt.len == 0) {
+            tokens[0] = Tokenizer.encodeChar(' ');
+        } else {
+            for (prompt, 0..) |character, index| tokens[index] = Tokenizer.encodeChar(character);
+        }
+        if (max_new_tokens == 0) return tokens;
+
+        var device = try nn.Device.init(allocator, preference);
+        defer device.deinit();
+        var execution = nn.ExecutionContext.init(&device);
+        var decoder = try self.toDeviceDecoder(&execution);
+        defer decoder.deinit();
+        var cache = try decoder.initCache(&execution);
+        defer cache.deinit();
+        const initial_start = prompt_len - @min(prompt_len, self.config.block_size);
+        var logits = try forwardDeviceTokens(allocator, &decoder, &execution, &cache, tokens[initial_start..prompt_len], true);
+        defer logits.deinit();
+        const logit_values = try allocator.alloc(f32, self.config.vocab_size);
+        defer allocator.free(logit_values);
+        const scores = try allocator.alloc(f64, self.config.vocab_size);
+        defer allocator.free(scores);
+
+        var token_count = prompt_len;
+        for (0..max_new_tokens) |generated| {
+            try execution.readback(logits, logit_values);
+            const safe_temperature = if (temperature <= 0) 1.0 else temperature;
+            for (logit_values, scores) |logit, *score| score.* = @as(f64, logit) / safe_temperature;
+            tokens[token_count] = try self.sampleFromScores(scores, top_k);
+            token_count += 1;
+            if (generated + 1 == max_new_tokens) break;
+
+            const next_logits = if (cache.position == self.config.block_size) blk: {
+                const start = token_count - @min(token_count, self.config.block_size);
+                break :blk try forwardDeviceTokens(allocator, &decoder, &execution, &cache, tokens[start..token_count], true);
+            } else try forwardDeviceTokens(allocator, &decoder, &execution, &cache, tokens[token_count - 1 .. token_count], false);
+            logits.deinit();
+            logits = next_logits;
+        }
+        return tokens;
+    }
+
     pub fn generateTokensWithCorpusPrior(
         self: *TinyGPT,
         allocator: std.mem.Allocator,
@@ -673,6 +726,35 @@ pub const TinyGPT = struct {
         return vocab_size - 1;
     }
 };
+
+fn forwardDeviceTokens(
+    allocator: std.mem.Allocator,
+    decoder: *const nn.Transformer.Decoder,
+    execution: *nn.ExecutionContext,
+    cache: *nn.Transformer.DecoderCache,
+    token_ids: []const usize,
+    reset: bool,
+) !nn.Tensor {
+    if (token_ids.len == 0) return error.EmptySequence;
+    if (reset) cache.reset();
+    try execution.beginBatch();
+    var batch_active = true;
+    errdefer if (batch_active) execution.endBatch() catch {};
+    var last_logits: ?nn.Tensor = null;
+    errdefer if (last_logits) |*owned| owned.deinit();
+    for (token_ids) |token_id| {
+        const token_value = [_]f32{@floatFromInt(token_id)};
+        var token = try execution.upload(&.{ 1, 1 }, &token_value);
+        defer token.deinit();
+        const next = try decoder.forwardToken(execution, token, cache);
+        if (last_logits) |*owned| owned.deinit();
+        last_logits = next;
+    }
+    try execution.endBatch();
+    batch_active = false;
+    _ = allocator;
+    return last_logits.?;
+}
 
 fn matrixToTensor(allocator: std.mem.Allocator, source: Matrix, target: *nn.Tensor) !void {
     if (source.rows != target.shape.dims[0] or source.cols != target.shape.dims[1]) return error.DimensionMismatch;
