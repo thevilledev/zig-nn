@@ -285,6 +285,7 @@ fn addMetalSupport(b: *std.Build, mod: *std.Build.Module, enable_metal: bool, in
     if (!enable_metal) return;
 
     mod.linkFramework("Metal", .{});
+    mod.linkFramework("MetalPerformanceShaders", .{});
     mod.linkFramework("Foundation", .{});
     mod.linkFramework("CoreGraphics", .{});
     mod.linkSystemLibrary("c", .{});
@@ -315,6 +316,7 @@ fn addCudaSupport(b: *std.Build, mod: *std.Build.Module, enable_cuda: bool, incl
     mod.addRPath(.{ .cwd_relative = lib_path });
     mod.linkSystemLibrary("cuda", .{});
     mod.linkSystemLibrary("nvrtc", .{});
+    mod.linkSystemLibrary("cublas", .{});
     mod.linkSystemLibrary("c", .{});
 
     if (include_wrapper) {

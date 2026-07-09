@@ -1,7 +1,9 @@
 #include "cuda_wrapper.h"
 
 #include <cuda.h>
+#include <cublas_v2.h>
 #include <nvrtc.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,6 +17,7 @@ typedef struct ZigNNCUDABackend {
     CUdevice device;
     CUcontext context;
     CUmodule module;
+    cublasHandle_t cublas;
     CUfunction matrix_multiply;
     CUfunction matrix_add;
     CUfunction matrix_subtract;
@@ -319,6 +322,14 @@ CUDABackendRef cuda_backend_create(const char* kernel_source, char* error_buffer
         return NULL;
     }
 
+    if (cublasCreate(&backend->cublas) != CUBLAS_STATUS_SUCCESS) {
+        cuda_copy_message(error_buffer, error_buffer_len, "cuBLAS handle creation failed");
+        cuModuleUnload(backend->module);
+        cuCtxDestroy(backend->context);
+        free(backend);
+        return NULL;
+    }
+
     return (CUDABackendRef)backend;
 }
 
@@ -329,6 +340,9 @@ void cuda_backend_destroy(CUDABackendRef backend_ref) {
     }
 
     cuda_set_context(backend);
+    if (backend->cublas != NULL) {
+        cublasDestroy(backend->cublas);
+    }
     if (backend->module != NULL) {
         cuModuleUnload(backend->module);
     }
@@ -463,11 +477,41 @@ int cuda_launch_matrix_multiply(CUDABackendRef backend_ref, CUDABufferRef a_ref,
         return 0;
     }
 
-    CUdeviceptr a_ptr = a->device_ptr;
-    CUdeviceptr b_ptr = b->device_ptr;
-    CUdeviceptr result_ptr = result->device_ptr;
-    void* args[] = { &a_ptr, &b_ptr, &result_ptr, &a_rows, &a_cols, &b_cols };
-    return cuda_launch_2d(backend, backend != NULL ? backend->matrix_multiply : NULL, b_cols, a_rows, args);
+    if (!cuda_set_context(backend) || backend->cublas == NULL) {
+        return 0;
+    }
+
+    const float alpha = 1.0f;
+    const float beta = 0.0f;
+    const float* a_ptr = (const float*)(uintptr_t)a->device_ptr;
+    const float* b_ptr = (const float*)(uintptr_t)b->device_ptr;
+    float* result_ptr = (float*)(uintptr_t)result->device_ptr;
+
+    cublasStatus_t status = cublasSgemm(
+        backend->cublas,
+        CUBLAS_OP_N,
+        CUBLAS_OP_N,
+        (int)b_cols,
+        (int)a_rows,
+        (int)a_cols,
+        &alpha,
+        b_ptr,
+        (int)b_cols,
+        a_ptr,
+        (int)a_cols,
+        &beta,
+        result_ptr,
+        (int)b_cols
+    );
+    if (status == CUBLAS_STATUS_SUCCESS) {
+        return 2;
+    }
+
+    CUdeviceptr raw_a = a->device_ptr;
+    CUdeviceptr raw_b = b->device_ptr;
+    CUdeviceptr raw_result = result->device_ptr;
+    void* args[] = { &raw_a, &raw_b, &raw_result, &a_rows, &a_cols, &b_cols };
+    return cuda_launch_2d(backend, backend->matrix_multiply, b_cols, a_rows, args);
 }
 
 int cuda_launch_binary_kernel(CUDABackendRef backend_ref, int kernel_id, CUDABufferRef a_ref, CUDABufferRef b_ref, CUDABufferRef result_ref, unsigned int rows, unsigned int cols) {

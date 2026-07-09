@@ -87,6 +87,10 @@ const Metal = if (@import("builtin").os.tag == .macos and enable_metal) struct {
         return c.metal_buffer_download_f32(toC(buffer), data.ptr, data.len) != 0;
     }
 
+    pub fn encodeMatrixMultiply(device: *Device, command_buffer: *CommandBuffer, left: *Buffer, right: *Buffer, result: *Buffer, rows: usize, inner: usize, cols: usize) bool {
+        return c.metal_encode_matrix_multiply(toC(device), toC(command_buffer), toC(left), toC(right), toC(result), rows, inner, cols) != 0;
+    }
+
     pub fn deviceCreateLibraryFromSource(device: *Device, source: [*:0]const u8) ?*Library {
         var error_buffer: [2048]u8 = undefined;
         @memset(&error_buffer, 0);
@@ -188,6 +192,10 @@ const Metal = if (@import("builtin").os.tag == .macos and enable_metal) struct {
     }
 
     pub fn bufferDownloadF32(_: *Buffer, _: []f32) bool {
+        return false;
+    }
+
+    pub fn encodeMatrixMultiply(_: *Device, _: *CommandBuffer, _: *Buffer, _: *Buffer, _: *Buffer, _: usize, _: usize, _: usize) bool {
         return false;
     }
 
@@ -585,6 +593,18 @@ pub const MetalBackend = struct {
         const a_buffer = a_metal.buffer orelse return false;
         const b_buffer = b_metal.buffer orelse return false;
         const result_buffer = result_metal.buffer orelse return false;
+
+        if (self.device) |device| {
+            const command_buffer = Metal.commandQueueCreateCommandBuffer(command_queue) orelse return false;
+            defer Metal.release(command_buffer);
+            if (Metal.encodeMatrixMultiply(device, command_buffer, a_buffer, b_buffer, result_buffer, a.rows, a.cols, b.cols)) {
+                Metal.commandBufferCommit(command_buffer);
+                self.stats.vendor_gemm_launches += 1;
+                if (!self.completeSubmittedKernel(command_buffer)) return false;
+                result_metal.markGPUModified();
+                return true;
+            }
+        }
 
         const command_buffer = Metal.commandQueueCreateCommandBuffer(command_queue) orelse return false;
         defer Metal.release(command_buffer);

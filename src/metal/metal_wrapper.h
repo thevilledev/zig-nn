@@ -31,6 +31,7 @@ MTLBufferRef metal_device_create_buffer(MTLDeviceRef device, unsigned long lengt
 unsigned long metal_buffer_length(MTLBufferRef buffer);
 int metal_buffer_upload_f32(MTLBufferRef buffer, const float* source, unsigned long count);
 int metal_buffer_download_f32(MTLBufferRef buffer, float* destination, unsigned long count);
+int metal_encode_matrix_multiply(MTLDeviceRef device, MTLCommandBufferRef command_buffer, MTLBufferRef left, MTLBufferRef right, MTLBufferRef result, unsigned long rows, unsigned long inner, unsigned long cols);
 
 // Shader library and pipeline creation
 MTLLibraryRef metal_device_create_library_from_source(MTLDeviceRef device, const char* source, char* error_buffer, unsigned long error_buffer_len);

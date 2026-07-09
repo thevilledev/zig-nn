@@ -1,5 +1,6 @@
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
+#import <MetalPerformanceShaders/MetalPerformanceShaders.h>
 #import "metal_wrapper.h"
 #include <string.h>
 
@@ -117,6 +118,69 @@ int metal_buffer_download_f32(MTLBufferRef buffer_ref, float* destination, unsig
 
     memcpy(destination, source, required_len);
 
+    return 1;
+}
+
+int metal_encode_matrix_multiply(
+    MTLDeviceRef device_ref,
+    MTLCommandBufferRef command_buffer_ref,
+    MTLBufferRef left_ref,
+    MTLBufferRef right_ref,
+    MTLBufferRef result_ref,
+    unsigned long rows,
+    unsigned long inner,
+    unsigned long cols
+) {
+    id<MTLDevice> device = (id<MTLDevice>)device_ref;
+    id<MTLCommandBuffer> commandBuffer = (id<MTLCommandBuffer>)command_buffer_ref;
+    id<MTLBuffer> leftBuffer = (id<MTLBuffer>)left_ref;
+    id<MTLBuffer> rightBuffer = (id<MTLBuffer>)right_ref;
+    id<MTLBuffer> resultBuffer = (id<MTLBuffer>)result_ref;
+    if (device == nil || commandBuffer == nil || leftBuffer == nil || rightBuffer == nil || resultBuffer == nil) {
+        return 0;
+    }
+
+    MPSMatrixDescriptor* leftDescriptor = [MPSMatrixDescriptor
+        matrixDescriptorWithRows:rows
+        columns:inner
+        rowBytes:inner * sizeof(float)
+        dataType:MPSDataTypeFloat32];
+    MPSMatrixDescriptor* rightDescriptor = [MPSMatrixDescriptor
+        matrixDescriptorWithRows:inner
+        columns:cols
+        rowBytes:cols * sizeof(float)
+        dataType:MPSDataTypeFloat32];
+    MPSMatrixDescriptor* resultDescriptor = [MPSMatrixDescriptor
+        matrixDescriptorWithRows:rows
+        columns:cols
+        rowBytes:cols * sizeof(float)
+        dataType:MPSDataTypeFloat32];
+
+    MPSMatrix* left = [[MPSMatrix alloc] initWithBuffer:leftBuffer descriptor:leftDescriptor];
+    MPSMatrix* right = [[MPSMatrix alloc] initWithBuffer:rightBuffer descriptor:rightDescriptor];
+    MPSMatrix* result = [[MPSMatrix alloc] initWithBuffer:resultBuffer descriptor:resultDescriptor];
+    MPSMatrixMultiplication* operation = [[MPSMatrixMultiplication alloc]
+        initWithDevice:device
+        transposeLeft:NO
+        transposeRight:NO
+        resultRows:rows
+        resultColumns:cols
+        interiorColumns:inner
+        alpha:1.0
+        beta:0.0];
+    if (left == nil || right == nil || result == nil || operation == nil) {
+        [operation release];
+        [result release];
+        [right release];
+        [left release];
+        return 0;
+    }
+
+    [operation encodeToCommandBuffer:commandBuffer leftMatrix:left rightMatrix:right resultMatrix:result];
+    [operation release];
+    [result release];
+    [right release];
+    [left release];
     return 1;
 }
 

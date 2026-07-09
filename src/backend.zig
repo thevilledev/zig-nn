@@ -26,6 +26,7 @@ pub const RuntimeStats = struct {
     device_to_host_transfers: usize = 0,
     device_to_host_bytes: usize = 0,
     kernel_launches: usize = 0,
+    vendor_gemm_launches: usize = 0,
     synchronizations: usize = 0,
 };
 

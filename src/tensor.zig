@@ -410,18 +410,21 @@ test "auto device supports bulk f32 round trip" {
         try testing.expectEqual(@as(usize, 2), runtime_stats.host_to_device_transfers);
         try testing.expectEqual(@as(usize, 1), runtime_stats.device_to_host_transfers);
         try testing.expectEqual(@as(usize, 1), runtime_stats.kernel_launches);
+        try testing.expectEqual(@as(usize, 1), runtime_stats.vendor_gemm_launches);
         try testing.expectEqual(@as(usize, 1), runtime_stats.synchronizations);
     } else if (builtin.os.tag == .linux and build_options.enable_cuda) {
         try testing.expectEqual(BackendType.CUDA, device.backendType());
         try testing.expectEqual(@as(usize, 2), runtime_stats.host_to_device_transfers);
         try testing.expectEqual(@as(usize, 1), runtime_stats.device_to_host_transfers);
         try testing.expectEqual(@as(usize, 1), runtime_stats.kernel_launches);
+        try testing.expectEqual(@as(usize, 1), runtime_stats.vendor_gemm_launches);
         try testing.expectEqual(@as(usize, 1), runtime_stats.synchronizations);
     } else {
         try testing.expectEqual(BackendType.CPU, device.backendType());
         try testing.expectEqual(@as(usize, 0), runtime_stats.host_to_device_transfers);
         try testing.expectEqual(@as(usize, 0), runtime_stats.device_to_host_transfers);
         try testing.expectEqual(@as(usize, 0), runtime_stats.kernel_launches);
+        try testing.expectEqual(@as(usize, 0), runtime_stats.vendor_gemm_launches);
         try testing.expectEqual(@as(usize, 0), runtime_stats.synchronizations);
     }
 }
@@ -463,6 +466,7 @@ test "execution batch shares one gpu synchronization" {
         try testing.expectEqual(@as(usize, 2), runtime_stats.host_to_device_transfers);
         try testing.expectEqual(@as(usize, 1), runtime_stats.device_to_host_transfers);
         try testing.expectEqual(@as(usize, 2), runtime_stats.kernel_launches);
+        try testing.expectEqual(@as(usize, 1), runtime_stats.vendor_gemm_launches);
         try testing.expectEqual(@as(usize, 1), runtime_stats.synchronizations);
     }
 }

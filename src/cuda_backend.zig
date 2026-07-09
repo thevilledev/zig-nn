@@ -50,6 +50,12 @@ const CUDA = if (enable_cuda) struct {
         apply_swish_derivative = c.ZIG_NN_CUDA_KERNEL_APPLY_SWISH_DERIVATIVE,
     };
 
+    pub const MatmulKind = enum {
+        failed,
+        custom,
+        vendor,
+    };
+
     fn fromC(comptime T: type, value: ?*anyopaque) ?*T {
         return if (value) |ptr| @as(*T, @ptrCast(ptr)) else null;
     }
@@ -105,8 +111,12 @@ const CUDA = if (enable_cuda) struct {
         return c.cuda_buffer_download_f32(toC(backend_ref), toC(buffer), data.ptr, data.len) != 0;
     }
 
-    pub fn launchMatrixMultiply(backend_ref: *Backend, a: *Buffer, b: *Buffer, result: *Buffer, a_rows: u32, a_cols: u32, b_cols: u32) bool {
-        return c.cuda_launch_matrix_multiply(toC(backend_ref), toC(a), toC(b), toC(result), a_rows, a_cols, b_cols) != 0;
+    pub fn launchMatrixMultiply(backend_ref: *Backend, a: *Buffer, b: *Buffer, result: *Buffer, a_rows: u32, a_cols: u32, b_cols: u32) MatmulKind {
+        return switch (c.cuda_launch_matrix_multiply(toC(backend_ref), toC(a), toC(b), toC(result), a_rows, a_cols, b_cols)) {
+            1 => .custom,
+            2 => .vendor,
+            else => .failed,
+        };
     }
 
     pub fn launchBinaryKernel(backend_ref: *Backend, kernel_id: KernelId, a: *Buffer, b: *Buffer, result: *Buffer, rows: u32, cols: u32) bool {
@@ -162,6 +172,12 @@ const CUDA = if (enable_cuda) struct {
         apply_swish_derivative,
     };
 
+    pub const MatmulKind = enum {
+        failed,
+        custom,
+        vendor,
+    };
+
     pub fn createBackend() ?*Backend {
         return null;
     }
@@ -190,8 +206,8 @@ const CUDA = if (enable_cuda) struct {
         return false;
     }
 
-    pub fn launchMatrixMultiply(_: *Backend, _: *Buffer, _: *Buffer, _: *Buffer, _: u32, _: u32, _: u32) bool {
-        return false;
+    pub fn launchMatrixMultiply(_: *Backend, _: *Buffer, _: *Buffer, _: *Buffer, _: u32, _: u32, _: u32) MatmulKind {
+        return .failed;
     }
 
     pub fn launchBinaryKernel(_: *Backend, _: KernelId, _: *Buffer, _: *Buffer, _: *Buffer, _: u32, _: u32) bool {
@@ -453,10 +469,10 @@ pub const CUDABackend = struct {
         const b_buffer = b_cuda.buffer orelse return false;
         const result_buffer = result_cuda.buffer orelse return false;
 
-        if (!CUDA.launchMatrixMultiply(backend_ref, a_buffer, b_buffer, result_buffer, toU32(a.rows), toU32(a.cols), toU32(b.cols))) {
-            return false;
-        }
+        const kind = CUDA.launchMatrixMultiply(backend_ref, a_buffer, b_buffer, result_buffer, toU32(a.rows), toU32(a.cols), toU32(b.cols));
+        if (kind == .failed) return false;
 
+        if (kind == .vendor) self.stats.vendor_gemm_launches += 1;
         if (!self.completeSubmittedKernel()) return false;
         result_cuda.markGPUModified();
         return true;
