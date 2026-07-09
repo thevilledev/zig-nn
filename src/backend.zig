@@ -216,6 +216,35 @@ pub const Matrix = struct {
         self.backend.fillMatrix(self, value);
     }
 
+    /// Replaces all matrix values from a contiguous f32 slice.
+    ///
+    /// Backends may defer the actual device upload until the matrix is used by
+    /// a kernel. Keeping this operation bulk-oriented prevents callers from
+    /// coupling tensor construction to per-element backend access.
+    pub fn writeF32(self: *Matrix, values: []const f32) !void {
+        if (values.len != self.rows * self.cols) {
+            return error.DimensionMismatch;
+        }
+
+        for (values, 0..) |value, index| {
+            self.set(index / self.cols, index % self.cols, @floatCast(value));
+        }
+    }
+
+    /// Reads all matrix values into a contiguous f32 slice.
+    ///
+    /// GPU backends synchronize their host mirror at most once before the
+    /// element loop, so this remains one logical readback operation.
+    pub fn readF32(self: *const Matrix, values: []f32) !void {
+        if (values.len != self.rows * self.cols) {
+            return error.DimensionMismatch;
+        }
+
+        for (values, 0..) |*value, index| {
+            value.* = @floatCast(self.get(index / self.cols, index % self.cols));
+        }
+    }
+
     /// Creates a deep copy of an existing matrix
     pub fn copy(self: *const Matrix, allocator: Allocator) !*Matrix {
         return self.backend.copyMatrix(self, allocator);

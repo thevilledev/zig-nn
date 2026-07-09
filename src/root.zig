@@ -18,6 +18,7 @@ const cpu_backend_mod = @import("cpu_backend.zig");
 const metal_backend_mod = @import("metal_backend.zig");
 const cuda_backend_mod = @import("cuda_backend.zig");
 const quantization_mod = @import("quantization.zig");
+const tensor_mod = @import("tensor.zig");
 
 /// Library usage example:
 ///
@@ -61,6 +62,13 @@ pub const LossFunction = network_mod.LossFunction;
 pub const InferenceService = inference_service_mod.InferenceService;
 pub const visualiseNetwork = visualiser_mod.visualiseNetwork;
 pub const Quantization = quantization_mod;
+pub const Tensor = tensor_mod.Tensor;
+pub const TensorShape = tensor_mod.Shape;
+pub const TensorDType = tensor_mod.DType;
+pub const Device = tensor_mod.Device;
+pub const DevicePreference = tensor_mod.DevicePreference;
+pub const ExecutionContext = tensor_mod.ExecutionContext;
+pub const ExecutionStats = tensor_mod.ExecutionStats;
 
 // Export backend interface types
 pub const BackendMatrix = backend_mod.Matrix;
