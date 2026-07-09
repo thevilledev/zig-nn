@@ -437,6 +437,62 @@ pub const TinyGPT = struct {
         return count;
     }
 
+    pub fn toDeviceDecoder(self: *const TinyGPT, context: *nn.ExecutionContext) !nn.Transformer.Decoder {
+        var random_source = std.Random.DefaultPrng.init(0);
+        var decoder = try nn.Transformer.Decoder.init(context, .{
+            .vocabulary_size = self.config.vocab_size,
+            .maximum_sequence_length = self.config.block_size,
+            .layers = self.config.n_layer,
+            .heads = self.config.n_head,
+            .channels = self.config.n_embd,
+            .hidden_features = self.config.mlpHidden(),
+        }, random_source.random());
+        errdefer decoder.deinit();
+
+        try matrixToTensor(self.allocator, self.token_embedding, &decoder.token_embedding.weights);
+        try matrixToTensor(self.allocator, self.position_embedding, &decoder.position_embedding.weights);
+        for (self.blocks, decoder.blocks) |source, *target| {
+            try matrixToTensor(self.allocator, source.ln_1.weight, &target.attention_norm.gamma);
+            try matrixToTensor(self.allocator, source.ln_1.bias, &target.attention_norm.beta);
+            try combinedQkvToDevice(self.allocator, source.attn.c_attn, &target.attention);
+            try linearToDevice(self.allocator, source.attn.c_proj, &target.attention.output);
+            try matrixToTensor(self.allocator, source.ln_2.weight, &target.feed_forward_norm.gamma);
+            try matrixToTensor(self.allocator, source.ln_2.bias, &target.feed_forward_norm.beta);
+            try linearToDevice(self.allocator, source.mlp.c_fc, &target.feed_forward.expand);
+            try linearToDevice(self.allocator, source.mlp.c_proj, &target.feed_forward.project);
+        }
+        try matrixToTensor(self.allocator, self.ln_f.weight, &decoder.final_norm.gamma);
+        try matrixToTensor(self.allocator, self.ln_f.bias, &decoder.final_norm.beta);
+        try linearToDevice(self.allocator, self.lm_head, &decoder.language_model_head);
+        return decoder;
+    }
+
+    pub fn syncFromDeviceDecoder(self: *TinyGPT, decoder: *const nn.Transformer.Decoder) !void {
+        if (decoder.config.vocabulary_size != self.config.vocab_size or
+            decoder.config.maximum_sequence_length != self.config.block_size or
+            decoder.config.layers != self.config.n_layer or
+            decoder.config.heads != self.config.n_head or
+            decoder.config.channels != self.config.n_embd)
+        {
+            return error.DimensionMismatch;
+        }
+        try tensorToMatrix(self.allocator, decoder.token_embedding.weights, &self.token_embedding);
+        try tensorToMatrix(self.allocator, decoder.position_embedding.weights, &self.position_embedding);
+        for (self.blocks, decoder.blocks) |*target, source| {
+            try tensorToMatrix(self.allocator, source.attention_norm.gamma, &target.ln_1.weight);
+            try tensorToMatrix(self.allocator, source.attention_norm.beta, &target.ln_1.bias);
+            try combinedQkvFromDevice(self.allocator, source.attention, &target.attn.c_attn);
+            try linearFromDevice(self.allocator, source.attention.output, &target.attn.c_proj);
+            try tensorToMatrix(self.allocator, source.feed_forward_norm.gamma, &target.ln_2.weight);
+            try tensorToMatrix(self.allocator, source.feed_forward_norm.beta, &target.ln_2.bias);
+            try linearFromDevice(self.allocator, source.feed_forward.expand, &target.mlp.c_fc);
+            try linearFromDevice(self.allocator, source.feed_forward.project, &target.mlp.c_proj);
+        }
+        try tensorToMatrix(self.allocator, decoder.final_norm.gamma, &self.ln_f.weight);
+        try tensorToMatrix(self.allocator, decoder.final_norm.beta, &self.ln_f.bias);
+        try linearFromDevice(self.allocator, decoder.language_model_head, &self.lm_head);
+    }
+
     pub fn saveToFile(self: *const TinyGPT, path: []const u8) !void {
         try self.saveToFileWithMetadata(path, "");
     }
@@ -617,6 +673,76 @@ pub const TinyGPT = struct {
         return vocab_size - 1;
     }
 };
+
+fn matrixToTensor(allocator: std.mem.Allocator, source: Matrix, target: *nn.Tensor) !void {
+    if (source.rows != target.shape.dims[0] or source.cols != target.shape.dims[1]) return error.DimensionMismatch;
+    const values = try allocator.alloc(f32, source.data.len);
+    defer allocator.free(values);
+    for (source.data, values) |source_value, *target_value| target_value.* = @floatCast(source_value);
+    try target.writeF32(values);
+}
+
+fn tensorToMatrix(allocator: std.mem.Allocator, source: nn.Tensor, target: *Matrix) !void {
+    if (target.rows != source.shape.dims[0] or target.cols != source.shape.dims[1]) return error.DimensionMismatch;
+    const values = try allocator.alloc(f32, source.elementCount());
+    defer allocator.free(values);
+    try source.readF32(values);
+    for (values, target.data) |source_value, *target_value| target_value.* = source_value;
+}
+
+fn linearToDevice(allocator: std.mem.Allocator, source: Linear, target: *nn.Transformer.Linear) !void {
+    try matrixToTensor(allocator, source.weights, &target.weights);
+    try matrixToTensor(allocator, source.bias, &target.bias);
+}
+
+fn linearFromDevice(allocator: std.mem.Allocator, source: nn.Transformer.Linear, target: *Linear) !void {
+    try tensorToMatrix(allocator, source.weights, &target.weights);
+    try tensorToMatrix(allocator, source.bias, &target.bias);
+}
+
+fn combinedQkvToDevice(allocator: std.mem.Allocator, source: Linear, target: *nn.Transformer.CausalSelfAttention) !void {
+    const channels = target.channels;
+    if (source.weights.rows != channels or source.weights.cols != 3 * channels or source.bias.cols != 3 * channels) {
+        return error.DimensionMismatch;
+    }
+    const matrix_values = try allocator.alloc(f32, channels * channels);
+    defer allocator.free(matrix_values);
+    const bias_values = try allocator.alloc(f32, channels);
+    defer allocator.free(bias_values);
+    const projections = [_]*nn.Transformer.Linear{ &target.query, &target.key, &target.value };
+    for (projections, 0..) |projection, part| {
+        for (0..channels) |row| {
+            for (0..channels) |col| {
+                matrix_values[row * channels + col] = @floatCast(source.weights.data[row * source.weights.cols + part * channels + col]);
+            }
+        }
+        for (0..channels) |col| bias_values[col] = @floatCast(source.bias.data[part * channels + col]);
+        try projection.weights.writeF32(matrix_values);
+        try projection.bias.writeF32(bias_values);
+    }
+}
+
+fn combinedQkvFromDevice(allocator: std.mem.Allocator, source: nn.Transformer.CausalSelfAttention, target: *Linear) !void {
+    const channels = source.channels;
+    if (target.weights.rows != channels or target.weights.cols != 3 * channels or target.bias.cols != 3 * channels) {
+        return error.DimensionMismatch;
+    }
+    const matrix_values = try allocator.alloc(f32, channels * channels);
+    defer allocator.free(matrix_values);
+    const bias_values = try allocator.alloc(f32, channels);
+    defer allocator.free(bias_values);
+    const projections = [_]nn.Transformer.Linear{ source.query, source.key, source.value };
+    for (projections, 0..) |projection, part| {
+        try projection.weights.readF32(matrix_values);
+        try projection.bias.readF32(bias_values);
+        for (0..channels) |row| {
+            for (0..channels) |col| {
+                target.weights.data[row * target.weights.cols + part * channels + col] = matrix_values[row * channels + col];
+            }
+        }
+        for (0..channels) |col| target.bias.data[part * channels + col] = bias_values[col];
+    }
+}
 
 fn writeMatrix(writer: anytype, matrix: Matrix) !void {
     try writer.writeInt(u32, @intCast(matrix.rows), .little);

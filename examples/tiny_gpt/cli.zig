@@ -1,4 +1,5 @@
 const std = @import("std");
+const nn = @import("nn");
 const config_mod = @import("config.zig");
 const model_module = @import("model.zig");
 const loss_mod = @import("loss.zig");
@@ -16,6 +17,7 @@ const FullTrainingOptions = training.FullTrainingOptions;
 const FullTrainingStats = training.FullTrainingStats;
 const trainOutputHeadOnCorpus = training.trainOutputHeadOnCorpus;
 const trainFullOnCorpus = training.trainFullOnCorpus;
+const trainFullOnCorpusDevice = training.trainFullOnCorpusDevice;
 
 pub const CliOptions = struct {
     prompt: []const u8 = "to be",
@@ -43,6 +45,7 @@ pub const CliOptions = struct {
     full_train_stride: usize = 1,
     full_batch_size: usize = 1,
     full_optimizer: OptimizerKind = .sgd,
+    device_preference: ?nn.DevicePreference = null,
     full_weight_decay: f64 = 0.0,
     adam_beta1: f64 = 0.9,
     adam_beta2: f64 = 0.999,
@@ -378,6 +381,10 @@ pub fn parseArgs(args: []const [:0]const u8) !CliOptions {
             i += 1;
             if (i >= args.len) return error.MissingArgument;
             options.full_optimizer = try parseOptimizerKind(args[i]);
+        } else if (std.mem.eql(u8, arg, "--backend")) {
+            i += 1;
+            if (i >= args.len) return error.MissingArgument;
+            options.device_preference = try parseDevicePreference(args[i]);
         } else if (std.mem.eql(u8, arg, "--weight-decay")) {
             i += 1;
             if (i >= args.len) return error.MissingArgument;
@@ -449,6 +456,14 @@ fn parseOptimizerKind(value: []const u8) !OptimizerKind {
     return error.UnknownOptimizer;
 }
 
+fn parseDevicePreference(value: []const u8) !nn.DevicePreference {
+    if (std.mem.eql(u8, value, "cpu")) return .cpu;
+    if (std.mem.eql(u8, value, "auto")) return .auto;
+    if (std.mem.eql(u8, value, "metal")) return .metal;
+    if (std.mem.eql(u8, value, "cuda")) return .cuda;
+    return error.UnknownBackend;
+}
+
 fn parseLearningRateSchedule(value: []const u8) !LearningRateSchedule {
     if (std.mem.eql(u8, value, "constant")) return .constant;
     if (std.mem.eql(u8, value, "linear")) return .linear;
@@ -488,6 +503,7 @@ fn printUsage(writer: anytype) !void {
         \\  --full-train-stride <n>  Full-model corpus window stride (default: 1)
         \\  --full-batch-size <n>    Full-model corpus windows per step (default: 1)
         \\  --optimizer <name>       sgd or adamw for full training (default: sgd)
+        \\  --backend <name>         Train via cpu, auto, metal, or cuda tensor backend
         \\  --weight-decay <f>       Full-training weight decay (default: 0)
         \\  --adam-beta1 <f>         AdamW beta1 (default: 0.9)
         \\  --adam-beta2 <f>         AdamW beta2 (default: 0.999)
@@ -758,25 +774,29 @@ pub fn main(init: std.process.Init) !void {
         try trainOutputHeadOnCorpus(&model, training_corpus, options.train_epochs, options.learning_rate)
     else
         null;
+    const full_training_options: FullTrainingOptions = .{
+        .steps = options.full_train_steps,
+        .learning_rate = options.full_learning_rate,
+        .min_learning_rate = options.min_learning_rate,
+        .lr_schedule = options.lr_schedule,
+        .warmup_steps = options.warmup_steps,
+        .context_len = config.block_size,
+        .stride = options.full_train_stride,
+        .batch_size = options.full_batch_size,
+        .optimizer = options.full_optimizer,
+        .weight_decay = options.full_weight_decay,
+        .gradient_clip = 1.0,
+        .random_seed = options.seed,
+        .adam_beta1 = options.adam_beta1,
+        .adam_beta2 = options.adam_beta2,
+        .adam_epsilon = options.adam_epsilon,
+        .eval_windows = options.eval_windows,
+    };
     const full_training_stats: ?FullTrainingStats = if (options.train_full)
-        try trainFullOnCorpus(&model, training_corpus, validation_corpus, .{
-            .steps = options.full_train_steps,
-            .learning_rate = options.full_learning_rate,
-            .min_learning_rate = options.min_learning_rate,
-            .lr_schedule = options.lr_schedule,
-            .warmup_steps = options.warmup_steps,
-            .context_len = config.block_size,
-            .stride = options.full_train_stride,
-            .batch_size = options.full_batch_size,
-            .optimizer = options.full_optimizer,
-            .weight_decay = options.full_weight_decay,
-            .gradient_clip = 1.0,
-            .random_seed = options.seed,
-            .adam_beta1 = options.adam_beta1,
-            .adam_beta2 = options.adam_beta2,
-            .adam_epsilon = options.adam_epsilon,
-            .eval_windows = options.eval_windows,
-        })
+        if (options.device_preference) |preference|
+            try trainFullOnCorpusDevice(&model, training_corpus, validation_corpus, full_training_options, preference)
+        else
+            try trainFullOnCorpus(&model, training_corpus, validation_corpus, full_training_options)
     else
         null;
 

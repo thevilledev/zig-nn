@@ -537,6 +537,103 @@ pub fn trainFullOnCorpus(
     };
 }
 
+pub fn trainFullOnCorpusDevice(
+    model: *TinyGPT,
+    corpus: []const u8,
+    validation_corpus: ?[]const u8,
+    options: FullTrainingOptions,
+    preference: nn.DevicePreference,
+) !FullTrainingStats {
+    if (options.optimizer != .sgd) return error.UnsupportedDeviceOptimizer;
+    if (options.batch_size > 1) return error.UnsupportedDeviceBatching;
+    if (options.weight_decay != 0) return error.UnsupportedDeviceWeightDecay;
+
+    const allocator = model.allocator;
+    const tokens = try Tokenizer.encode(allocator, corpus);
+    defer allocator.free(tokens);
+    if (tokens.len < 2) return error.SequenceTooShort;
+    const context_len = @min(@max(options.context_len, @as(usize, 1)), @min(model.config.block_size, tokens.len - 1));
+    const window_count = tokens.len - context_len;
+    if (window_count == 0) return error.SequenceTooShort;
+    const eval_windows = @max(options.eval_windows, @as(usize, 1));
+    const initial_loss = try averageCorpusLoss(model, tokens, context_len, eval_windows);
+    var validation_tokens: ?[]usize = null;
+    defer if (validation_tokens) |items| allocator.free(items);
+    var validation_initial_loss: ?f64 = null;
+    if (validation_corpus) |validation_text| {
+        const encoded = try Tokenizer.encode(allocator, validation_text);
+        if (encoded.len > context_len) {
+            validation_tokens = encoded;
+            validation_initial_loss = try averageCorpusLoss(model, encoded, context_len, eval_windows);
+        } else {
+            allocator.free(encoded);
+        }
+    }
+
+    var device = try nn.Device.init(allocator, preference);
+    defer device.deinit();
+    var execution = nn.ExecutionContext.init(&device);
+    var decoder = try model.toDeviceDecoder(&execution);
+    defer decoder.deinit();
+    const input_values = try allocator.alloc(f32, context_len);
+    defer allocator.free(input_values);
+    const position_values = try allocator.alloc(f32, context_len);
+    defer allocator.free(position_values);
+    const target_values = try allocator.alloc(f32, context_len * model.config.vocab_size);
+    defer allocator.free(target_values);
+    for (position_values, 0..) |*position, index| position.* = @floatFromInt(index);
+
+    var training_prng = std.Random.DefaultPrng.init(options.random_seed);
+    const random = training_prng.random();
+    const stride = @max(options.stride, @as(usize, 1));
+    const random_window_count = (window_count + stride - 1) / stride;
+    for (0..options.steps) |step| {
+        const start = if (random_window_count == 1)
+            0
+        else
+            random.uintLessThan(usize, random_window_count) * stride;
+        @memset(target_values, 0);
+        for (0..context_len) |position| {
+            input_values[position] = @floatFromInt(tokens[start + position]);
+            const target = tokens[start + position + 1];
+            target_values[position * model.config.vocab_size + target] = 1;
+        }
+        var input_tensor = try execution.upload(&.{ context_len, 1 }, input_values);
+        defer input_tensor.deinit();
+        var position_tensor = try execution.upload(&.{ context_len, 1 }, position_values);
+        defer position_tensor.deinit();
+        var target_tensor = try execution.upload(&.{ context_len, model.config.vocab_size }, target_values);
+        defer target_tensor.deinit();
+        const optimizer = try nn.Transformer.Sgd.init(@floatCast(scheduledLearningRate(options, step)));
+        _ = try decoder.trainStep(&execution, input_tensor, position_tensor, target_tensor, optimizer);
+    }
+    try model.syncFromDeviceDecoder(&decoder);
+
+    const final_loss = try averageCorpusLoss(model, tokens, context_len, eval_windows);
+    const validation_final_loss: ?f64 = if (validation_tokens) |items|
+        try averageCorpusLoss(model, items, context_len, eval_windows)
+    else
+        null;
+    const final_learning_rate = if (options.steps == 0)
+        options.learning_rate
+    else
+        scheduledLearningRate(options, options.steps - 1);
+    return .{
+        .steps = options.steps,
+        .updates = options.steps,
+        .batch_size = 1,
+        .tokens_seen = options.steps * context_len,
+        .initial_loss = initial_loss,
+        .final_loss = final_loss,
+        .validation_initial_loss = validation_initial_loss,
+        .validation_final_loss = validation_final_loss,
+        .learning_rate_initial = if (options.steps == 0) options.learning_rate else scheduledLearningRate(options, 0),
+        .learning_rate_final = final_learning_rate,
+        .learning_rate_min = @min(options.min_learning_rate, options.learning_rate),
+        .eval_windows = eval_windows,
+    };
+}
+
 fn averageCorpusLoss(
     model: *TinyGPT,
     tokens: []const usize,

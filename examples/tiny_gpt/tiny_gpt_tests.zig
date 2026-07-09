@@ -1,4 +1,5 @@
 const std = @import("std");
+const nn = @import("nn");
 const config_mod = @import("config.zig");
 const model_mod = @import("model.zig");
 const loss_mod = @import("loss.zig");
@@ -15,6 +16,7 @@ const prepareNextTokenTargets = loss_mod.prepareNextTokenTargets;
 const crossEntropyLoss = loss_mod.crossEntropyLoss;
 const trainOutputHeadOnCorpus = training.trainOutputHeadOnCorpus;
 const trainFullOnCorpus = training.trainFullOnCorpus;
+const trainFullOnCorpusDevice = training.trainFullOnCorpusDevice;
 const scheduledLearningRate = training.scheduledLearningRate;
 const causalSoftmax = model_mod.causalSoftmax;
 const resolvedEvalChars = cli.resolvedEvalChars;
@@ -290,4 +292,75 @@ test "full transformer training lowers corpus loss" {
     try testing.expect(stats.validation_initial_loss != null);
     try testing.expectEqual(@as(usize, 4), stats.eval_windows);
     try testing.expectApproxEqAbs(0.01, stats.learning_rate_final, 1e-12);
+}
+
+test "device decoder adapter preserves TinyGPT logits" {
+    const allocator = testing.allocator;
+    const config: Config = .{
+        .block_size = 4,
+        .n_layer = 1,
+        .n_head = 2,
+        .n_embd = 8,
+    };
+    var model = try TinyGPT.init(allocator, config, 77);
+    defer model.deinit();
+    var expected = try model.forward(&.{ 0, 1, 2 });
+    defer expected.deinit();
+
+    var device = try nn.Device.init(allocator, .cpu);
+    defer device.deinit();
+    var context = nn.ExecutionContext.init(&device);
+    var decoder = try model.toDeviceDecoder(&context);
+    defer decoder.deinit();
+    var tokens = try context.upload(&.{ 3, 1 }, &.{ 0, 1, 2 });
+    defer tokens.deinit();
+    var positions = try context.upload(&.{ 3, 1 }, &.{ 0, 1, 2 });
+    defer positions.deinit();
+    try context.beginBatch();
+    var actual = try decoder.forward(&context, tokens, positions);
+    try context.endBatch();
+    defer actual.deinit();
+    const actual_values = try allocator.alloc(f32, actual.elementCount());
+    defer allocator.free(actual_values);
+    try context.readback(actual, actual_values);
+
+    for (expected.data, actual_values) |expected_value, actual_value| {
+        try testing.expectApproxEqAbs(@as(f32, @floatCast(expected_value)), actual_value, 5e-4);
+    }
+
+    const original_weight = model.lm_head.weights.data[0];
+    decoder.language_model_head.weights.fill(0.25);
+    try model.syncFromDeviceDecoder(&decoder);
+    try testing.expect(model.lm_head.weights.data[0] != original_weight);
+    try testing.expectApproxEqAbs(@as(f64, 0.25), model.lm_head.weights.data[0], 1e-7);
+}
+
+test "CLI parses explicit tensor backend" {
+    const options = try cli.parseArgs(&.{ "--train-full", "--backend", "cpu", "--optimizer", "sgd" });
+    try testing.expectEqual(nn.DevicePreference.cpu, options.device_preference.?);
+    try testing.expectError(error.UnknownBackend, cli.parseArgs(&.{ "--backend", "quantum" }));
+}
+
+test "device TinyGPT training syncs learned parameters back" {
+    const allocator = testing.allocator;
+    const config: Config = .{
+        .block_size = 3,
+        .n_layer = 1,
+        .n_head = 1,
+        .n_embd = 4,
+    };
+    var model = try TinyGPT.init(allocator, config, 31);
+    defer model.deinit();
+    const stats = try trainFullOnCorpusDevice(&model, "abababababababab\n", null, .{
+        .steps = 30,
+        .learning_rate = 0.03,
+        .context_len = config.block_size,
+        .optimizer = .sgd,
+        .batch_size = 1,
+        .random_seed = 31,
+        .eval_windows = 4,
+    }, .cpu);
+    try testing.expect(stats.final_loss < stats.initial_loss);
+    try testing.expectEqual(@as(usize, 30), stats.updates);
+    try testing.expectEqual(@as(usize, 90), stats.tokens_seen);
 }
