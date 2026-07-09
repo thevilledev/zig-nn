@@ -368,6 +368,8 @@ pub const MetalBackend = struct {
     causal_attention_pipeline: ?*Metal.ComputePipelineState,
     causal_attention_backward_probabilities_pipeline: ?*Metal.ComputePipelineState,
     causal_attention_backward_gradients_pipeline: ?*Metal.ComputePipelineState,
+    embedding_lookup_pipeline: ?*Metal.ComputePipelineState,
+    embedding_gradient_pipeline: ?*Metal.ComputePipelineState,
 
     // Softmax pipelines
     softmax_find_max_pipeline: ?*Metal.ComputePipelineState,
@@ -426,6 +428,8 @@ pub const MetalBackend = struct {
             .causal_attention_pipeline = null,
             .causal_attention_backward_probabilities_pipeline = null,
             .causal_attention_backward_gradients_pipeline = null,
+            .embedding_lookup_pipeline = null,
+            .embedding_gradient_pipeline = null,
             .softmax_find_max_pipeline = null,
             .softmax_exp_sum_pipeline = null,
             .softmax_normalize_pipeline = null,
@@ -473,6 +477,8 @@ pub const MetalBackend = struct {
         Metal.release(self.causal_attention_pipeline);
         Metal.release(self.causal_attention_backward_probabilities_pipeline);
         Metal.release(self.causal_attention_backward_gradients_pipeline);
+        Metal.release(self.embedding_lookup_pipeline);
+        Metal.release(self.embedding_gradient_pipeline);
         Metal.release(self.softmax_find_max_pipeline);
         Metal.release(self.softmax_exp_sum_pipeline);
         Metal.release(self.softmax_normalize_pipeline);
@@ -512,6 +518,8 @@ pub const MetalBackend = struct {
         try self.loadPipeline(&self.causal_attention_pipeline, "causal_self_attention");
         try self.loadPipeline(&self.causal_attention_backward_probabilities_pipeline, "causal_attention_probabilities_backward");
         try self.loadPipeline(&self.causal_attention_backward_gradients_pipeline, "causal_attention_input_gradients");
+        try self.loadPipeline(&self.embedding_lookup_pipeline, "embedding_lookup");
+        try self.loadPipeline(&self.embedding_gradient_pipeline, "embedding_gradient");
         try self.loadPipeline(&self.softmax_find_max_pipeline, "softmax_find_max");
         try self.loadPipeline(&self.softmax_exp_sum_pipeline, "softmax_exp_and_sum");
         try self.loadPipeline(&self.softmax_normalize_pipeline, "softmax_normalize");
@@ -1050,6 +1058,58 @@ pub const MetalBackend = struct {
         query_gradient_data.markGPUModified();
         key_gradient_data.markGPUModified();
         value_gradient_data.markGPUModified();
+        return true;
+    }
+
+    fn dispatchEmbeddingLookup(self: *MetalBackend, table: *const Matrix, indices: *const Matrix, result: *Matrix) bool {
+        const pipeline = self.embedding_lookup_pipeline orelse return false;
+        const command_queue = self.command_queue orelse return false;
+        const table_data = getMetalMatrix(table);
+        const indices_data = getMetalMatrix(indices);
+        const result_data = getMetalMatrix(result);
+        if (!table_data.syncToGPU() or !indices_data.syncToGPU()) return false;
+        const command_buffer = Metal.commandQueueCreateCommandBuffer(command_queue) orelse return false;
+        defer Metal.release(command_buffer);
+        const encoder = Metal.commandBufferCreateComputeCommandEncoder(command_buffer) orelse return false;
+        defer Metal.release(encoder);
+        Metal.computeEncoderSetPipelineState(encoder, pipeline);
+        Metal.computeEncoderSetBuffer(encoder, table_data.buffer orelse return false, 0, 0);
+        Metal.computeEncoderSetBuffer(encoder, indices_data.buffer orelse return false, 0, 1);
+        Metal.computeEncoderSetBuffer(encoder, result_data.buffer orelse return false, 0, 2);
+        setU32(encoder, toU32(table.rows), 3);
+        setU32(encoder, toU32(indices.rows), 4);
+        setU32(encoder, toU32(table.cols), 5);
+        Metal.computeEncoderDispatchThreads(encoder, pipeline, table.cols, indices.rows, 1);
+        Metal.computeEncoderEndEncoding(encoder);
+        Metal.commandBufferCommit(command_buffer);
+        if (!self.completeSubmittedKernel(command_buffer)) return false;
+        result_data.markGPUModified();
+        return true;
+    }
+
+    fn dispatchEmbeddingGradient(self: *MetalBackend, indices: *const Matrix, output_gradient: *const Matrix, result: *Matrix) bool {
+        const pipeline = self.embedding_gradient_pipeline orelse return false;
+        const command_queue = self.command_queue orelse return false;
+        const indices_data = getMetalMatrix(indices);
+        const output_gradient_data = getMetalMatrix(output_gradient);
+        const result_data = getMetalMatrix(result);
+        if (!indices_data.syncToGPU() or !output_gradient_data.syncToGPU()) return false;
+        const command_buffer = Metal.commandQueueCreateCommandBuffer(command_queue) orelse return false;
+        defer Metal.release(command_buffer);
+        const encoder = Metal.commandBufferCreateComputeCommandEncoder(command_buffer) orelse return false;
+        defer Metal.release(encoder);
+        Metal.computeEncoderSetPipelineState(encoder, pipeline);
+        Metal.computeEncoderSetBuffer(encoder, indices_data.buffer orelse return false, 0, 0);
+        Metal.computeEncoderSetBuffer(encoder, output_gradient_data.buffer orelse return false, 0, 1);
+        Metal.computeEncoderSetBuffer(encoder, result_data.buffer orelse return false, 0, 2);
+        setU32(encoder, toU32(result.rows), 3);
+        setU32(encoder, toU32(indices.rows), 4);
+        setU32(encoder, toU32(result.cols), 5);
+        Metal.computeEncoderDispatchThreads(encoder, pipeline, result.cols, result.rows, 1);
+        Metal.computeEncoderEndEncoding(encoder);
+        Metal.commandBufferCommit(command_buffer);
+        if (!self.completeSubmittedKernel(command_buffer)) return false;
+        result_data.markGPUModified();
         return true;
     }
 
@@ -1784,6 +1844,51 @@ pub const MetalBackend = struct {
         key_gradient_data.markHostModified();
         value_gradient_data.markHostModified();
         return gradients;
+    }
+
+    pub fn embeddingLookup(ptr: *anyopaque, table: *const Matrix, indices: *const Matrix, allocator: Allocator) error{ OutOfMemory, DimensionMismatch, InvalidIndex }!*Matrix {
+        if (indices.cols != 1) return error.DimensionMismatch;
+        const result = try initMatrix(ptr, allocator, indices.rows, table.cols);
+        errdefer deinitMatrix(ptr, result);
+        const self = @as(*MetalBackend, @ptrCast(@alignCast(ptr)));
+        if (self.dispatchEmbeddingLookup(table, indices, result)) return result;
+        const table_data = getMetalMatrix(table);
+        const indices_data = getMetalMatrix(indices);
+        const result_data = getMetalMatrix(result);
+        ensureHostData(table_data);
+        ensureHostData(indices_data);
+        for (0..indices.rows) |row| {
+            const raw_index = indices_data.host_data[row];
+            if (!std.math.isFinite(raw_index) or raw_index < 0 or @floor(raw_index) != raw_index or raw_index >= @as(f32, @floatFromInt(table.rows))) return error.InvalidIndex;
+            const index: usize = @intFromFloat(raw_index);
+            @memcpy(result_data.host_data[row * table.cols ..][0..table.cols], table_data.host_data[index * table.cols ..][0..table.cols]);
+        }
+        result_data.markHostModified();
+        return result;
+    }
+
+    pub fn embeddingGradient(ptr: *anyopaque, indices: *const Matrix, output_gradient: *const Matrix, vocabulary_size: usize, allocator: Allocator) error{ OutOfMemory, DimensionMismatch, InvalidIndex }!*Matrix {
+        if (indices.cols != 1 or indices.rows != output_gradient.rows or vocabulary_size == 0) return error.DimensionMismatch;
+        const result = try initMatrix(ptr, allocator, vocabulary_size, output_gradient.cols);
+        errdefer deinitMatrix(ptr, result);
+        const self = @as(*MetalBackend, @ptrCast(@alignCast(ptr)));
+        if (self.dispatchEmbeddingGradient(indices, output_gradient, result)) return result;
+        const indices_data = getMetalMatrix(indices);
+        const output_gradient_data = getMetalMatrix(output_gradient);
+        const result_data = getMetalMatrix(result);
+        ensureHostData(indices_data);
+        ensureHostData(output_gradient_data);
+        @memset(result_data.host_data, 0);
+        for (0..indices.rows) |row| {
+            const raw_index = indices_data.host_data[row];
+            if (!std.math.isFinite(raw_index) or raw_index < 0 or @floor(raw_index) != raw_index or raw_index >= @as(f32, @floatFromInt(vocabulary_size))) return error.InvalidIndex;
+            const index: usize = @intFromFloat(raw_index);
+            for (0..output_gradient.cols) |col| {
+                result_data.host_data[index * output_gradient.cols + col] += output_gradient_data.host_data[row * output_gradient.cols + col];
+            }
+        }
+        result_data.markHostModified();
+        return result;
     }
 
     pub fn applyGLU(ptr: *anyopaque, linear_part: *const Matrix, gating_part: *const Matrix, allocator: Allocator) error{ OutOfMemory, DimensionMismatch }!*Matrix {

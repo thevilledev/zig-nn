@@ -362,6 +362,14 @@ pub const Matrix = struct {
         return self.backend.causalSelfAttentionBackward(self, key, value, output_gradient, heads, allocator);
     }
 
+    pub fn embeddingLookup(self: *const Matrix, indices: *const Matrix, allocator: Allocator) !*Matrix {
+        return self.backend.embeddingLookup(self, indices, allocator);
+    }
+
+    pub fn embeddingGradient(self: *const Matrix, indices: *const Matrix, vocabulary_size: usize, allocator: Allocator) !*Matrix {
+        return self.backend.embeddingGradient(indices, self, vocabulary_size, allocator);
+    }
+
     pub fn applyGLU(self: *const Matrix, gating_part: *const Matrix, allocator: Allocator) !*Matrix {
         // Assuming GLU is self * sigmoid(gating_part)
         return self.backend.applyGLU(self, gating_part, allocator);

@@ -471,6 +471,34 @@ pub const ExecutionContext = struct {
         };
     }
 
+    pub fn embedding(self: *ExecutionContext, table: Tensor, indices: Tensor) !Tensor {
+        if (table.shape.rank != 2 or indices.shape.rank != 2 or indices.shape.dims[1] != 1) return error.InvalidRank;
+        if (table.backendType() != indices.backendType()) return error.BackendMismatch;
+        const matrix = try table.matrix.embeddingLookup(indices.matrix, self.device.allocator);
+        self.stats.kernels += 1;
+        return .{
+            .matrix = matrix,
+            .shape = try Shape.init(&.{ indices.shape.dims[0], table.shape.dims[1] }),
+            .allocator = self.device.allocator,
+        };
+    }
+
+    pub fn embeddingBackward(self: *ExecutionContext, indices: Tensor, output_gradient: Tensor, vocabulary_size: usize) !Tensor {
+        if (indices.shape.rank != 2 or output_gradient.shape.rank != 2 or indices.shape.dims[1] != 1 or
+            indices.shape.dims[0] != output_gradient.shape.dims[0])
+        {
+            return error.DimensionMismatch;
+        }
+        if (indices.backendType() != output_gradient.backendType()) return error.BackendMismatch;
+        const matrix = try output_gradient.matrix.embeddingGradient(indices.matrix, vocabulary_size, self.device.allocator);
+        self.stats.kernels += 1;
+        return .{
+            .matrix = matrix,
+            .shape = try Shape.init(&.{ vocabulary_size, output_gradient.shape.dims[1] }),
+            .allocator = self.device.allocator,
+        };
+    }
+
     pub fn softmax(self: *ExecutionContext, input: Tensor) !Tensor {
         if (input.shape.rank != 2) return error.InvalidRank;
         const matrix = try input.matrix.applySoftmax(self.device.allocator);
@@ -1049,6 +1077,45 @@ test "transformer backward kernels share one device synchronization" {
         try testing.expectEqual(@as(usize, 5), runtime_stats.host_to_device_transfers);
         try testing.expectEqual(@as(usize, 2), runtime_stats.device_to_host_transfers);
         try testing.expectEqual(@as(usize, 3), runtime_stats.kernel_launches);
+        try testing.expectEqual(@as(usize, 1), runtime_stats.synchronizations);
+    }
+}
+
+test "embedding lookup and repeated-token gradients stay on device" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+    var device = try Device.init(allocator, .auto);
+    defer device.deinit();
+    var context = ExecutionContext.init(&device);
+    context.resetStats();
+
+    var table = try context.upload(&.{ 3, 2 }, &.{ 1, 2, 3, 4, 5, 6 });
+    defer table.deinit();
+    var indices = try context.upload(&.{ 3, 1 }, &.{ 2, 0, 2 });
+    defer indices.deinit();
+    var output_gradient = try context.upload(&.{ 3, 2 }, &.{ 1, 2, 3, 4, 5, 6 });
+    defer output_gradient.deinit();
+
+    try context.beginBatch();
+    var embedded = try context.embedding(table, indices);
+    var table_gradient = try context.embeddingBackward(indices, output_gradient, 3);
+    try context.endBatch();
+    defer embedded.deinit();
+    defer table_gradient.deinit();
+    var embedded_values: [6]f32 = undefined;
+    var gradient_values: [6]f32 = undefined;
+    try context.readback(embedded, &embedded_values);
+    try context.readback(table_gradient, &gradient_values);
+    try testing.expectEqualSlices(f32, &.{ 5, 6, 1, 2, 5, 6 }, &embedded_values);
+    try testing.expectEqualSlices(f32, &.{ 3, 4, 0, 0, 6, 8 }, &gradient_values);
+
+    const runtime_stats = context.backendStats();
+    if (device.backendType() == .CPU) {
+        try testing.expectEqual(@as(usize, 0), runtime_stats.kernel_launches);
+    } else {
+        try testing.expectEqual(@as(usize, 3), runtime_stats.host_to_device_transfers);
+        try testing.expectEqual(@as(usize, 2), runtime_stats.device_to_host_transfers);
+        try testing.expectEqual(@as(usize, 2), runtime_stats.kernel_launches);
         try testing.expectEqual(@as(usize, 1), runtime_stats.synchronizations);
     }
 }

@@ -616,6 +616,45 @@ pub const CPUBackend = struct {
         return .{ .query = query_gradient, .key = key_gradient, .value = value_gradient };
     }
 
+    pub fn embeddingLookup(ptr: *anyopaque, table: *const Matrix, indices: *const Matrix, allocator: Allocator) error{ OutOfMemory, DimensionMismatch, InvalidIndex }!*Matrix {
+        if (indices.cols != 1) return error.DimensionMismatch;
+        const result = try initMatrix(ptr, allocator, indices.rows, table.cols);
+        errdefer deinitMatrix(undefined, result);
+        const table_data = @as(*const CPUMatrix, @ptrCast(@alignCast(table.impl_data)));
+        const indices_data = @as(*const CPUMatrix, @ptrCast(@alignCast(indices.impl_data)));
+        const result_data = @as(*CPUMatrix, @ptrCast(@alignCast(result.impl_data)));
+        for (0..indices.rows) |row| {
+            const raw_index = indices_data.data[row];
+            if (!std.math.isFinite(raw_index) or raw_index < 0 or @floor(raw_index) != raw_index or raw_index >= @as(f32, @floatFromInt(table.rows))) {
+                return error.InvalidIndex;
+            }
+            const index: usize = @intFromFloat(raw_index);
+            @memcpy(result_data.data[row * table.cols ..][0..table.cols], table_data.data[index * table.cols ..][0..table.cols]);
+        }
+        return result;
+    }
+
+    pub fn embeddingGradient(ptr: *anyopaque, indices: *const Matrix, output_gradient: *const Matrix, vocabulary_size: usize, allocator: Allocator) error{ OutOfMemory, DimensionMismatch, InvalidIndex }!*Matrix {
+        if (indices.cols != 1 or indices.rows != output_gradient.rows or vocabulary_size == 0) return error.DimensionMismatch;
+        const result = try initMatrix(ptr, allocator, vocabulary_size, output_gradient.cols);
+        errdefer deinitMatrix(undefined, result);
+        const indices_data = @as(*const CPUMatrix, @ptrCast(@alignCast(indices.impl_data)));
+        const output_gradient_data = @as(*const CPUMatrix, @ptrCast(@alignCast(output_gradient.impl_data)));
+        const result_data = @as(*CPUMatrix, @ptrCast(@alignCast(result.impl_data)));
+        @memset(result_data.data, 0);
+        for (0..indices.rows) |row| {
+            const raw_index = indices_data.data[row];
+            if (!std.math.isFinite(raw_index) or raw_index < 0 or @floor(raw_index) != raw_index or raw_index >= @as(f32, @floatFromInt(vocabulary_size))) {
+                return error.InvalidIndex;
+            }
+            const index: usize = @intFromFloat(raw_index);
+            for (0..output_gradient.cols) |col| {
+                result_data.data[index * output_gradient.cols + col] += output_gradient_data.data[row * output_gradient.cols + col];
+            }
+        }
+        return result;
+    }
+
     pub fn applyGLU(ptr: *anyopaque, linear_part: *const Matrix, gating_part: *const Matrix, allocator: Allocator) error{ OutOfMemory, DimensionMismatch }!*Matrix {
         if (linear_part.rows != gating_part.rows or linear_part.cols != gating_part.cols) {
             return error.DimensionMismatch;

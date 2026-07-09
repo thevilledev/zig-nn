@@ -47,6 +47,8 @@ typedef struct ZigNNCUDABackend {
     CUfunction causal_self_attention;
     CUfunction causal_attention_probabilities_backward;
     CUfunction causal_attention_input_gradients;
+    CUfunction embedding_lookup;
+    CUfunction embedding_gradient;
     char device_name[256];
 } ZigNNCUDABackend;
 
@@ -221,7 +223,9 @@ static int cuda_load_functions(ZigNNCUDABackend* backend, char* error_buffer, un
         cuda_get_function(backend->module, &backend->matrix_layer_norm_backward, "matrix_layer_norm_backward", error_buffer, error_buffer_len) &&
         cuda_get_function(backend->module, &backend->causal_self_attention, "causal_self_attention", error_buffer, error_buffer_len) &&
         cuda_get_function(backend->module, &backend->causal_attention_probabilities_backward, "causal_attention_probabilities_backward", error_buffer, error_buffer_len) &&
-        cuda_get_function(backend->module, &backend->causal_attention_input_gradients, "causal_attention_input_gradients", error_buffer, error_buffer_len);
+        cuda_get_function(backend->module, &backend->causal_attention_input_gradients, "causal_attention_input_gradients", error_buffer, error_buffer_len) &&
+        cuda_get_function(backend->module, &backend->embedding_lookup, "embedding_lookup", error_buffer, error_buffer_len) &&
+        cuda_get_function(backend->module, &backend->embedding_gradient, "embedding_gradient", error_buffer, error_buffer_len);
 }
 
 static CUfunction cuda_function_for_kernel_id(ZigNNCUDABackend* backend, int kernel_id) {
@@ -755,4 +759,30 @@ int cuda_launch_causal_attention_input_gradients(CUDABackendRef backend_ref, CUD
     CUdeviceptr value_gradient_ptr = value_gradient->device_ptr;
     void* args[] = { &query_ptr, &key_ptr, &output_gradient_ptr, &probabilities_ptr, &score_gradients_ptr, &query_gradient_ptr, &key_gradient_ptr, &value_gradient_ptr, &tokens, &channels, &heads };
     return cuda_launch_2d(backend, backend != NULL ? backend->causal_attention_input_gradients : NULL, channels, tokens, args);
+}
+
+int cuda_launch_embedding_lookup(CUDABackendRef backend_ref, CUDABufferRef table_ref, CUDABufferRef indices_ref, CUDABufferRef result_ref, unsigned int vocabulary_size, unsigned int tokens, unsigned int channels) {
+    ZigNNCUDABackend* backend = (ZigNNCUDABackend*)backend_ref;
+    ZigNNCUDABuffer* table = (ZigNNCUDABuffer*)table_ref;
+    ZigNNCUDABuffer* indices = (ZigNNCUDABuffer*)indices_ref;
+    ZigNNCUDABuffer* result = (ZigNNCUDABuffer*)result_ref;
+    if (table == NULL || indices == NULL || result == NULL) return 0;
+    CUdeviceptr table_ptr = table->device_ptr;
+    CUdeviceptr indices_ptr = indices->device_ptr;
+    CUdeviceptr result_ptr = result->device_ptr;
+    void* args[] = { &table_ptr, &indices_ptr, &result_ptr, &vocabulary_size, &tokens, &channels };
+    return cuda_launch_2d(backend, backend != NULL ? backend->embedding_lookup : NULL, channels, tokens, args);
+}
+
+int cuda_launch_embedding_gradient(CUDABackendRef backend_ref, CUDABufferRef indices_ref, CUDABufferRef output_gradient_ref, CUDABufferRef result_ref, unsigned int vocabulary_size, unsigned int tokens, unsigned int channels) {
+    ZigNNCUDABackend* backend = (ZigNNCUDABackend*)backend_ref;
+    ZigNNCUDABuffer* indices = (ZigNNCUDABuffer*)indices_ref;
+    ZigNNCUDABuffer* output_gradient = (ZigNNCUDABuffer*)output_gradient_ref;
+    ZigNNCUDABuffer* result = (ZigNNCUDABuffer*)result_ref;
+    if (indices == NULL || output_gradient == NULL || result == NULL) return 0;
+    CUdeviceptr indices_ptr = indices->device_ptr;
+    CUdeviceptr output_gradient_ptr = output_gradient->device_ptr;
+    CUdeviceptr result_ptr = result->device_ptr;
+    void* args[] = { &indices_ptr, &output_gradient_ptr, &result_ptr, &vocabulary_size, &tokens, &channels };
+    return cuda_launch_2d(backend, backend != NULL ? backend->embedding_gradient : NULL, channels, vocabulary_size, args);
 }

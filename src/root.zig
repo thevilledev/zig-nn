@@ -352,6 +352,24 @@ pub const BackendInstance = union(BackendType) {
         return gradients;
     }
 
+    pub fn embeddingLookup(self: BackendInstance, table: *const BackendMatrix, indices: *const BackendMatrix, allocator: std.mem.Allocator) !*BackendMatrix {
+        const result = try switch (self) {
+            .CPU => |ptr| CPUBackend.embeddingLookup(ptr, table, indices, allocator),
+            .Metal => |ptr| MetalBackend.embeddingLookup(ptr, table, indices, allocator),
+            .CUDA => |ptr| CUDABackend.embeddingLookup(ptr, table, indices, allocator),
+        };
+        return self.attachBackend(result);
+    }
+
+    pub fn embeddingGradient(self: BackendInstance, indices: *const BackendMatrix, output_gradient: *const BackendMatrix, vocabulary_size: usize, allocator: std.mem.Allocator) !*BackendMatrix {
+        const result = try switch (self) {
+            .CPU => |ptr| CPUBackend.embeddingGradient(ptr, indices, output_gradient, vocabulary_size, allocator),
+            .Metal => |ptr| MetalBackend.embeddingGradient(ptr, indices, output_gradient, vocabulary_size, allocator),
+            .CUDA => |ptr| CUDABackend.embeddingGradient(ptr, indices, output_gradient, vocabulary_size, allocator),
+        };
+        return self.attachBackend(result);
+    }
+
     pub fn applyGLU(self: BackendInstance, linear_part: *const BackendMatrix, gating_part: *const BackendMatrix, allocator: std.mem.Allocator) !*BackendMatrix {
         const result = try switch (self) {
             .CPU => |ptr| CPUBackend.applyGLU(ptr, linear_part, gating_part, allocator),

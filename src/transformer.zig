@@ -115,6 +115,15 @@ pub const Sgd = struct {
         linear.bias = updated_bias;
     }
 
+    pub fn stepTensor(self: Sgd, context: *ExecutionContext, parameter: *Tensor, gradient: Tensor) !void {
+        if (!parameter.shape.eql(gradient.shape)) return error.DimensionMismatch;
+        var scaled_gradient = try context.scale(gradient, self.learning_rate);
+        defer scaled_gradient.deinit();
+        const updated = try context.subtract(parameter.*, scaled_gradient);
+        parameter.deinit();
+        parameter.* = updated;
+    }
+
     pub fn stepLayerNorm(self: Sgd, context: *ExecutionContext, layer_norm: *LayerNorm, gradients: tensor.LayerNormGradients) !void {
         if (!layer_norm.gamma.shape.eql(gradients.gamma.shape) or !layer_norm.beta.shape.eql(gradients.beta.shape)) {
             return error.DimensionMismatch;
@@ -157,6 +166,37 @@ pub const Sgd = struct {
         try self.stepAttention(context, &block.attention, gradients.attention);
         try self.stepLayerNorm(context, &block.feed_forward_norm, gradients.feed_forward_norm);
         try self.stepFeedForward(context, &block.feed_forward, gradients.feed_forward);
+    }
+};
+
+pub const Embedding = struct {
+    weights: Tensor,
+
+    pub fn init(context: *ExecutionContext, entries: usize, features: usize, random: std.Random) !Embedding {
+        if (entries == 0 or features == 0) return error.InvalidDimension;
+        const allocator = context.device.allocator;
+        const values = try allocator.alloc(f32, try std.math.mul(usize, entries, features));
+        defer allocator.free(values);
+        const bound = @sqrt(3.0 / @as(f32, @floatFromInt(features)));
+        for (values) |*value| value.* = (random.float(f32) * 2.0 - 1.0) * bound;
+        return .{ .weights = try context.upload(&.{ entries, features }, values) };
+    }
+
+    pub fn deinit(self: *Embedding) void {
+        self.weights.deinit();
+        self.* = undefined;
+    }
+
+    pub fn forward(self: Embedding, context: *ExecutionContext, indices: Tensor) !Tensor {
+        return context.embedding(self.weights, indices);
+    }
+
+    pub fn backward(self: Embedding, context: *ExecutionContext, indices: Tensor, output_gradient: Tensor) !Tensor {
+        return context.embeddingBackward(indices, output_gradient, self.weights.shape.dims[0]);
+    }
+
+    pub fn parameterCount(self: Embedding) usize {
+        return self.weights.elementCount();
     }
 };
 
@@ -560,6 +600,182 @@ pub const BlockGradients = struct {
     }
 };
 
+pub const DecoderConfig = struct {
+    vocabulary_size: usize,
+    maximum_sequence_length: usize,
+    layers: usize,
+    heads: usize,
+    channels: usize,
+    hidden_features: usize,
+
+    pub fn validate(self: DecoderConfig) !void {
+        if (self.vocabulary_size == 0 or self.maximum_sequence_length == 0 or self.layers == 0 or
+            self.heads == 0 or self.channels == 0 or self.hidden_features == 0)
+        {
+            return error.InvalidConfig;
+        }
+        if (self.channels % self.heads != 0) return error.InvalidHeadCount;
+    }
+};
+
+/// Trainable decoder-only Transformer whose parameters remain on one device.
+pub const Decoder = struct {
+    allocator: Allocator,
+    config: DecoderConfig,
+    token_embedding: Embedding,
+    position_embedding: Embedding,
+    blocks: []Block,
+    final_norm: LayerNorm,
+    language_model_head: Linear,
+
+    pub fn init(context: *ExecutionContext, config: DecoderConfig, random: std.Random) !Decoder {
+        try config.validate();
+        const allocator = context.device.allocator;
+        var token_embedding = try Embedding.init(context, config.vocabulary_size, config.channels, random);
+        errdefer token_embedding.deinit();
+        var position_embedding = try Embedding.init(context, config.maximum_sequence_length, config.channels, random);
+        errdefer position_embedding.deinit();
+        const blocks = try allocator.alloc(Block, config.layers);
+        var initialized_blocks: usize = 0;
+        errdefer {
+            for (blocks[0..initialized_blocks]) |*block| block.deinit();
+            allocator.free(blocks);
+        }
+        for (blocks) |*block| {
+            block.* = try Block.init(context, config.channels, config.heads, config.hidden_features, random);
+            initialized_blocks += 1;
+        }
+        var final_norm = try LayerNorm.init(context, config.channels, 1e-5);
+        errdefer final_norm.deinit();
+        const language_model_head = try Linear.init(context, config.channels, config.vocabulary_size, random);
+        return .{
+            .allocator = allocator,
+            .config = config,
+            .token_embedding = token_embedding,
+            .position_embedding = position_embedding,
+            .blocks = blocks,
+            .final_norm = final_norm,
+            .language_model_head = language_model_head,
+        };
+    }
+
+    pub fn deinit(self: *Decoder) void {
+        self.token_embedding.deinit();
+        self.position_embedding.deinit();
+        for (self.blocks) |*block| block.deinit();
+        self.allocator.free(self.blocks);
+        self.final_norm.deinit();
+        self.language_model_head.deinit();
+        self.* = undefined;
+    }
+
+    pub fn forward(self: *const Decoder, context: *ExecutionContext, tokens: Tensor, positions: Tensor) !Tensor {
+        try self.validateIndices(tokens, positions);
+        var token_values = try self.token_embedding.forward(context, tokens);
+        defer token_values.deinit();
+        var position_values = try self.position_embedding.forward(context, positions);
+        defer position_values.deinit();
+        var current = try context.add(token_values, position_values);
+        errdefer current.deinit();
+        for (self.blocks) |*block| {
+            const next = try block.forward(context, current);
+            current.deinit();
+            current = next;
+        }
+        var normalized = try self.final_norm.forward(context, current);
+        current.deinit();
+        defer normalized.deinit();
+        return self.language_model_head.forward(context, normalized);
+    }
+
+    pub fn trainStep(self: *Decoder, context: *ExecutionContext, tokens: Tensor, positions: Tensor, targets: Tensor, optimizer: Sgd) !f32 {
+        try self.validateIndices(tokens, positions);
+        if (targets.shape.rank != 2 or targets.shape.dims[0] != tokens.shape.dims[0] or
+            targets.shape.dims[1] != self.config.vocabulary_size)
+        {
+            return error.DimensionMismatch;
+        }
+
+        const block_inputs = try self.allocator.alloc(Tensor, self.blocks.len);
+        var initialized_inputs: usize = 0;
+        defer {
+            for (block_inputs[0..initialized_inputs]) |*block_input| block_input.deinit();
+            self.allocator.free(block_inputs);
+        }
+        const block_gradients = try self.allocator.alloc(BlockGradients, self.blocks.len);
+        var gradient_start = self.blocks.len;
+        defer {
+            for (block_gradients[gradient_start..]) |*gradient| gradient.deinit();
+            self.allocator.free(block_gradients);
+        }
+
+        try context.beginBatch();
+        var batch_active = true;
+        errdefer if (batch_active) context.endBatch() catch {};
+        var token_values = try self.token_embedding.forward(context, tokens);
+        defer token_values.deinit();
+        var position_values = try self.position_embedding.forward(context, positions);
+        defer position_values.deinit();
+        var current = try context.add(token_values, position_values);
+        var current_owned = true;
+        defer if (current_owned) current.deinit();
+        for (self.blocks, 0..) |*block, index| {
+            block_inputs[index] = current;
+            initialized_inputs += 1;
+            current_owned = false;
+            current = try block.forward(context, block_inputs[index]);
+            current_owned = true;
+        }
+        var normalized = try self.final_norm.forward(context, current);
+        defer normalized.deinit();
+        var logits = try self.language_model_head.forward(context, normalized);
+        defer logits.deinit();
+        var objective = try SoftmaxCrossEntropy.init(context, logits, targets);
+        defer objective.deinit();
+        var head_gradients = try self.language_model_head.backward(context, normalized, objective.gradient);
+        defer head_gradients.deinit();
+        try optimizer.stepLinear(context, &self.language_model_head, head_gradients);
+        var norm_gradients = try self.final_norm.backward(context, current, head_gradients.input);
+        defer norm_gradients.deinit();
+        try optimizer.stepLayerNorm(context, &self.final_norm, norm_gradients);
+
+        var current_gradient = norm_gradients.input;
+        var index = self.blocks.len;
+        while (index > 0) {
+            index -= 1;
+            block_gradients[index] = try self.blocks[index].backward(context, block_inputs[index], current_gradient);
+            gradient_start = index;
+            try optimizer.stepBlock(context, &self.blocks[index], block_gradients[index]);
+            current_gradient = block_gradients[index].input;
+        }
+        var token_gradient = try self.token_embedding.backward(context, tokens, current_gradient);
+        defer token_gradient.deinit();
+        var position_gradient = try self.position_embedding.backward(context, positions, current_gradient);
+        defer position_gradient.deinit();
+        try optimizer.stepTensor(context, &self.token_embedding.weights, token_gradient);
+        try optimizer.stepTensor(context, &self.position_embedding.weights, position_gradient);
+
+        try context.endBatch();
+        batch_active = false;
+        return objective.loss(context, targets);
+    }
+
+    pub fn parameterCount(self: Decoder) usize {
+        var count = self.token_embedding.parameterCount() + self.position_embedding.parameterCount() +
+            self.final_norm.parameterCount() + self.language_model_head.parameterCount();
+        for (self.blocks) |block| count += block.parameterCount();
+        return count;
+    }
+
+    fn validateIndices(self: Decoder, tokens: Tensor, positions: Tensor) !void {
+        if (tokens.shape.rank != 2 or positions.shape.rank != 2 or tokens.shape.dims[1] != 1 or positions.shape.dims[1] != 1 or
+            tokens.shape.dims[0] != positions.shape.dims[0] or tokens.shape.dims[0] > self.config.maximum_sequence_length)
+        {
+            return error.DimensionMismatch;
+        }
+    }
+};
+
 test "decoder block runs a finite device-resident forward pass" {
     const testing = std.testing;
     const allocator: Allocator = testing.allocator;
@@ -682,4 +898,50 @@ test "decoder block backward updates every parameter group" {
     var input_gradient: [12]f32 = undefined;
     try context.readback(gradients.input, &input_gradient);
     for (input_gradient) |value| try testing.expect(std.math.isFinite(value));
+}
+
+test "decoder trains token embeddings and transformer body end to end" {
+    const testing = std.testing;
+    const allocator: Allocator = testing.allocator;
+    var device = try tensor.Device.init(allocator, .cpu);
+    defer device.deinit();
+    var context = ExecutionContext.init(&device);
+    var prng = std.Random.DefaultPrng.init(123);
+    var decoder = try Decoder.init(&context, .{
+        .vocabulary_size = 3,
+        .maximum_sequence_length = 3,
+        .layers = 1,
+        .heads = 1,
+        .channels = 4,
+        .hidden_features = 8,
+    }, prng.random());
+    defer decoder.deinit();
+    try testing.expectEqual(@as(usize, 219), decoder.parameterCount());
+    var tokens = try context.upload(&.{ 3, 1 }, &.{ 0, 1, 2 });
+    defer tokens.deinit();
+    var positions = try context.upload(&.{ 3, 1 }, &.{ 0, 1, 2 });
+    defer positions.deinit();
+    var targets = try context.upload(&.{ 3, 3 }, &.{
+        0, 1, 0,
+        0, 0, 1,
+        1, 0, 0,
+    });
+    defer targets.deinit();
+    const optimizer = try Sgd.init(0.03);
+
+    var initial_loss: f32 = 0;
+    var final_loss: f32 = 0;
+    for (0..50) |step| {
+        const loss = try decoder.trainStep(&context, tokens, positions, targets, optimizer);
+        if (step == 0) initial_loss = loss;
+        final_loss = loss;
+    }
+    try testing.expect(final_loss < initial_loss * 0.5);
+    try testing.expect(final_loss < 0.4);
+
+    try context.beginBatch();
+    var logits = try decoder.forward(&context, tokens, positions);
+    try context.endBatch();
+    defer logits.deinit();
+    try testing.expectEqualSlices(usize, &.{ 3, 3 }, logits.shape.slice());
 }

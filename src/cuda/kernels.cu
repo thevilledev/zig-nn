@@ -505,6 +505,47 @@ extern "C" __global__ void causal_attention_input_gradients(
     value_gradient[output_index] = value_sum;
 }
 
+extern "C" __global__ void embedding_lookup(
+    const float* table,
+    const float* indices,
+    float* result,
+    unsigned int vocabulary_size,
+    unsigned int tokens,
+    unsigned int channels
+) {
+    unsigned int channel = blockIdx.x * blockDim.x + threadIdx.x;
+    unsigned int token = blockIdx.y * blockDim.y + threadIdx.y;
+    if (channel >= channels || token >= tokens) return;
+    float raw_index = indices[token];
+    if (raw_index < 0.0f || raw_index >= (float)vocabulary_size || floorf(raw_index) != raw_index) {
+        result[token * channels + channel] = 0.0f;
+        return;
+    }
+    unsigned int index = (unsigned int)raw_index;
+    result[token * channels + channel] = table[index * channels + channel];
+}
+
+extern "C" __global__ void embedding_gradient(
+    const float* indices,
+    const float* output_gradient,
+    float* result,
+    unsigned int vocabulary_size,
+    unsigned int tokens,
+    unsigned int channels
+) {
+    unsigned int channel = blockIdx.x * blockDim.x + threadIdx.x;
+    unsigned int vocabulary_index = blockIdx.y * blockDim.y + threadIdx.y;
+    if (channel >= channels || vocabulary_index >= vocabulary_size) return;
+    float sum = 0.0f;
+    for (unsigned int token = 0; token < tokens; token++) {
+        float raw_index = indices[token];
+        if (raw_index >= 0.0f && floorf(raw_index) == raw_index && (unsigned int)raw_index == vocabulary_index) {
+            sum += output_gradient[token * channels + channel];
+        }
+    }
+    result[vocabulary_index * channels + channel] = sum;
+}
+
 extern "C" __global__ void apply_glu(
     const float* linear,
     const float* gating,

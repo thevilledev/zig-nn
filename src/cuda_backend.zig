@@ -173,6 +173,14 @@ const CUDA = if (enable_cuda) struct {
     pub fn launchCausalAttentionInputGradients(backend_ref: *Backend, query: *Buffer, key: *Buffer, output_gradient: *Buffer, probabilities: *Buffer, score_gradients: *Buffer, query_gradient: *Buffer, key_gradient: *Buffer, value_gradient: *Buffer, tokens: u32, channels: u32, heads: u32) bool {
         return c.cuda_launch_causal_attention_input_gradients(toC(backend_ref), toC(query), toC(key), toC(output_gradient), toC(probabilities), toC(score_gradients), toC(query_gradient), toC(key_gradient), toC(value_gradient), tokens, channels, heads) != 0;
     }
+
+    pub fn launchEmbeddingLookup(backend_ref: *Backend, table: *Buffer, indices: *Buffer, result: *Buffer, vocabulary_size: u32, tokens: u32, channels: u32) bool {
+        return c.cuda_launch_embedding_lookup(toC(backend_ref), toC(table), toC(indices), toC(result), vocabulary_size, tokens, channels) != 0;
+    }
+
+    pub fn launchEmbeddingGradient(backend_ref: *Backend, indices: *Buffer, output_gradient: *Buffer, result: *Buffer, vocabulary_size: u32, tokens: u32, channels: u32) bool {
+        return c.cuda_launch_embedding_gradient(toC(backend_ref), toC(indices), toC(output_gradient), toC(result), vocabulary_size, tokens, channels) != 0;
+    }
 } else struct {
     pub const Backend = anyopaque;
     pub const Buffer = anyopaque;
@@ -285,6 +293,14 @@ const CUDA = if (enable_cuda) struct {
     }
 
     pub fn launchCausalAttentionInputGradients(_: *Backend, _: *Buffer, _: *Buffer, _: *Buffer, _: *Buffer, _: *Buffer, _: *Buffer, _: *Buffer, _: *Buffer, _: u32, _: u32, _: u32) bool {
+        return false;
+    }
+
+    pub fn launchEmbeddingLookup(_: *Backend, _: *Buffer, _: *Buffer, _: *Buffer, _: u32, _: u32, _: u32) bool {
+        return false;
+    }
+
+    pub fn launchEmbeddingGradient(_: *Backend, _: *Buffer, _: *Buffer, _: *Buffer, _: u32, _: u32, _: u32) bool {
         return false;
     }
 };
@@ -783,6 +799,36 @@ pub const CUDABackend = struct {
         query_gradient_data.markGPUModified();
         key_gradient_data.markGPUModified();
         value_gradient_data.markGPUModified();
+        return true;
+    }
+
+    fn dispatchEmbeddingLookup(self: *CUDABackend, table: *const Matrix, indices: *const Matrix, result: *Matrix) bool {
+        const backend_ref = self.backend orelse return false;
+        const table_data = getCUDAMatrix(table);
+        const indices_data = getCUDAMatrix(indices);
+        const result_data = getCUDAMatrix(result);
+        if (!table_data.syncToGPU() or !indices_data.syncToGPU()) return false;
+        const table_buffer = table_data.buffer orelse return false;
+        const indices_buffer = indices_data.buffer orelse return false;
+        const result_buffer = result_data.buffer orelse return false;
+        if (!CUDA.launchEmbeddingLookup(backend_ref, table_buffer, indices_buffer, result_buffer, toU32(table.rows), toU32(indices.rows), toU32(table.cols))) return false;
+        if (!self.completeSubmittedKernel()) return false;
+        result_data.markGPUModified();
+        return true;
+    }
+
+    fn dispatchEmbeddingGradient(self: *CUDABackend, indices: *const Matrix, output_gradient: *const Matrix, result: *Matrix) bool {
+        const backend_ref = self.backend orelse return false;
+        const indices_data = getCUDAMatrix(indices);
+        const output_gradient_data = getCUDAMatrix(output_gradient);
+        const result_data = getCUDAMatrix(result);
+        if (!indices_data.syncToGPU() or !output_gradient_data.syncToGPU()) return false;
+        const indices_buffer = indices_data.buffer orelse return false;
+        const output_gradient_buffer = output_gradient_data.buffer orelse return false;
+        const result_buffer = result_data.buffer orelse return false;
+        if (!CUDA.launchEmbeddingGradient(backend_ref, indices_buffer, output_gradient_buffer, result_buffer, toU32(result.rows), toU32(indices.rows), toU32(result.cols))) return false;
+        if (!self.completeSubmittedKernel()) return false;
+        result_data.markGPUModified();
         return true;
     }
 
@@ -1432,6 +1478,51 @@ pub const CUDABackend = struct {
         key_gradient_data.markHostModified();
         value_gradient_data.markHostModified();
         return gradients;
+    }
+
+    pub fn embeddingLookup(ptr: *anyopaque, table: *const Matrix, indices: *const Matrix, allocator: Allocator) error{ OutOfMemory, DimensionMismatch, InvalidIndex }!*Matrix {
+        if (indices.cols != 1) return error.DimensionMismatch;
+        const result = try initMatrix(ptr, allocator, indices.rows, table.cols);
+        errdefer deinitMatrix(ptr, result);
+        const self = @as(*CUDABackend, @ptrCast(@alignCast(ptr)));
+        if (self.dispatchEmbeddingLookup(table, indices, result)) return result;
+        const table_data = getCUDAMatrix(table);
+        const indices_data = getCUDAMatrix(indices);
+        const result_data = getCUDAMatrix(result);
+        ensureHostData(table_data);
+        ensureHostData(indices_data);
+        for (0..indices.rows) |row| {
+            const raw_index = indices_data.host_data[row];
+            if (!std.math.isFinite(raw_index) or raw_index < 0 or @floor(raw_index) != raw_index or raw_index >= @as(f32, @floatFromInt(table.rows))) return error.InvalidIndex;
+            const index: usize = @intFromFloat(raw_index);
+            @memcpy(result_data.host_data[row * table.cols ..][0..table.cols], table_data.host_data[index * table.cols ..][0..table.cols]);
+        }
+        result_data.markHostModified();
+        return result;
+    }
+
+    pub fn embeddingGradient(ptr: *anyopaque, indices: *const Matrix, output_gradient: *const Matrix, vocabulary_size: usize, allocator: Allocator) error{ OutOfMemory, DimensionMismatch, InvalidIndex }!*Matrix {
+        if (indices.cols != 1 or indices.rows != output_gradient.rows or vocabulary_size == 0) return error.DimensionMismatch;
+        const result = try initMatrix(ptr, allocator, vocabulary_size, output_gradient.cols);
+        errdefer deinitMatrix(ptr, result);
+        const self = @as(*CUDABackend, @ptrCast(@alignCast(ptr)));
+        if (self.dispatchEmbeddingGradient(indices, output_gradient, result)) return result;
+        const indices_data = getCUDAMatrix(indices);
+        const output_gradient_data = getCUDAMatrix(output_gradient);
+        const result_data = getCUDAMatrix(result);
+        ensureHostData(indices_data);
+        ensureHostData(output_gradient_data);
+        @memset(result_data.host_data, 0);
+        for (0..indices.rows) |row| {
+            const raw_index = indices_data.host_data[row];
+            if (!std.math.isFinite(raw_index) or raw_index < 0 or @floor(raw_index) != raw_index or raw_index >= @as(f32, @floatFromInt(vocabulary_size))) return error.InvalidIndex;
+            const index: usize = @intFromFloat(raw_index);
+            for (0..output_gradient.cols) |col| {
+                result_data.host_data[index * output_gradient.cols + col] += output_gradient_data.host_data[row * output_gradient.cols + col];
+            }
+        }
+        result_data.markHostModified();
+        return result;
     }
 
     pub fn applyGLU(ptr: *anyopaque, linear_part: *const Matrix, gating_part: *const Matrix, allocator: Allocator) error{ OutOfMemory, DimensionMismatch }!*Matrix {

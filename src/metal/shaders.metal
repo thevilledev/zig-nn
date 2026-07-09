@@ -631,6 +631,49 @@ kernel void causal_attention_input_gradients(
     value_gradient[output_index] = value_sum;
 }
 
+kernel void embedding_lookup(
+    device const float* table [[buffer(0)]],
+    device const float* indices [[buffer(1)]],
+    device float* result [[buffer(2)]],
+    constant uint& vocabulary_size [[buffer(3)]],
+    constant uint& tokens [[buffer(4)]],
+    constant uint& channels [[buffer(5)]],
+    uint2 position [[thread_position_in_grid]]
+) {
+    uint channel = position.x;
+    uint token = position.y;
+    if (channel >= channels || token >= tokens) return;
+    float raw_index = indices[token];
+    if (raw_index < 0.0f || raw_index >= float(vocabulary_size) || floor(raw_index) != raw_index) {
+        result[token * channels + channel] = 0.0f;
+        return;
+    }
+    uint index = uint(raw_index);
+    result[token * channels + channel] = table[index * channels + channel];
+}
+
+kernel void embedding_gradient(
+    device const float* indices [[buffer(0)]],
+    device const float* output_gradient [[buffer(1)]],
+    device float* result [[buffer(2)]],
+    constant uint& vocabulary_size [[buffer(3)]],
+    constant uint& tokens [[buffer(4)]],
+    constant uint& channels [[buffer(5)]],
+    uint2 position [[thread_position_in_grid]]
+) {
+    uint channel = position.x;
+    uint vocabulary_index = position.y;
+    if (channel >= channels || vocabulary_index >= vocabulary_size) return;
+    float sum = 0.0f;
+    for (uint token = 0; token < tokens; token++) {
+        float raw_index = indices[token];
+        if (raw_index >= 0.0f && floor(raw_index) == raw_index && uint(raw_index) == vocabulary_index) {
+            sum += output_gradient[token * channels + channel];
+        }
+    }
+    result[vocabulary_index * channels + channel] = sum;
+}
+
 // Gated Linear Unit
 // result[i] = linear[i] * sigmoid(gating[i])
 kernel void apply_glu(
