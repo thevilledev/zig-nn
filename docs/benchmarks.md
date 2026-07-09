@@ -48,6 +48,11 @@ Run a fast smoke benchmark:
 zig build benchmark -- --quick
 ```
 
+The default suite includes heavier workloads intended to move more rows into
+millisecond-scale timings, plus a GPU-only `gpu_heavy` suite with larger matrix
+and activation shapes. Use `--quick` when you only need compilation and basic
+benchmark plumbing coverage; the GPU-heavy rows are skipped in quick mode.
+
 Save a raw `nnctl` CSV baseline and compare a later run against it:
 
 ```bash
@@ -74,6 +79,8 @@ Run one suite:
 ```bash
 zig build benchmark -- --filter matmul
 zig build benchmark -- --filter activation
+zig build benchmark -- --filter gpu_heavy
+zig build benchmark -- --filter layer_norm
 zig build benchmark -- --filter training
 zig build benchmark -- --filter tiny_gpt
 zig build benchmark -- --filter quantization
@@ -166,16 +173,21 @@ spot instances running after the benchmark is captured.
 
 ## Coverage
 
-- `matmul`: backend-aware `BackendMatrix.dotProduct` on CPU, Metal, and CUDA.
+- `matmul`: backend-aware `BackendMatrix.dotProduct` on CPU, Metal, and CUDA,
+  from small smoke shapes up to 1024x1024x1024.
 - `activation`: backend-aware ReLU, tanh, Swish, softmax, GLU, and SwiGLU on
-  CPU, Metal, and CUDA.
+  CPU, Metal, and CUDA, including multi-million element activation cases.
+- `gpu_heavy`: GPU-only Metal and CUDA rows for larger matrix multiplication and
+  activation workloads. CPU rows and CPU sample-error comparisons are omitted so
+  these cases can exceed practical CPU baseline sizes.
 - `training`: CPU `Network.trainBatch` loops plus `Network.trainBatchBackend`
   rows for Metal and CUDA when those backends are available.
 - `tiny_gpt`: CPU TinyGPT forward passes through the example model. TinyGPT also
-  uses the learning-oriented `Matrix` path today.
+  uses the learning-oriented `Matrix` path today, with a larger four-layer
+  decoder row in the default suite.
 - `quantization`: CPU uniform scalar quantization and TurboQuant encode,
   decode, error measurement, and KV-cache-shaped TurboQuant loops over
-  per-head key/value vectors.
+  per-head key/value vectors, including larger flat-vector and KV-cache rows.
 
 GPU rows include `sample_error`, sampled against the CPU result. The Metal and
 CUDA kernels currently use f32 buffers, so small non-zero errors are expected.

@@ -68,6 +68,9 @@ pub fn main(init: std.process.Init) !void {
     if (shouldRun(options, "activation")) {
         try benchmarkActivations(allocator, cpu, metal, cuda, options);
     }
+    if (shouldRun(options, "gpu_heavy")) {
+        try benchmarkGpuHeavy(allocator, metal, cuda, options);
+    }
     if (shouldRun(options, "layer_norm")) {
         try benchmarkLayerNorm(allocator, options);
     }
@@ -112,6 +115,7 @@ fn printHelp() void {
         \\Suites:
         \\  matmul        backend matrix multiplication
         \\  activation    backend activations and gated activations
+        \\  gpu_heavy     GPU-only large matmul and activation workloads
         \\  layer_norm    CPU LayerNorm forward passes
         \\  training      CPU Network.trainBatch loops
         \\  tiny_gpt      CPU TinyGPT forward passes
@@ -171,6 +175,8 @@ fn benchmarkMatmul(
         .{ .m = 64, .k = 64, .n = 64, .warmups = 1, .iterations = 8 },
         .{ .m = 128, .k = 128, .n = 128, .warmups = 1, .iterations = 5 },
         .{ .m = 256, .k = 256, .n = 256, .warmups = 1, .iterations = 3 },
+        .{ .m = 512, .k = 512, .n = 512, .warmups = 1, .iterations = 2 },
+        .{ .m = 1024, .k = 1024, .n = 1024, .warmups = 1, .iterations = 1 },
     };
 
     for (cases, 0..) |case, index| {
@@ -299,6 +305,12 @@ fn benchmarkActivations(
         .{ .name = "softmax_256x256", .op = .softmax, .rows = 256, .cols = 256, .warmups = 1, .iterations = 8 },
         .{ .name = "glu_512x512", .op = .glu, .rows = 512, .cols = 512, .warmups = 1, .iterations = 8 },
         .{ .name = "swiglu_512x512", .op = .swiglu, .rows = 512, .cols = 512, .warmups = 1, .iterations = 8 },
+        .{ .name = "relu_2048x2048", .op = .relu, .rows = 2048, .cols = 2048, .warmups = 1, .iterations = 3 },
+        .{ .name = "tanh_2048x2048", .op = .tanh, .rows = 2048, .cols = 2048, .warmups = 1, .iterations = 2 },
+        .{ .name = "swish_2048x2048", .op = .swish, .rows = 2048, .cols = 2048, .warmups = 1, .iterations = 2 },
+        .{ .name = "softmax_1024x1024", .op = .softmax, .rows = 1024, .cols = 1024, .warmups = 1, .iterations = 2 },
+        .{ .name = "glu_2048x2048", .op = .glu, .rows = 2048, .cols = 2048, .warmups = 1, .iterations = 2 },
+        .{ .name = "swiglu_2048x2048", .op = .swiglu, .rows = 2048, .cols = 2048, .warmups = 1, .iterations = 2 },
     };
 
     for (cases, 0..) |case, index| {
@@ -421,6 +433,129 @@ fn compareActivation(
     return sampleMaxAbsDiff(cpu_result, metal_result);
 }
 
+fn benchmarkGpuHeavy(
+    allocator: Allocator,
+    metal: ?BackendInstance,
+    cuda: ?BackendInstance,
+    options: Options,
+) !void {
+    const matmul_cases = [_]struct {
+        name: []const u8,
+        m: usize,
+        k: usize,
+        n: usize,
+        warmups: usize,
+        iterations: usize,
+    }{
+        .{ .name = "matmul_2048x2048x2048", .m = 2048, .k = 2048, .n = 2048, .warmups = 1, .iterations = 1 },
+        .{ .name = "matmul_4096x1024x4096", .m = 4096, .k = 1024, .n = 4096, .warmups = 1, .iterations = 1 },
+    };
+    const activation_cases = [_]struct {
+        name: []const u8,
+        op: BackendOp,
+        rows: usize,
+        cols: usize,
+        warmups: usize,
+        iterations: usize,
+    }{
+        .{ .name = "relu_8192x8192", .op = .relu, .rows = 8192, .cols = 8192, .warmups = 1, .iterations = 1 },
+        .{ .name = "softmax_4096x4096", .op = .softmax, .rows = 4096, .cols = 4096, .warmups = 1, .iterations = 1 },
+        .{ .name = "swiglu_4096x4096", .op = .swiglu, .rows = 4096, .cols = 4096, .warmups = 1, .iterations = 1 },
+    };
+
+    for (matmul_cases) |case| {
+        if (options.quick) {
+            printGpuHeavyQuickSkipped(case.name);
+            continue;
+        }
+
+        if (metal) |metal_backend| {
+            try benchmarkGpuHeavyMatmulCase(allocator, metal_backend, "metal", case.name, case.m, case.k, case.n, case.warmups, case.iterations);
+        } else {
+            printSkipped("gpu_heavy", case.name, "metal", case.warmups, case.iterations, "skipped_metal_unavailable");
+        }
+
+        if (cuda) |cuda_backend| {
+            try benchmarkGpuHeavyMatmulCase(allocator, cuda_backend, "cuda", case.name, case.m, case.k, case.n, case.warmups, case.iterations);
+        } else {
+            printSkipped("gpu_heavy", case.name, "cuda", case.warmups, case.iterations, "skipped_cuda_unavailable");
+        }
+    }
+
+    for (activation_cases) |case| {
+        if (options.quick) {
+            printGpuHeavyQuickSkipped(case.name);
+            continue;
+        }
+
+        if (metal) |metal_backend| {
+            try benchmarkGpuHeavyActivationCase(allocator, metal_backend, "metal", case.name, case.op, case.rows, case.cols, case.warmups, case.iterations);
+        } else {
+            printSkipped("gpu_heavy", case.name, "metal", case.warmups, case.iterations, "skipped_metal_unavailable");
+        }
+
+        if (cuda) |cuda_backend| {
+            try benchmarkGpuHeavyActivationCase(allocator, cuda_backend, "cuda", case.name, case.op, case.rows, case.cols, case.warmups, case.iterations);
+        } else {
+            printSkipped("gpu_heavy", case.name, "cuda", case.warmups, case.iterations, "skipped_cuda_unavailable");
+        }
+    }
+}
+
+fn benchmarkGpuHeavyMatmulCase(
+    allocator: Allocator,
+    backend: BackendInstance,
+    backend_name: []const u8,
+    case_name: []const u8,
+    m: usize,
+    k: usize,
+    n: usize,
+    warmups: usize,
+    iterations: usize,
+) !void {
+    var a = try BackendMatrix.init(backend, allocator, m, k);
+    defer a.deinit();
+    var b = try BackendMatrix.init(backend, allocator, k, n);
+    defer b.deinit();
+    fillBackendMatrix(a, 313);
+    fillBackendMatrix(b, 619);
+
+    const timing = try timeMatmul(allocator, a, b, warmups, iterations);
+    printResult("gpu_heavy", case_name, backend_name, timing, 0.0, "ok");
+}
+
+fn benchmarkGpuHeavyActivationCase(
+    allocator: Allocator,
+    backend: BackendInstance,
+    backend_name: []const u8,
+    case_name: []const u8,
+    op: BackendOp,
+    rows: usize,
+    cols: usize,
+    warmups: usize,
+    iterations: usize,
+) !void {
+    var input = try BackendMatrix.init(backend, allocator, rows, cols);
+    defer input.deinit();
+    fillBackendMatrix(input, 733);
+
+    const timing = switch (op) {
+        .glu, .swiglu => blk: {
+            var gate = try BackendMatrix.init(backend, allocator, rows, cols);
+            defer gate.deinit();
+            fillBackendMatrix(gate, 947);
+            break :blk try timeActivation(allocator, op, input, gate, warmups, iterations);
+        },
+        else => try timeActivation(allocator, op, input, input, warmups, iterations),
+    };
+    printResult("gpu_heavy", case_name, backend_name, timing, 0.0, "ok");
+}
+
+fn printGpuHeavyQuickSkipped(case_name: []const u8) void {
+    printSkipped("gpu_heavy", case_name, "metal", 0, 0, "skipped_quick_mode");
+    printSkipped("gpu_heavy", case_name, "cuda", 0, 0, "skipped_quick_mode");
+}
+
 fn benchmarkLayerNorm(allocator: Allocator, options: Options) !void {
     const cases = [_]struct {
         name: []const u8,
@@ -432,6 +567,7 @@ fn benchmarkLayerNorm(allocator: Allocator, options: Options) !void {
         .{ .name = "batch128_width64", .rows = 128, .cols = 64, .warmups = 1, .iterations = 10 },
         .{ .name = "batch512_width256", .rows = 512, .cols = 256, .warmups = 1, .iterations = 6 },
         .{ .name = "batch1024_width768", .rows = 1024, .cols = 768, .warmups = 1, .iterations = 3 },
+        .{ .name = "batch4096_width1024", .rows = 4096, .cols = 1024, .warmups = 1, .iterations = 2 },
     };
 
     for (cases, 0..) |case, index| {
@@ -515,6 +651,7 @@ fn benchmarkTraining(
     }{
         .{ .name = "batch64_32_64_16_steps8", .samples = 64, .input_size = 32, .hidden_size = 64, .output_size = 16, .steps = 8, .warmups = 1, .iterations = 5 },
         .{ .name = "batch128_64_128_32_steps4", .samples = 128, .input_size = 64, .hidden_size = 128, .output_size = 32, .steps = 4, .warmups = 1, .iterations = 3 },
+        .{ .name = "batch256_128_256_64_steps4", .samples = 256, .input_size = 128, .hidden_size = 256, .output_size = 64, .steps = 4, .warmups = 1, .iterations = 1 },
     };
 
     for (cases, 0..) |case, index| {
@@ -729,6 +866,13 @@ fn benchmarkTinyGpt(allocator: Allocator, options: Options) !void {
             .warmups = 1,
             .iterations = 3,
         },
+        .{
+            .name = "layers4_heads4_embd128_seq64",
+            .config = .{ .block_size = 64, .n_layer = 4, .n_head = 4, .n_embd = 128 },
+            .seq_len = 64,
+            .warmups = 1,
+            .iterations = 1,
+        },
     };
 
     for (cases, 0..) |case, index| {
@@ -804,6 +948,8 @@ fn benchmarkQuantization(allocator: Allocator, options: Options) !void {
         .{ .name = "uniform_8bit_4096", .op = .uniform, .len = 4096, .bits = 8, .warmups = 1, .iterations = 8 },
         .{ .name = "turbo_8bit_4096", .op = .turbo, .len = 4096, .bits = 8, .warmups = 1, .iterations = 6 },
         .{ .name = "turbo_8bit_16384", .op = .turbo, .len = 16_384, .bits = 8, .warmups = 1, .iterations = 4 },
+        .{ .name = "uniform_8bit_262144", .op = .uniform, .len = 262_144, .bits = 8, .warmups = 1, .iterations = 2 },
+        .{ .name = "turbo_8bit_262144", .op = .turbo, .len = 262_144, .bits = 8, .warmups = 1, .iterations = 1 },
     };
     const kv_cases = [_]struct {
         name: []const u8,
@@ -816,6 +962,7 @@ fn benchmarkQuantization(allocator: Allocator, options: Options) !void {
     }{
         .{ .name = "kv_cache_turbo4_64t4h32d", .tokens = 64, .heads = 4, .head_dim = 32, .bits = 4, .warmups = 1, .iterations = 4 },
         .{ .name = "kv_cache_turbo4_128t8h64d", .tokens = 128, .heads = 8, .head_dim = 64, .bits = 4, .warmups = 1, .iterations = 2 },
+        .{ .name = "kv_cache_turbo4_256t16h64d", .tokens = 256, .heads = 16, .head_dim = 64, .bits = 4, .warmups = 1, .iterations = 1 },
     };
 
     for (vector_cases, 0..) |case, index| {
