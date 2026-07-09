@@ -370,6 +370,15 @@ pub const BackendInstance = union(BackendType) {
         return self.attachBackend(result);
     }
 
+    pub fn cachedSelfAttention(self: BackendInstance, query: *const BackendMatrix, key: *const BackendMatrix, value: *const BackendMatrix, key_cache: *BackendMatrix, value_cache: *BackendMatrix, position: usize, heads: usize, allocator: std.mem.Allocator) !*BackendMatrix {
+        const result = try switch (self) {
+            .CPU => |ptr| CPUBackend.cachedSelfAttention(ptr, query, key, value, key_cache, value_cache, position, heads, allocator),
+            .Metal => |ptr| MetalBackend.cachedSelfAttention(ptr, query, key, value, key_cache, value_cache, position, heads, allocator),
+            .CUDA => |ptr| CUDABackend.cachedSelfAttention(ptr, query, key, value, key_cache, value_cache, position, heads, allocator),
+        };
+        return self.attachBackend(result);
+    }
+
     pub fn applyGLU(self: BackendInstance, linear_part: *const BackendMatrix, gating_part: *const BackendMatrix, allocator: std.mem.Allocator) !*BackendMatrix {
         const result = try switch (self) {
             .CPU => |ptr| CPUBackend.applyGLU(ptr, linear_part, gating_part, allocator),

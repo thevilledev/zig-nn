@@ -370,6 +370,7 @@ pub const MetalBackend = struct {
     causal_attention_backward_gradients_pipeline: ?*Metal.ComputePipelineState,
     embedding_lookup_pipeline: ?*Metal.ComputePipelineState,
     embedding_gradient_pipeline: ?*Metal.ComputePipelineState,
+    cached_attention_pipeline: ?*Metal.ComputePipelineState,
 
     // Softmax pipelines
     softmax_find_max_pipeline: ?*Metal.ComputePipelineState,
@@ -430,6 +431,7 @@ pub const MetalBackend = struct {
             .causal_attention_backward_gradients_pipeline = null,
             .embedding_lookup_pipeline = null,
             .embedding_gradient_pipeline = null,
+            .cached_attention_pipeline = null,
             .softmax_find_max_pipeline = null,
             .softmax_exp_sum_pipeline = null,
             .softmax_normalize_pipeline = null,
@@ -479,6 +481,7 @@ pub const MetalBackend = struct {
         Metal.release(self.causal_attention_backward_gradients_pipeline);
         Metal.release(self.embedding_lookup_pipeline);
         Metal.release(self.embedding_gradient_pipeline);
+        Metal.release(self.cached_attention_pipeline);
         Metal.release(self.softmax_find_max_pipeline);
         Metal.release(self.softmax_exp_sum_pipeline);
         Metal.release(self.softmax_normalize_pipeline);
@@ -520,6 +523,7 @@ pub const MetalBackend = struct {
         try self.loadPipeline(&self.causal_attention_backward_gradients_pipeline, "causal_attention_input_gradients");
         try self.loadPipeline(&self.embedding_lookup_pipeline, "embedding_lookup");
         try self.loadPipeline(&self.embedding_gradient_pipeline, "embedding_gradient");
+        try self.loadPipeline(&self.cached_attention_pipeline, "cached_self_attention");
         try self.loadPipeline(&self.softmax_find_max_pipeline, "softmax_find_max");
         try self.loadPipeline(&self.softmax_exp_sum_pipeline, "softmax_exp_and_sum");
         try self.loadPipeline(&self.softmax_normalize_pipeline, "softmax_normalize");
@@ -1109,6 +1113,40 @@ pub const MetalBackend = struct {
         Metal.computeEncoderEndEncoding(encoder);
         Metal.commandBufferCommit(command_buffer);
         if (!self.completeSubmittedKernel(command_buffer)) return false;
+        result_data.markGPUModified();
+        return true;
+    }
+
+    fn dispatchCachedSelfAttention(self: *MetalBackend, query: *const Matrix, key: *const Matrix, value: *const Matrix, key_cache: *Matrix, value_cache: *Matrix, position: usize, heads: usize, result: *Matrix) bool {
+        const pipeline = self.cached_attention_pipeline orelse return false;
+        const command_queue = self.command_queue orelse return false;
+        const query_data = getMetalMatrix(query);
+        const key_data = getMetalMatrix(key);
+        const value_data = getMetalMatrix(value);
+        const key_cache_data = getMetalMatrix(key_cache);
+        const value_cache_data = getMetalMatrix(value_cache);
+        const result_data = getMetalMatrix(result);
+        if (!query_data.syncToGPU() or !key_data.syncToGPU() or !value_data.syncToGPU() or !key_cache_data.syncToGPU() or !value_cache_data.syncToGPU()) return false;
+        const command_buffer = Metal.commandQueueCreateCommandBuffer(command_queue) orelse return false;
+        defer Metal.release(command_buffer);
+        const encoder = Metal.commandBufferCreateComputeCommandEncoder(command_buffer) orelse return false;
+        defer Metal.release(encoder);
+        Metal.computeEncoderSetPipelineState(encoder, pipeline);
+        Metal.computeEncoderSetBuffer(encoder, query_data.buffer orelse return false, 0, 0);
+        Metal.computeEncoderSetBuffer(encoder, key_data.buffer orelse return false, 0, 1);
+        Metal.computeEncoderSetBuffer(encoder, value_data.buffer orelse return false, 0, 2);
+        Metal.computeEncoderSetBuffer(encoder, key_cache_data.buffer orelse return false, 0, 3);
+        Metal.computeEncoderSetBuffer(encoder, value_cache_data.buffer orelse return false, 0, 4);
+        Metal.computeEncoderSetBuffer(encoder, result_data.buffer orelse return false, 0, 5);
+        setU32(encoder, toU32(position), 6);
+        setU32(encoder, toU32(query.cols), 7);
+        setU32(encoder, toU32(heads), 8);
+        Metal.computeEncoderDispatchThreads(encoder, pipeline, heads, 1, 1);
+        Metal.computeEncoderEndEncoding(encoder);
+        Metal.commandBufferCommit(command_buffer);
+        if (!self.completeSubmittedKernel(command_buffer)) return false;
+        key_cache_data.markGPUModified();
+        value_cache_data.markGPUModified();
         result_data.markGPUModified();
         return true;
     }
@@ -1887,6 +1925,60 @@ pub const MetalBackend = struct {
                 result_data.host_data[index * output_gradient.cols + col] += output_gradient_data.host_data[row * output_gradient.cols + col];
             }
         }
+        result_data.markHostModified();
+        return result;
+    }
+
+    pub fn cachedSelfAttention(ptr: *anyopaque, query: *const Matrix, key: *const Matrix, value: *const Matrix, key_cache: *Matrix, value_cache: *Matrix, position: usize, heads: usize, allocator: Allocator) error{ OutOfMemory, DimensionMismatch, InvalidCachePosition }!*Matrix {
+        if (query.rows != 1 or key.rows != 1 or value.rows != 1 or query.cols != key.cols or query.cols != value.cols or
+            key_cache.rows != value_cache.rows or key_cache.cols != query.cols or value_cache.cols != query.cols or
+            heads == 0 or query.cols % heads != 0 or position >= key_cache.rows)
+        {
+            return error.DimensionMismatch;
+        }
+        const result = try initMatrix(ptr, allocator, 1, query.cols);
+        errdefer deinitMatrix(ptr, result);
+        const self = @as(*MetalBackend, @ptrCast(@alignCast(ptr)));
+        if (self.dispatchCachedSelfAttention(query, key, value, key_cache, value_cache, position, heads, result)) return result;
+        const query_data = getMetalMatrix(query);
+        const key_data = getMetalMatrix(key);
+        const value_data = getMetalMatrix(value);
+        const key_cache_data = getMetalMatrix(key_cache);
+        const value_cache_data = getMetalMatrix(value_cache);
+        const result_data = getMetalMatrix(result);
+        ensureHostData(query_data);
+        ensureHostData(key_data);
+        ensureHostData(value_data);
+        ensureHostData(key_cache_data);
+        ensureHostData(value_cache_data);
+        @memcpy(key_cache_data.host_data[position * query.cols ..][0..query.cols], key_data.host_data[0..query.cols]);
+        @memcpy(value_cache_data.host_data[position * query.cols ..][0..query.cols], value_data.host_data[0..query.cols]);
+        const probabilities = try allocator.alloc(f32, position + 1);
+        defer allocator.free(probabilities);
+        const head_width = query.cols / heads;
+        const attention_scale = 1.0 / @sqrt(@as(f32, @floatFromInt(head_width)));
+        for (0..heads) |head| {
+            const offset = head * head_width;
+            var max_score = -std.math.inf(f32);
+            for (0..position + 1) |key_position| {
+                var score: f32 = 0;
+                for (0..head_width) |channel| score += query_data.host_data[offset + channel] * key_cache_data.host_data[key_position * query.cols + offset + channel];
+                probabilities[key_position] = score * attention_scale;
+                max_score = @max(max_score, probabilities[key_position]);
+            }
+            var denominator: f32 = 0;
+            for (0..position + 1) |key_position| {
+                probabilities[key_position] = @exp(probabilities[key_position] - max_score);
+                denominator += probabilities[key_position];
+            }
+            for (0..head_width) |channel| {
+                var output: f32 = 0;
+                for (0..position + 1) |key_position| output += probabilities[key_position] / denominator * value_cache_data.host_data[key_position * query.cols + offset + channel];
+                result_data.host_data[offset + channel] = output;
+            }
+        }
+        key_cache_data.markHostModified();
+        value_cache_data.markHostModified();
         result_data.markHostModified();
         return result;
     }

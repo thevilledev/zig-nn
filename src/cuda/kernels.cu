@@ -546,6 +546,49 @@ extern "C" __global__ void embedding_gradient(
     result[vocabulary_index * channels + channel] = sum;
 }
 
+extern "C" __global__ void cached_self_attention(
+    const float* query,
+    const float* key,
+    const float* value,
+    float* key_cache,
+    float* value_cache,
+    float* result,
+    unsigned int position,
+    unsigned int channels,
+    unsigned int heads
+) {
+    unsigned int head = blockIdx.x * blockDim.x + threadIdx.x;
+    if (head >= heads) return;
+    unsigned int head_width = channels / heads;
+    unsigned int offset = head * head_width;
+    for (unsigned int channel = 0; channel < head_width; channel++) {
+        key_cache[position * channels + offset + channel] = key[offset + channel];
+        value_cache[position * channels + offset + channel] = value[offset + channel];
+    }
+    float scale = rsqrtf((float)head_width);
+    float max_score = -INFINITY;
+    for (unsigned int key_position = 0; key_position <= position; key_position++) {
+        float score = 0.0f;
+        for (unsigned int channel = 0; channel < head_width; channel++) score += query[offset + channel] * key_cache[key_position * channels + offset + channel];
+        max_score = fmaxf(max_score, score * scale);
+    }
+    float denominator = 0.0f;
+    for (unsigned int key_position = 0; key_position <= position; key_position++) {
+        float score = 0.0f;
+        for (unsigned int channel = 0; channel < head_width; channel++) score += query[offset + channel] * key_cache[key_position * channels + offset + channel];
+        denominator += __expf(score * scale - max_score);
+    }
+    for (unsigned int output_channel = 0; output_channel < head_width; output_channel++) {
+        float output = 0.0f;
+        for (unsigned int key_position = 0; key_position <= position; key_position++) {
+            float score = 0.0f;
+            for (unsigned int channel = 0; channel < head_width; channel++) score += query[offset + channel] * key_cache[key_position * channels + offset + channel];
+            output += __expf(score * scale - max_score) / denominator * value_cache[key_position * channels + offset + output_channel];
+        }
+        result[offset + output_channel] = output;
+    }
+}
+
 extern "C" __global__ void apply_glu(
     const float* linear,
     const float* gating,

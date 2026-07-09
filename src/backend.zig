@@ -370,6 +370,10 @@ pub const Matrix = struct {
         return self.backend.embeddingGradient(indices, self, vocabulary_size, allocator);
     }
 
+    pub fn cachedSelfAttention(self: *const Matrix, key: *const Matrix, value: *const Matrix, key_cache: *Matrix, value_cache: *Matrix, position: usize, heads: usize, allocator: Allocator) !*Matrix {
+        return self.backend.cachedSelfAttention(self, key, value, key_cache, value_cache, position, heads, allocator);
+    }
+
     pub fn applyGLU(self: *const Matrix, gating_part: *const Matrix, allocator: Allocator) !*Matrix {
         // Assuming GLU is self * sigmoid(gating_part)
         return self.backend.applyGLU(self, gating_part, allocator);

@@ -499,6 +499,18 @@ pub const ExecutionContext = struct {
         };
     }
 
+    pub fn cachedSelfAttention(self: *ExecutionContext, query: Tensor, key: Tensor, value: Tensor, key_cache: *Tensor, value_cache: *Tensor, position: usize, heads: usize) !Tensor {
+        if (query.shape.rank != 2 or !query.shape.eql(key.shape) or !query.shape.eql(value.shape) or query.shape.dims[0] != 1 or
+            key_cache.shape.rank != 2 or !key_cache.shape.eql(value_cache.shape) or key_cache.shape.dims[1] != query.shape.dims[1] or
+            position >= key_cache.shape.dims[0] or heads == 0 or query.shape.dims[1] % heads != 0)
+        {
+            return error.DimensionMismatch;
+        }
+        const matrix = try query.matrix.cachedSelfAttention(key.matrix, value.matrix, key_cache.matrix, value_cache.matrix, position, heads, self.device.allocator);
+        self.stats.kernels += 1;
+        return .{ .matrix = matrix, .shape = query.shape, .allocator = self.device.allocator };
+    }
+
     pub fn softmax(self: *ExecutionContext, input: Tensor) !Tensor {
         if (input.shape.rank != 2) return error.InvalidRank;
         const matrix = try input.matrix.applySoftmax(self.device.allocator);

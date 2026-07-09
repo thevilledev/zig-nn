@@ -655,6 +655,50 @@ pub const CPUBackend = struct {
         return result;
     }
 
+    pub fn cachedSelfAttention(ptr: *anyopaque, query: *const Matrix, key: *const Matrix, value: *const Matrix, key_cache: *Matrix, value_cache: *Matrix, position: usize, heads: usize, allocator: Allocator) error{ OutOfMemory, DimensionMismatch, InvalidCachePosition }!*Matrix {
+        if (query.rows != 1 or key.rows != 1 or value.rows != 1 or query.cols != key.cols or query.cols != value.cols or
+            key_cache.rows != value_cache.rows or key_cache.cols != query.cols or value_cache.cols != query.cols or
+            heads == 0 or query.cols % heads != 0 or position >= key_cache.rows)
+        {
+            return error.DimensionMismatch;
+        }
+        const result = try initMatrix(ptr, allocator, 1, query.cols);
+        errdefer deinitMatrix(undefined, result);
+        const query_data = @as(*const CPUMatrix, @ptrCast(@alignCast(query.impl_data)));
+        const key_data = @as(*const CPUMatrix, @ptrCast(@alignCast(key.impl_data)));
+        const value_data = @as(*const CPUMatrix, @ptrCast(@alignCast(value.impl_data)));
+        const key_cache_data = @as(*CPUMatrix, @ptrCast(@alignCast(key_cache.impl_data)));
+        const value_cache_data = @as(*CPUMatrix, @ptrCast(@alignCast(value_cache.impl_data)));
+        const result_data = @as(*CPUMatrix, @ptrCast(@alignCast(result.impl_data)));
+        @memcpy(key_cache_data.data[position * query.cols ..][0..query.cols], key_data.data[0..query.cols]);
+        @memcpy(value_cache_data.data[position * query.cols ..][0..query.cols], value_data.data[0..query.cols]);
+        const probabilities = try allocator.alloc(f32, position + 1);
+        defer allocator.free(probabilities);
+        const head_width = query.cols / heads;
+        const attention_scale = 1.0 / @sqrt(@as(f32, @floatFromInt(head_width)));
+        for (0..heads) |head| {
+            const offset = head * head_width;
+            var max_score = -std.math.inf(f32);
+            for (0..position + 1) |key_position| {
+                var score: f32 = 0;
+                for (0..head_width) |channel| score += query_data.data[offset + channel] * key_cache_data.data[key_position * query.cols + offset + channel];
+                probabilities[key_position] = score * attention_scale;
+                max_score = @max(max_score, probabilities[key_position]);
+            }
+            var denominator: f32 = 0;
+            for (0..position + 1) |key_position| {
+                probabilities[key_position] = @exp(probabilities[key_position] - max_score);
+                denominator += probabilities[key_position];
+            }
+            for (0..head_width) |channel| {
+                var output: f32 = 0;
+                for (0..position + 1) |key_position| output += probabilities[key_position] / denominator * value_cache_data.data[key_position * query.cols + offset + channel];
+                result_data.data[offset + channel] = output;
+            }
+        }
+        return result;
+    }
+
     pub fn applyGLU(ptr: *anyopaque, linear_part: *const Matrix, gating_part: *const Matrix, allocator: Allocator) error{ OutOfMemory, DimensionMismatch }!*Matrix {
         if (linear_part.rows != gating_part.rows or linear_part.cols != gating_part.cols) {
             return error.DimensionMismatch;

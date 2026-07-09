@@ -674,6 +674,51 @@ kernel void embedding_gradient(
     result[vocabulary_index * channels + channel] = sum;
 }
 
+kernel void cached_self_attention(
+    device const float* query [[buffer(0)]],
+    device const float* key [[buffer(1)]],
+    device const float* value [[buffer(2)]],
+    device float* key_cache [[buffer(3)]],
+    device float* value_cache [[buffer(4)]],
+    device float* result [[buffer(5)]],
+    constant uint& position [[buffer(6)]],
+    constant uint& channels [[buffer(7)]],
+    constant uint& heads [[buffer(8)]],
+    uint head [[thread_position_in_grid]]
+) {
+    if (head >= heads) return;
+    uint head_width = channels / heads;
+    uint offset = head * head_width;
+    for (uint channel = 0; channel < head_width; channel++) {
+        key_cache[position * channels + offset + channel] = key[offset + channel];
+        value_cache[position * channels + offset + channel] = value[offset + channel];
+    }
+    float scale = rsqrt(float(head_width));
+    float max_score = -INFINITY;
+    for (uint key_position = 0; key_position <= position; key_position++) {
+        float score = 0.0f;
+        for (uint channel = 0; channel < head_width; channel++) {
+            score += query[offset + channel] * key_cache[key_position * channels + offset + channel];
+        }
+        max_score = max(max_score, score * scale);
+    }
+    float denominator = 0.0f;
+    for (uint key_position = 0; key_position <= position; key_position++) {
+        float score = 0.0f;
+        for (uint channel = 0; channel < head_width; channel++) score += query[offset + channel] * key_cache[key_position * channels + offset + channel];
+        denominator += exp(score * scale - max_score);
+    }
+    for (uint output_channel = 0; output_channel < head_width; output_channel++) {
+        float output = 0.0f;
+        for (uint key_position = 0; key_position <= position; key_position++) {
+            float score = 0.0f;
+            for (uint channel = 0; channel < head_width; channel++) score += query[offset + channel] * key_cache[key_position * channels + offset + channel];
+            output += exp(score * scale - max_score) / denominator * value_cache[key_position * channels + offset + output_channel];
+        }
+        result[offset + output_channel] = output;
+    }
+}
+
 // Gated Linear Unit
 // result[i] = linear[i] * sigmoid(gating[i])
 kernel void apply_glu(

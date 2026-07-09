@@ -371,6 +371,19 @@ pub const CausalSelfAttention = struct {
         };
     }
 
+    pub fn forwardCached(self: *const CausalSelfAttention, context: *ExecutionContext, input: Tensor, key_cache: *Tensor, value_cache: *Tensor, position: usize) !Tensor {
+        if (input.shape.rank != 2 or input.shape.dims[0] != 1 or input.shape.dims[1] != self.channels) return error.DimensionMismatch;
+        var query = try self.query.forward(context, input);
+        defer query.deinit();
+        var key = try self.key.forward(context, input);
+        defer key.deinit();
+        var value = try self.value.forward(context, input);
+        defer value.deinit();
+        var attended = try context.cachedSelfAttention(query, key, value, key_cache, value_cache, position, self.heads);
+        defer attended.deinit();
+        return self.output.forward(context, attended);
+    }
+
     pub fn parameterCount(self: CausalSelfAttention) usize {
         return self.query.parameterCount() + self.key.parameterCount() +
             self.value.parameterCount() + self.output.parameterCount();
@@ -577,6 +590,20 @@ pub const Block = struct {
         };
     }
 
+    pub fn forwardCached(self: *const Block, context: *ExecutionContext, input: Tensor, key_cache: *Tensor, value_cache: *Tensor, position: usize) !Tensor {
+        var normalized_attention = try self.attention_norm.forward(context, input);
+        defer normalized_attention.deinit();
+        var attention_output = try self.attention.forwardCached(context, normalized_attention, key_cache, value_cache, position);
+        defer attention_output.deinit();
+        var attention_residual = try context.add(input, attention_output);
+        defer attention_residual.deinit();
+        var normalized_feed_forward = try self.feed_forward_norm.forward(context, attention_residual);
+        defer normalized_feed_forward.deinit();
+        var feed_forward_output = try self.feed_forward.forward(context, normalized_feed_forward);
+        defer feed_forward_output.deinit();
+        return context.add(attention_residual, feed_forward_output);
+    }
+
     pub fn parameterCount(self: Block) usize {
         return self.attention_norm.parameterCount() + self.attention.parameterCount() +
             self.feed_forward_norm.parameterCount() + self.feed_forward.parameterCount();
@@ -760,6 +787,59 @@ pub const Decoder = struct {
         return objective.loss(context, targets);
     }
 
+    pub fn initCache(self: Decoder, context: *ExecutionContext) !DecoderCache {
+        const keys = try self.allocator.alloc(Tensor, self.blocks.len);
+        var initialized_keys: usize = 0;
+        errdefer {
+            for (keys[0..initialized_keys]) |*key| key.deinit();
+            self.allocator.free(keys);
+        }
+        const values = try self.allocator.alloc(Tensor, self.blocks.len);
+        var initialized_values: usize = 0;
+        errdefer {
+            for (values[0..initialized_values]) |*value| value.deinit();
+            self.allocator.free(values);
+        }
+        for (keys, values) |*key, *value| {
+            key.* = try context.createTensor(&.{ self.config.maximum_sequence_length, self.config.channels });
+            initialized_keys += 1;
+            key.fill(0);
+            value.* = try context.createTensor(&.{ self.config.maximum_sequence_length, self.config.channels });
+            initialized_values += 1;
+            value.fill(0);
+        }
+        return .{ .allocator = self.allocator, .keys = keys, .values = values, .position = 0 };
+    }
+
+    pub fn forwardToken(self: *const Decoder, context: *ExecutionContext, token: Tensor, cache: *DecoderCache) !Tensor {
+        if (token.shape.rank != 2 or token.shape.dims[0] != 1 or token.shape.dims[1] != 1 or
+            cache.keys.len != self.blocks.len or cache.values.len != self.blocks.len or
+            cache.position >= self.config.maximum_sequence_length)
+        {
+            return error.DimensionMismatch;
+        }
+        const position_value = [_]f32{@floatFromInt(cache.position)};
+        var position = try context.upload(&.{ 1, 1 }, &position_value);
+        defer position.deinit();
+        var token_value = try self.token_embedding.forward(context, token);
+        defer token_value.deinit();
+        var position_embedding = try self.position_embedding.forward(context, position);
+        defer position_embedding.deinit();
+        var current = try context.add(token_value, position_embedding);
+        errdefer current.deinit();
+        for (self.blocks, 0..) |*block, index| {
+            const next = try block.forwardCached(context, current, &cache.keys[index], &cache.values[index], cache.position);
+            current.deinit();
+            current = next;
+        }
+        var normalized = try self.final_norm.forward(context, current);
+        current.deinit();
+        defer normalized.deinit();
+        const logits = try self.language_model_head.forward(context, normalized);
+        cache.position += 1;
+        return logits;
+    }
+
     pub fn parameterCount(self: Decoder) usize {
         var count = self.token_embedding.parameterCount() + self.position_embedding.parameterCount() +
             self.final_norm.parameterCount() + self.language_model_head.parameterCount();
@@ -773,6 +853,27 @@ pub const Decoder = struct {
         {
             return error.DimensionMismatch;
         }
+    }
+};
+
+pub const DecoderCache = struct {
+    allocator: Allocator,
+    keys: []Tensor,
+    values: []Tensor,
+    position: usize,
+
+    pub fn deinit(self: *DecoderCache) void {
+        for (self.keys) |*key| key.deinit();
+        for (self.values) |*value| value.deinit();
+        self.allocator.free(self.keys);
+        self.allocator.free(self.values);
+        self.* = undefined;
+    }
+
+    pub fn reset(self: *DecoderCache) void {
+        for (self.keys) |*key| key.fill(0);
+        for (self.values) |*value| value.fill(0);
+        self.position = 0;
     }
 };
 
@@ -944,4 +1045,53 @@ test "decoder trains token embeddings and transformer body end to end" {
     try context.endBatch();
     defer logits.deinit();
     try testing.expectEqualSlices(usize, &.{ 3, 3 }, logits.shape.slice());
+}
+
+test "decoder KV cache matches full causal logits" {
+    const testing = std.testing;
+    const allocator: Allocator = testing.allocator;
+    var device = try tensor.Device.init(allocator, .cpu);
+    defer device.deinit();
+    var context = ExecutionContext.init(&device);
+    var prng = std.Random.DefaultPrng.init(321);
+    var decoder = try Decoder.init(&context, .{
+        .vocabulary_size = 5,
+        .maximum_sequence_length = 4,
+        .layers = 1,
+        .heads = 2,
+        .channels = 4,
+        .hidden_features = 8,
+    }, prng.random());
+    defer decoder.deinit();
+    var cache = try decoder.initCache(&context);
+    defer cache.deinit();
+    const token_values = [_]f32{ 1, 2, 3 };
+    const position_values = [_]f32{ 0, 1, 2 };
+
+    for (0..token_values.len) |position| {
+        var token = try context.upload(&.{ 1, 1 }, token_values[position .. position + 1]);
+        defer token.deinit();
+        var prefix = try context.upload(&.{ position + 1, 1 }, token_values[0 .. position + 1]);
+        defer prefix.deinit();
+        var positions = try context.upload(&.{ position + 1, 1 }, position_values[0 .. position + 1]);
+        defer positions.deinit();
+        try context.beginBatch();
+        var cached_logits = try decoder.forwardToken(&context, token, &cache);
+        var full_logits = try decoder.forward(&context, prefix, positions);
+        try context.endBatch();
+        defer cached_logits.deinit();
+        defer full_logits.deinit();
+        var cached_values: [5]f32 = undefined;
+        try context.readback(cached_logits, &cached_values);
+        const full_values = try allocator.alloc(f32, (position + 1) * 5);
+        defer allocator.free(full_values);
+        try context.readback(full_logits, full_values);
+        const last_row = full_values[position * 5 ..][0..5];
+        for (cached_values, last_row) |cached_value, full_value| {
+            try testing.expectApproxEqAbs(full_value, cached_value, 2e-4);
+        }
+    }
+    try testing.expectEqual(@as(usize, 3), cache.position);
+    cache.reset();
+    try testing.expectEqual(@as(usize, 0), cache.position);
 }

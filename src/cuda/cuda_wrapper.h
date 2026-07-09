@@ -55,6 +55,7 @@ int cuda_launch_causal_attention_probabilities_backward(CUDABackendRef backend_r
 int cuda_launch_causal_attention_input_gradients(CUDABackendRef backend_ref, CUDABufferRef query_ref, CUDABufferRef key_ref, CUDABufferRef output_gradient_ref, CUDABufferRef probabilities_ref, CUDABufferRef score_gradients_ref, CUDABufferRef query_gradient_ref, CUDABufferRef key_gradient_ref, CUDABufferRef value_gradient_ref, unsigned int tokens, unsigned int channels, unsigned int heads);
 int cuda_launch_embedding_lookup(CUDABackendRef backend_ref, CUDABufferRef table_ref, CUDABufferRef indices_ref, CUDABufferRef result_ref, unsigned int vocabulary_size, unsigned int tokens, unsigned int channels);
 int cuda_launch_embedding_gradient(CUDABackendRef backend_ref, CUDABufferRef indices_ref, CUDABufferRef output_gradient_ref, CUDABufferRef result_ref, unsigned int vocabulary_size, unsigned int tokens, unsigned int channels);
+int cuda_launch_cached_self_attention(CUDABackendRef backend_ref, CUDABufferRef query_ref, CUDABufferRef key_ref, CUDABufferRef value_ref, CUDABufferRef key_cache_ref, CUDABufferRef value_cache_ref, CUDABufferRef result_ref, unsigned int position, unsigned int channels, unsigned int heads);
 
 #ifdef __cplusplus
 }

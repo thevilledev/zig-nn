@@ -181,6 +181,10 @@ const CUDA = if (enable_cuda) struct {
     pub fn launchEmbeddingGradient(backend_ref: *Backend, indices: *Buffer, output_gradient: *Buffer, result: *Buffer, vocabulary_size: u32, tokens: u32, channels: u32) bool {
         return c.cuda_launch_embedding_gradient(toC(backend_ref), toC(indices), toC(output_gradient), toC(result), vocabulary_size, tokens, channels) != 0;
     }
+
+    pub fn launchCachedSelfAttention(backend_ref: *Backend, query: *Buffer, key: *Buffer, value: *Buffer, key_cache: *Buffer, value_cache: *Buffer, result: *Buffer, position: u32, channels: u32, heads: u32) bool {
+        return c.cuda_launch_cached_self_attention(toC(backend_ref), toC(query), toC(key), toC(value), toC(key_cache), toC(value_cache), toC(result), position, channels, heads) != 0;
+    }
 } else struct {
     pub const Backend = anyopaque;
     pub const Buffer = anyopaque;
@@ -301,6 +305,10 @@ const CUDA = if (enable_cuda) struct {
     }
 
     pub fn launchEmbeddingGradient(_: *Backend, _: *Buffer, _: *Buffer, _: *Buffer, _: u32, _: u32, _: u32) bool {
+        return false;
+    }
+
+    pub fn launchCachedSelfAttention(_: *Backend, _: *Buffer, _: *Buffer, _: *Buffer, _: *Buffer, _: *Buffer, _: *Buffer, _: u32, _: u32, _: u32) bool {
         return false;
     }
 };
@@ -828,6 +836,29 @@ pub const CUDABackend = struct {
         const result_buffer = result_data.buffer orelse return false;
         if (!CUDA.launchEmbeddingGradient(backend_ref, indices_buffer, output_gradient_buffer, result_buffer, toU32(result.rows), toU32(indices.rows), toU32(result.cols))) return false;
         if (!self.completeSubmittedKernel()) return false;
+        result_data.markGPUModified();
+        return true;
+    }
+
+    fn dispatchCachedSelfAttention(self: *CUDABackend, query: *const Matrix, key: *const Matrix, value: *const Matrix, key_cache: *Matrix, value_cache: *Matrix, position: usize, heads: usize, result: *Matrix) bool {
+        const backend_ref = self.backend orelse return false;
+        const query_data = getCUDAMatrix(query);
+        const key_data = getCUDAMatrix(key);
+        const value_data = getCUDAMatrix(value);
+        const key_cache_data = getCUDAMatrix(key_cache);
+        const value_cache_data = getCUDAMatrix(value_cache);
+        const result_data = getCUDAMatrix(result);
+        if (!query_data.syncToGPU() or !key_data.syncToGPU() or !value_data.syncToGPU() or !key_cache_data.syncToGPU() or !value_cache_data.syncToGPU()) return false;
+        const query_buffer = query_data.buffer orelse return false;
+        const key_buffer = key_data.buffer orelse return false;
+        const value_buffer = value_data.buffer orelse return false;
+        const key_cache_buffer = key_cache_data.buffer orelse return false;
+        const value_cache_buffer = value_cache_data.buffer orelse return false;
+        const result_buffer = result_data.buffer orelse return false;
+        if (!CUDA.launchCachedSelfAttention(backend_ref, query_buffer, key_buffer, value_buffer, key_cache_buffer, value_cache_buffer, result_buffer, toU32(position), toU32(query.cols), toU32(heads))) return false;
+        if (!self.completeSubmittedKernel()) return false;
+        key_cache_data.markGPUModified();
+        value_cache_data.markGPUModified();
         result_data.markGPUModified();
         return true;
     }
@@ -1521,6 +1552,60 @@ pub const CUDABackend = struct {
                 result_data.host_data[index * output_gradient.cols + col] += output_gradient_data.host_data[row * output_gradient.cols + col];
             }
         }
+        result_data.markHostModified();
+        return result;
+    }
+
+    pub fn cachedSelfAttention(ptr: *anyopaque, query: *const Matrix, key: *const Matrix, value: *const Matrix, key_cache: *Matrix, value_cache: *Matrix, position: usize, heads: usize, allocator: Allocator) error{ OutOfMemory, DimensionMismatch, InvalidCachePosition }!*Matrix {
+        if (query.rows != 1 or key.rows != 1 or value.rows != 1 or query.cols != key.cols or query.cols != value.cols or
+            key_cache.rows != value_cache.rows or key_cache.cols != query.cols or value_cache.cols != query.cols or
+            heads == 0 or query.cols % heads != 0 or position >= key_cache.rows)
+        {
+            return error.DimensionMismatch;
+        }
+        const result = try initMatrix(ptr, allocator, 1, query.cols);
+        errdefer deinitMatrix(ptr, result);
+        const self = @as(*CUDABackend, @ptrCast(@alignCast(ptr)));
+        if (self.dispatchCachedSelfAttention(query, key, value, key_cache, value_cache, position, heads, result)) return result;
+        const query_data = getCUDAMatrix(query);
+        const key_data = getCUDAMatrix(key);
+        const value_data = getCUDAMatrix(value);
+        const key_cache_data = getCUDAMatrix(key_cache);
+        const value_cache_data = getCUDAMatrix(value_cache);
+        const result_data = getCUDAMatrix(result);
+        ensureHostData(query_data);
+        ensureHostData(key_data);
+        ensureHostData(value_data);
+        ensureHostData(key_cache_data);
+        ensureHostData(value_cache_data);
+        @memcpy(key_cache_data.host_data[position * query.cols ..][0..query.cols], key_data.host_data[0..query.cols]);
+        @memcpy(value_cache_data.host_data[position * query.cols ..][0..query.cols], value_data.host_data[0..query.cols]);
+        const probabilities = try allocator.alloc(f32, position + 1);
+        defer allocator.free(probabilities);
+        const head_width = query.cols / heads;
+        const attention_scale = 1.0 / @sqrt(@as(f32, @floatFromInt(head_width)));
+        for (0..heads) |head| {
+            const offset = head * head_width;
+            var max_score = -std.math.inf(f32);
+            for (0..position + 1) |key_position| {
+                var score: f32 = 0;
+                for (0..head_width) |channel| score += query_data.host_data[offset + channel] * key_cache_data.host_data[key_position * query.cols + offset + channel];
+                probabilities[key_position] = score * attention_scale;
+                max_score = @max(max_score, probabilities[key_position]);
+            }
+            var denominator: f32 = 0;
+            for (0..position + 1) |key_position| {
+                probabilities[key_position] = @exp(probabilities[key_position] - max_score);
+                denominator += probabilities[key_position];
+            }
+            for (0..head_width) |channel| {
+                var output: f32 = 0;
+                for (0..position + 1) |key_position| output += probabilities[key_position] / denominator * value_cache_data.host_data[key_position * query.cols + offset + channel];
+                result_data.host_data[offset + channel] = output;
+            }
+        }
+        key_cache_data.markHostModified();
+        value_cache_data.markHostModified();
         result_data.markHostModified();
         return result;
     }
