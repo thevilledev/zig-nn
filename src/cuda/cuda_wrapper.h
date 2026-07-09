@@ -29,6 +29,7 @@ enum ZigNNCudaKernelId {
 CUDABackendRef cuda_backend_create(const char* kernel_source, char* error_buffer, unsigned long error_buffer_len);
 void cuda_backend_destroy(CUDABackendRef backend_ref);
 int cuda_backend_device_name(CUDABackendRef backend_ref, char* output, unsigned long output_len);
+int cuda_backend_synchronize(CUDABackendRef backend_ref);
 
 CUDABufferRef cuda_backend_create_buffer(CUDABackendRef backend_ref, unsigned long count);
 void cuda_backend_destroy_buffer(CUDABackendRef backend_ref, CUDABufferRef buffer_ref);

@@ -85,6 +85,10 @@ const CUDA = if (enable_cuda) struct {
         return c.cuda_backend_device_name(toC(backend_ref), output.ptr, output.len) != 0;
     }
 
+    pub fn synchronize(backend_ref: *Backend) bool {
+        return c.cuda_backend_synchronize(toC(backend_ref)) != 0;
+    }
+
     pub fn createBuffer(backend_ref: *Backend, count: usize) ?*Buffer {
         return fromC(Buffer, c.cuda_backend_create_buffer(toC(backend_ref), count));
     }
@@ -165,6 +169,10 @@ const CUDA = if (enable_cuda) struct {
     pub fn destroyBackend(_: ?*Backend) void {}
 
     pub fn deviceName(_: *Backend, _: []u8) bool {
+        return false;
+    }
+
+    pub fn synchronize(_: *Backend) bool {
         return false;
     }
 
@@ -281,6 +289,8 @@ const CUDAMatrix = struct {
     pub fn syncToCPU(self: *CUDAMatrix) bool {
         if (!self.gpu_dirty) return true;
 
+        if (!self.owner.synchronizeQueued()) return false;
+
         const buffer = self.buffer orelse return false;
         if (!CUDA.bufferDownloadF32(self.backend, buffer, self.host_data)) {
             return false;
@@ -309,6 +319,9 @@ pub const CUDABackend = struct {
     backend: ?*CUDA.Backend,
     device_name: [256]u8,
     stats: backend.RuntimeStats,
+    batch_active: bool,
+    synchronized_kernel_count: usize,
+    deferred_matrices: std.ArrayList(*Matrix),
 
     pub fn init(allocator: Allocator) (CUDAError || Allocator.Error)!*CUDABackend {
         if (!enable_cuda) {
@@ -329,6 +342,9 @@ pub const CUDABackend = struct {
             .backend = backend_ref,
             .device_name = [_]u8{0} ** 256,
             .stats = .{},
+            .batch_active = false,
+            .synchronized_kernel_count = 0,
+            .deferred_matrices = .empty,
         };
         _ = CUDA.deviceName(backend_ref, cuda_backend.device_name[0..]);
 
@@ -336,6 +352,10 @@ pub const CUDABackend = struct {
     }
 
     pub fn deinit(self: *CUDABackend) void {
+        self.batch_active = false;
+        _ = self.synchronizeQueued();
+        self.releaseDeferredMatrices();
+        self.deferred_matrices.deinit(self.allocator);
         CUDA.destroyBackend(self.backend);
         self.allocator.destroy(self);
     }
@@ -352,11 +372,56 @@ pub const CUDABackend = struct {
     pub fn resetRuntimeStats(ptr: *anyopaque) void {
         const self = @as(*CUDABackend, @ptrCast(@alignCast(ptr)));
         self.stats = .{};
+        self.synchronized_kernel_count = 0;
     }
 
-    fn recordCompletedKernel(self: *CUDABackend) void {
+    pub fn beginBatch(ptr: *anyopaque) !void {
+        const self = @as(*CUDABackend, @ptrCast(@alignCast(ptr)));
+        if (self.batch_active) return error.BatchAlreadyActive;
+        self.batch_active = true;
+    }
+
+    pub fn endBatch(ptr: *anyopaque) !void {
+        const self = @as(*CUDABackend, @ptrCast(@alignCast(ptr)));
+        if (!self.batch_active) return error.NoActiveBatch;
+        self.batch_active = false;
+        if (!self.synchronizeQueued()) return error.CommandExecutionFailed;
+    }
+
+    pub fn synchronize(ptr: *anyopaque) !void {
+        const self = @as(*CUDABackend, @ptrCast(@alignCast(ptr)));
+        if (!self.synchronizeQueued()) return error.CommandExecutionFailed;
+    }
+
+    fn completeSubmittedKernel(self: *CUDABackend) bool {
         self.stats.kernel_launches += 1;
-        self.stats.synchronizations += 1;
+        if (self.batch_active) return true;
+        return self.synchronizeQueued();
+    }
+
+    fn synchronizeQueued(self: *CUDABackend) bool {
+        if (self.synchronized_kernel_count != self.stats.kernel_launches) {
+            const backend_ref = self.backend orelse return false;
+            if (!CUDA.synchronize(backend_ref)) return false;
+            self.stats.synchronizations += 1;
+            self.synchronized_kernel_count = self.stats.kernel_launches;
+        }
+        self.releaseDeferredMatrices();
+        return true;
+    }
+
+    fn releaseDeferredMatrices(self: *CUDABackend) void {
+        for (self.deferred_matrices.items) |matrix| {
+            deinitMatrixNow(matrix);
+        }
+        self.deferred_matrices.clearRetainingCapacity();
+    }
+
+    fn deinitMatrixNow(matrix: *Matrix) void {
+        const cuda_matrix = getCUDAMatrix(matrix);
+        const allocator = cuda_matrix.allocator;
+        cuda_matrix.deinit();
+        allocator.destroy(matrix);
     }
 
     fn getCUDAMatrix(matrix: *const Matrix) *CUDAMatrix {
@@ -392,7 +457,7 @@ pub const CUDABackend = struct {
             return false;
         }
 
-        self.recordCompletedKernel();
+        if (!self.completeSubmittedKernel()) return false;
         result_cuda.markGPUModified();
         return true;
     }
@@ -412,7 +477,7 @@ pub const CUDABackend = struct {
             return false;
         }
 
-        self.recordCompletedKernel();
+        if (!self.completeSubmittedKernel()) return false;
         result_cuda.markGPUModified();
         return true;
     }
@@ -430,7 +495,7 @@ pub const CUDABackend = struct {
             return false;
         }
 
-        self.recordCompletedKernel();
+        if (!self.completeSubmittedKernel()) return false;
         result_cuda.markGPUModified();
         return true;
     }
@@ -448,7 +513,7 @@ pub const CUDABackend = struct {
             return false;
         }
 
-        self.recordCompletedKernel();
+        if (!self.completeSubmittedKernel()) return false;
         result_cuda.markGPUModified();
         return true;
     }
@@ -466,7 +531,7 @@ pub const CUDABackend = struct {
             return false;
         }
 
-        self.recordCompletedKernel();
+        if (!self.completeSubmittedKernel()) return false;
         result_cuda.markGPUModified();
         return true;
     }
@@ -484,7 +549,7 @@ pub const CUDABackend = struct {
             return false;
         }
 
-        self.recordCompletedKernel();
+        if (!self.completeSubmittedKernel()) return false;
         result_cuda.markGPUModified();
         return true;
     }
@@ -502,7 +567,7 @@ pub const CUDABackend = struct {
             return false;
         }
 
-        self.recordCompletedKernel();
+        if (!self.completeSubmittedKernel()) return false;
         result_cuda.markGPUModified();
         return true;
     }
@@ -520,7 +585,7 @@ pub const CUDABackend = struct {
             return false;
         }
 
-        self.recordCompletedKernel();
+        if (!self.completeSubmittedKernel()) return false;
         result_cuda.markGPUModified();
         return true;
     }
@@ -540,7 +605,7 @@ pub const CUDABackend = struct {
             return false;
         }
 
-        self.recordCompletedKernel();
+        if (!self.completeSubmittedKernel()) return false;
         result_cuda.markGPUModified();
         return true;
     }
@@ -563,11 +628,16 @@ pub const CUDABackend = struct {
         return matrix;
     }
 
-    pub fn deinitMatrix(_: *anyopaque, matrix: *Matrix) void {
-        const cuda_matrix = getCUDAMatrix(matrix);
-        const allocator = cuda_matrix.allocator;
-        cuda_matrix.deinit();
-        allocator.destroy(matrix);
+    pub fn deinitMatrix(ptr: *anyopaque, matrix: *Matrix) void {
+        const self = @as(*CUDABackend, @ptrCast(@alignCast(ptr)));
+        if (self.batch_active) {
+            self.deferred_matrices.append(self.allocator, matrix) catch {
+                _ = self.synchronizeQueued();
+                deinitMatrixNow(matrix);
+            };
+            return;
+        }
+        deinitMatrixNow(matrix);
     }
 
     pub fn copyMatrix(ptr: *anyopaque, source: *const Matrix, allocator: Allocator) error{OutOfMemory}!*Matrix {

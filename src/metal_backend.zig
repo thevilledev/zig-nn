@@ -294,6 +294,8 @@ const MetalMatrix = struct {
     pub fn syncToCPU(self: *MetalMatrix) bool {
         if (!self.gpu_dirty) return true;
 
+        if (!self.owner.synchronizeQueued()) return false;
+
         const buffer = self.buffer orelse return false;
         if (!Metal.bufferDownloadF32(buffer, self.host_data)) {
             return false;
@@ -321,6 +323,8 @@ const MetalMatrix = struct {
 pub const MetalBackend = struct {
     allocator: Allocator,
     stats: backend.RuntimeStats,
+    batch_active: bool,
+    synchronized_kernel_count: usize,
 
     // Metal-specific state
     device: ?*Metal.Device,
@@ -375,6 +379,8 @@ pub const MetalBackend = struct {
         metal_backend.* = MetalBackend{
             .allocator = allocator,
             .stats = .{},
+            .batch_active = false,
+            .synchronized_kernel_count = 0,
             .device = device,
             .command_queue = null, // Initialize all fields to null
             .library = null,
@@ -415,6 +421,8 @@ pub const MetalBackend = struct {
 
     /// Free all resources used by the Metal backend
     pub fn deinit(self: *MetalBackend) void {
+        self.batch_active = false;
+        _ = self.synchronizeQueued();
         Metal.release(self.matrix_multiply_pipeline);
         Metal.release(self.element_wise_add_pipeline);
         Metal.release(self.element_wise_subtract_pipeline);
@@ -480,11 +488,48 @@ pub const MetalBackend = struct {
     pub fn resetRuntimeStats(ptr: *anyopaque) void {
         const self = @as(*MetalBackend, @ptrCast(@alignCast(ptr)));
         self.stats = .{};
+        self.synchronized_kernel_count = 0;
     }
 
-    fn recordCompletedKernel(self: *MetalBackend) void {
+    pub fn beginBatch(ptr: *anyopaque) !void {
+        const self = @as(*MetalBackend, @ptrCast(@alignCast(ptr)));
+        if (self.batch_active) return error.BatchAlreadyActive;
+        self.batch_active = true;
+    }
+
+    pub fn endBatch(ptr: *anyopaque) !void {
+        const self = @as(*MetalBackend, @ptrCast(@alignCast(ptr)));
+        if (!self.batch_active) return error.NoActiveBatch;
+        self.batch_active = false;
+        if (!self.synchronizeQueued()) return error.CommandExecutionFailed;
+    }
+
+    pub fn synchronize(ptr: *anyopaque) !void {
+        const self = @as(*MetalBackend, @ptrCast(@alignCast(ptr)));
+        if (!self.synchronizeQueued()) return error.CommandExecutionFailed;
+    }
+
+    fn completeSubmittedKernel(self: *MetalBackend, command_buffer: *Metal.CommandBuffer) bool {
         self.stats.kernel_launches += 1;
+        if (self.batch_active) return true;
+        if (!Metal.commandBufferWaitUntilCompleted(command_buffer)) return false;
         self.stats.synchronizations += 1;
+        self.synchronized_kernel_count = self.stats.kernel_launches;
+        return true;
+    }
+
+    fn synchronizeQueued(self: *MetalBackend) bool {
+        if (self.synchronized_kernel_count == self.stats.kernel_launches) return true;
+
+        const command_queue = self.command_queue orelse return false;
+        const command_buffer = Metal.commandQueueCreateCommandBuffer(command_queue) orelse return false;
+        defer Metal.release(command_buffer);
+        Metal.commandBufferCommit(command_buffer);
+        if (!Metal.commandBufferWaitUntilCompleted(command_buffer)) return false;
+
+        self.stats.synchronizations += 1;
+        self.synchronized_kernel_count = self.stats.kernel_launches;
+        return true;
     }
 
     fn loadPipeline(self: *MetalBackend, slot: *?*Metal.ComputePipelineState, name: [*:0]const u8) !void {
@@ -556,9 +601,7 @@ pub const MetalBackend = struct {
         Metal.computeEncoderDispatchThreads(encoder, pipeline, b.cols, a.rows, 1);
         Metal.computeEncoderEndEncoding(encoder);
         Metal.commandBufferCommit(command_buffer);
-        if (!Metal.commandBufferWaitUntilCompleted(command_buffer)) return false;
-
-        self.recordCompletedKernel();
+        if (!self.completeSubmittedKernel(command_buffer)) return false;
         result_metal.markGPUModified();
         return true;
     }
@@ -589,9 +632,7 @@ pub const MetalBackend = struct {
         Metal.computeEncoderDispatchThreads(encoder, pipeline_state, a.cols, a.rows, 1);
         Metal.computeEncoderEndEncoding(encoder);
         Metal.commandBufferCommit(command_buffer);
-        if (!Metal.commandBufferWaitUntilCompleted(command_buffer)) return false;
-
-        self.recordCompletedKernel();
+        if (!self.completeSubmittedKernel(command_buffer)) return false;
         result_metal.markGPUModified();
         return true;
     }
@@ -620,9 +661,7 @@ pub const MetalBackend = struct {
         Metal.computeEncoderDispatchThreads(encoder, pipeline, matrix.cols, matrix.rows, 1);
         Metal.computeEncoderEndEncoding(encoder);
         Metal.commandBufferCommit(command_buffer);
-        if (!Metal.commandBufferWaitUntilCompleted(command_buffer)) return false;
-
-        self.recordCompletedKernel();
+        if (!self.completeSubmittedKernel(command_buffer)) return false;
         result_metal.markGPUModified();
         return true;
     }
@@ -650,9 +689,7 @@ pub const MetalBackend = struct {
         Metal.computeEncoderDispatchThreads(encoder, pipeline, matrix.rows, matrix.cols, 1);
         Metal.computeEncoderEndEncoding(encoder);
         Metal.commandBufferCommit(command_buffer);
-        if (!Metal.commandBufferWaitUntilCompleted(command_buffer)) return false;
-
-        self.recordCompletedKernel();
+        if (!self.completeSubmittedKernel(command_buffer)) return false;
         result_metal.markGPUModified();
         return true;
     }
@@ -680,9 +717,7 @@ pub const MetalBackend = struct {
         Metal.computeEncoderDispatchThreads(encoder, pipeline, matrix.cols, 1, 1);
         Metal.computeEncoderEndEncoding(encoder);
         Metal.commandBufferCommit(command_buffer);
-        if (!Metal.commandBufferWaitUntilCompleted(command_buffer)) return false;
-
-        self.recordCompletedKernel();
+        if (!self.completeSubmittedKernel(command_buffer)) return false;
         result_metal.markGPUModified();
         return true;
     }
@@ -711,9 +746,7 @@ pub const MetalBackend = struct {
         Metal.computeEncoderDispatchThreads(encoder, pipeline, result.cols, result.rows, 1);
         Metal.computeEncoderEndEncoding(encoder);
         Metal.commandBufferCommit(command_buffer);
-        if (!Metal.commandBufferWaitUntilCompleted(command_buffer)) return false;
-
-        self.recordCompletedKernel();
+        if (!self.completeSubmittedKernel(command_buffer)) return false;
         result_metal.markGPUModified();
         return true;
     }
@@ -740,9 +773,7 @@ pub const MetalBackend = struct {
         Metal.computeEncoderDispatchThreads(encoder, pipeline_state, elementCount(matrix), 1, 1);
         Metal.computeEncoderEndEncoding(encoder);
         Metal.commandBufferCommit(command_buffer);
-        if (!Metal.commandBufferWaitUntilCompleted(command_buffer)) return false;
-
-        self.recordCompletedKernel();
+        if (!self.completeSubmittedKernel(command_buffer)) return false;
         result_metal.markGPUModified();
         return true;
     }
@@ -770,9 +801,7 @@ pub const MetalBackend = struct {
         Metal.computeEncoderDispatchThreads(encoder, pipeline, matrix.rows, 1, 1);
         Metal.computeEncoderEndEncoding(encoder);
         Metal.commandBufferCommit(command_buffer);
-        if (!Metal.commandBufferWaitUntilCompleted(command_buffer)) return false;
-
-        self.recordCompletedKernel();
+        if (!self.completeSubmittedKernel(command_buffer)) return false;
         result_metal.markGPUModified();
         return true;
     }
@@ -802,9 +831,7 @@ pub const MetalBackend = struct {
         Metal.computeEncoderDispatchThreads(encoder, pipeline_state, elementCount(linear_part), 1, 1);
         Metal.computeEncoderEndEncoding(encoder);
         Metal.commandBufferCommit(command_buffer);
-        if (!Metal.commandBufferWaitUntilCompleted(command_buffer)) return false;
-
-        self.recordCompletedKernel();
+        if (!self.completeSubmittedKernel(command_buffer)) return false;
         result_metal.markGPUModified();
         return true;
     }

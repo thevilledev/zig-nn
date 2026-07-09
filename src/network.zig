@@ -1203,11 +1203,18 @@ pub const BackendTrainer = struct {
     }
 
     pub fn trainBatch(self: *BackendTrainer, inputs: *const BackendMatrix, targets: *const BackendMatrix) !f64 {
+        try inputs.backend.beginBatch();
+        var batch_active = true;
+        errdefer if (batch_active) inputs.backend.endBatch() catch {};
+
         const predictions = try self.forward(inputs);
         defer predictions.deinit();
 
         const loss = try self.calculateLoss(predictions, targets);
         try self.backward(predictions, targets);
+
+        try inputs.backend.endBatch();
+        batch_active = false;
 
         return loss;
     }
@@ -1607,11 +1614,18 @@ pub const Network = struct {
 
     /// Train the network on a single backend-aware batch of data.
     pub fn trainBatchBackend(self: *Network, inputs: *const BackendMatrix, targets: *const BackendMatrix) !f64 {
+        try inputs.backend.beginBatch();
+        var batch_active = true;
+        errdefer if (batch_active) inputs.backend.endBatch() catch {};
+
         const predictions = try self.forwardBackendTrain(inputs);
         defer predictions.deinit();
 
         const loss = try self.calculateLossBackend(predictions, targets);
         try self.backwardBackend(predictions, targets);
+
+        try inputs.backend.endBatch();
+        batch_active = false;
 
         return loss;
     }

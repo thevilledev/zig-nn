@@ -218,6 +218,7 @@ pub const ExecutionStats = struct {
 pub const ExecutionContext = struct {
     device: *Device,
     stats: ExecutionStats = .{},
+    batch_active: bool = false,
 
     pub fn init(device: *Device) ExecutionContext {
         return .{ .device = device };
@@ -284,7 +285,24 @@ pub const ExecutionContext = struct {
         };
     }
 
-    pub fn synchronize(self: *ExecutionContext) void {
+    pub fn beginBatch(self: *ExecutionContext) !void {
+        if (self.batch_active) return error.BatchAlreadyActive;
+        try self.device.instance.beginBatch();
+        self.batch_active = true;
+    }
+
+    pub fn endBatch(self: *ExecutionContext) !void {
+        if (!self.batch_active) return error.NoActiveBatch;
+        self.device.instance.endBatch() catch |err| {
+            self.batch_active = false;
+            return err;
+        };
+        self.batch_active = false;
+        self.stats.synchronizations += 1;
+    }
+
+    pub fn synchronize(self: *ExecutionContext) !void {
+        try self.device.instance.synchronize();
         self.stats.synchronizations += 1;
     }
 
@@ -405,5 +423,46 @@ test "auto device supports bulk f32 round trip" {
         try testing.expectEqual(@as(usize, 0), runtime_stats.device_to_host_transfers);
         try testing.expectEqual(@as(usize, 0), runtime_stats.kernel_launches);
         try testing.expectEqual(@as(usize, 0), runtime_stats.synchronizations);
+    }
+}
+
+test "execution batch shares one gpu synchronization" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var device = try Device.init(allocator, .auto);
+    defer device.deinit();
+    var context = ExecutionContext.init(&device);
+    context.resetStats();
+
+    var input = try context.upload(&.{ 2, 2 }, &.{ 1, 2, 3, 4 });
+    defer input.deinit();
+    var identity = try context.upload(&.{ 2, 2 }, &.{ 1, 0, 0, 1 });
+    defer identity.deinit();
+
+    try context.beginBatch();
+    try testing.expectError(error.BatchAlreadyActive, context.beginBatch());
+    var product = try context.matmul(input, identity);
+    var probabilities = try context.softmax(product);
+    defer probabilities.deinit();
+    product.deinit();
+    try context.endBatch();
+    try testing.expectError(error.NoActiveBatch, context.endBatch());
+
+    var actual: [4]f32 = undefined;
+    try context.readback(probabilities, &actual);
+    try testing.expectApproxEqAbs(@as(f32, 1.0), actual[0] + actual[1], 1e-5);
+    try testing.expectApproxEqAbs(@as(f32, 1.0), actual[2] + actual[3], 1e-5);
+
+    const runtime_stats = context.backendStats();
+    try testing.expectEqual(@as(usize, 4), runtime_stats.buffer_allocations);
+    if (device.backendType() == .CPU) {
+        try testing.expectEqual(@as(usize, 0), runtime_stats.kernel_launches);
+        try testing.expectEqual(@as(usize, 0), runtime_stats.synchronizations);
+    } else {
+        try testing.expectEqual(@as(usize, 2), runtime_stats.host_to_device_transfers);
+        try testing.expectEqual(@as(usize, 1), runtime_stats.device_to_host_transfers);
+        try testing.expectEqual(@as(usize, 2), runtime_stats.kernel_launches);
+        try testing.expectEqual(@as(usize, 1), runtime_stats.synchronizations);
     }
 }

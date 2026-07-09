@@ -78,6 +78,12 @@ pub const CPUBackend = struct {
         self.stats = .{};
     }
 
+    pub fn beginBatch(_: *anyopaque) !void {}
+
+    pub fn endBatch(_: *anyopaque) !void {}
+
+    pub fn synchronize(_: *anyopaque) !void {}
+
     pub fn deinitMatrix(_: *anyopaque, matrix: *Matrix) void {
         // First, cast to get the CPU-specific data
         const cpu_data = @as(*CPUMatrix, @ptrCast(@alignCast(matrix.impl_data)));

@@ -120,6 +120,30 @@ pub const BackendInstance = union(BackendType) {
         }
     }
 
+    pub fn beginBatch(self: BackendInstance) !void {
+        switch (self) {
+            .CPU => |ptr| try CPUBackend.beginBatch(ptr),
+            .Metal => |ptr| try MetalBackend.beginBatch(ptr),
+            .CUDA => |ptr| try CUDABackend.beginBatch(ptr),
+        }
+    }
+
+    pub fn endBatch(self: BackendInstance) !void {
+        switch (self) {
+            .CPU => |ptr| try CPUBackend.endBatch(ptr),
+            .Metal => |ptr| try MetalBackend.endBatch(ptr),
+            .CUDA => |ptr| try CUDABackend.endBatch(ptr),
+        }
+    }
+
+    pub fn synchronize(self: BackendInstance) !void {
+        switch (self) {
+            .CPU => |ptr| try CPUBackend.synchronize(ptr),
+            .Metal => |ptr| try MetalBackend.synchronize(ptr),
+            .CUDA => |ptr| try CUDABackend.synchronize(ptr),
+        }
+    }
+
     pub fn deinitMatrix(self: BackendInstance, matrix: *BackendMatrix) void {
         switch (self) {
             .CPU => |ptr| CPUBackend.deinitMatrix(ptr, matrix),

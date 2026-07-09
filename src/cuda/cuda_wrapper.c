@@ -348,6 +348,14 @@ int cuda_backend_device_name(CUDABackendRef backend_ref, char* output, unsigned 
     return 1;
 }
 
+int cuda_backend_synchronize(CUDABackendRef backend_ref) {
+    ZigNNCUDABackend* backend = (ZigNNCUDABackend*)backend_ref;
+    if (!cuda_set_context(backend)) {
+        return 0;
+    }
+    return cuCtxSynchronize() == CUDA_SUCCESS;
+}
+
 CUDABufferRef cuda_backend_create_buffer(CUDABackendRef backend_ref, unsigned long count) {
     ZigNNCUDABackend* backend = (ZigNNCUDABackend*)backend_ref;
     if (!cuda_set_context(backend)) {
@@ -419,7 +427,7 @@ static int cuda_launch_1d(ZigNNCUDABackend* backend, CUfunction function, unsign
         return 0;
     }
 
-    return cuCtxSynchronize() == CUDA_SUCCESS;
+    return 1;
 }
 
 static int cuda_launch_2d(ZigNNCUDABackend* backend, CUfunction function, unsigned int width, unsigned int height, void** args) {
@@ -443,7 +451,7 @@ static int cuda_launch_2d(ZigNNCUDABackend* backend, CUfunction function, unsign
         return 0;
     }
 
-    return cuCtxSynchronize() == CUDA_SUCCESS;
+    return 1;
 }
 
 int cuda_launch_matrix_multiply(CUDABackendRef backend_ref, CUDABufferRef a_ref, CUDABufferRef b_ref, CUDABufferRef result_ref, unsigned int a_rows, unsigned int a_cols, unsigned int b_cols) {
