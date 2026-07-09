@@ -100,6 +100,14 @@ pub const Device = struct {
         return self.instance.getBackendType();
     }
 
+    pub fn runtimeStats(self: Device) backend_mod.RuntimeStats {
+        return self.instance.runtimeStats();
+    }
+
+    pub fn resetRuntimeStats(self: *Device) void {
+        self.instance.resetRuntimeStats();
+    }
+
     pub fn createTensor(self: *Device, shape: []const usize) !Tensor {
         return Tensor.init(self.instance, self.allocator, shape);
     }
@@ -282,6 +290,11 @@ pub const ExecutionContext = struct {
 
     pub fn resetStats(self: *ExecutionContext) void {
         self.stats = .{};
+        self.device.resetRuntimeStats();
+    }
+
+    pub fn backendStats(self: ExecutionContext) backend_mod.RuntimeStats {
+        return self.device.runtimeStats();
     }
 };
 
@@ -357,20 +370,40 @@ test "auto device supports bulk f32 round trip" {
     var device = try Device.init(allocator, .auto);
     defer device.deinit();
     var context = ExecutionContext.init(&device);
+    context.resetStats();
 
     const expected = [_]f32{ -1.25, 0.5, 2.75, 4.0 };
     var tensor = try context.upload(&.{ 2, 2 }, &expected);
     defer tensor.deinit();
+    var identity = try context.upload(&.{ 2, 2 }, &.{ 1, 0, 0, 1 });
+    defer identity.deinit();
+    var product = try context.matmul(tensor, identity);
+    defer product.deinit();
 
     var actual: [expected.len]f32 = undefined;
-    try context.readback(tensor, &actual);
+    try context.readback(product, &actual);
     try testing.expectEqualSlices(f32, &expected, &actual);
+
+    const runtime_stats = context.backendStats();
+    try testing.expectEqual(@as(usize, 3), runtime_stats.buffer_allocations);
 
     if (builtin.os.tag == .macos and build_options.enable_metal) {
         try testing.expectEqual(BackendType.Metal, device.backendType());
+        try testing.expectEqual(@as(usize, 2), runtime_stats.host_to_device_transfers);
+        try testing.expectEqual(@as(usize, 1), runtime_stats.device_to_host_transfers);
+        try testing.expectEqual(@as(usize, 1), runtime_stats.kernel_launches);
+        try testing.expectEqual(@as(usize, 1), runtime_stats.synchronizations);
     } else if (builtin.os.tag == .linux and build_options.enable_cuda) {
         try testing.expectEqual(BackendType.CUDA, device.backendType());
+        try testing.expectEqual(@as(usize, 2), runtime_stats.host_to_device_transfers);
+        try testing.expectEqual(@as(usize, 1), runtime_stats.device_to_host_transfers);
+        try testing.expectEqual(@as(usize, 1), runtime_stats.kernel_launches);
+        try testing.expectEqual(@as(usize, 1), runtime_stats.synchronizations);
     } else {
         try testing.expectEqual(BackendType.CPU, device.backendType());
+        try testing.expectEqual(@as(usize, 0), runtime_stats.host_to_device_transfers);
+        try testing.expectEqual(@as(usize, 0), runtime_stats.device_to_host_transfers);
+        try testing.expectEqual(@as(usize, 0), runtime_stats.kernel_launches);
+        try testing.expectEqual(@as(usize, 0), runtime_stats.synchronizations);
     }
 }

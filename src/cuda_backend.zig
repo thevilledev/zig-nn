@@ -226,10 +226,11 @@ const CUDAMatrix = struct {
     host_data: []f32,
     allocator: Allocator,
     backend: *CUDA.Backend,
+    owner: *CUDABackend,
     dirty: bool,
     gpu_dirty: bool,
 
-    pub fn init(allocator: Allocator, rows: usize, cols: usize, backend_ref: *CUDA.Backend) !*CUDAMatrix {
+    pub fn init(allocator: Allocator, rows: usize, cols: usize, owner: *CUDABackend) !*CUDAMatrix {
         const cuda_matrix = try allocator.create(CUDAMatrix);
         errdefer allocator.destroy(cuda_matrix);
 
@@ -237,6 +238,7 @@ const CUDAMatrix = struct {
         errdefer allocator.free(host_data);
         @memset(host_data, 0);
 
+        const backend_ref = owner.backend orelse return error.CUDAInitializationFailed;
         const buffer = CUDA.createBuffer(backend_ref, rows * cols) orelse return error.BufferCreationFailed;
         errdefer CUDA.destroyBuffer(backend_ref, buffer);
 
@@ -247,9 +249,11 @@ const CUDAMatrix = struct {
             .host_data = host_data,
             .allocator = allocator,
             .backend = backend_ref,
+            .owner = owner,
             .dirty = true,
             .gpu_dirty = false,
         };
+        owner.stats.buffer_allocations += 1;
         return cuda_matrix;
     }
 
@@ -266,6 +270,8 @@ const CUDAMatrix = struct {
         if (!CUDA.bufferUploadF32(self.backend, buffer, self.host_data)) {
             return false;
         }
+        self.owner.stats.host_to_device_transfers += 1;
+        self.owner.stats.host_to_device_bytes += self.host_data.len * @sizeOf(f32);
 
         self.dirty = false;
         self.gpu_dirty = false;
@@ -279,6 +285,8 @@ const CUDAMatrix = struct {
         if (!CUDA.bufferDownloadF32(self.backend, buffer, self.host_data)) {
             return false;
         }
+        self.owner.stats.device_to_host_transfers += 1;
+        self.owner.stats.device_to_host_bytes += self.host_data.len * @sizeOf(f32);
 
         self.dirty = false;
         self.gpu_dirty = false;
@@ -300,6 +308,7 @@ pub const CUDABackend = struct {
     allocator: Allocator,
     backend: ?*CUDA.Backend,
     device_name: [256]u8,
+    stats: backend.RuntimeStats,
 
     pub fn init(allocator: Allocator) (CUDAError || Allocator.Error)!*CUDABackend {
         if (!enable_cuda) {
@@ -319,6 +328,7 @@ pub const CUDABackend = struct {
             .allocator = allocator,
             .backend = backend_ref,
             .device_name = [_]u8{0} ** 256,
+            .stats = .{},
         };
         _ = CUDA.deviceName(backend_ref, cuda_backend.device_name[0..]);
 
@@ -332,6 +342,21 @@ pub const CUDABackend = struct {
 
     pub fn getDeviceName(self: *const CUDABackend) []const u8 {
         return std.mem.sliceTo(&self.device_name, 0);
+    }
+
+    pub fn runtimeStats(ptr: *anyopaque) backend.RuntimeStats {
+        const self = @as(*CUDABackend, @ptrCast(@alignCast(ptr)));
+        return self.stats;
+    }
+
+    pub fn resetRuntimeStats(ptr: *anyopaque) void {
+        const self = @as(*CUDABackend, @ptrCast(@alignCast(ptr)));
+        self.stats = .{};
+    }
+
+    fn recordCompletedKernel(self: *CUDABackend) void {
+        self.stats.kernel_launches += 1;
+        self.stats.synchronizations += 1;
     }
 
     fn getCUDAMatrix(matrix: *const Matrix) *CUDAMatrix {
@@ -367,6 +392,7 @@ pub const CUDABackend = struct {
             return false;
         }
 
+        self.recordCompletedKernel();
         result_cuda.markGPUModified();
         return true;
     }
@@ -386,6 +412,7 @@ pub const CUDABackend = struct {
             return false;
         }
 
+        self.recordCompletedKernel();
         result_cuda.markGPUModified();
         return true;
     }
@@ -403,6 +430,7 @@ pub const CUDABackend = struct {
             return false;
         }
 
+        self.recordCompletedKernel();
         result_cuda.markGPUModified();
         return true;
     }
@@ -420,6 +448,7 @@ pub const CUDABackend = struct {
             return false;
         }
 
+        self.recordCompletedKernel();
         result_cuda.markGPUModified();
         return true;
     }
@@ -437,6 +466,7 @@ pub const CUDABackend = struct {
             return false;
         }
 
+        self.recordCompletedKernel();
         result_cuda.markGPUModified();
         return true;
     }
@@ -454,6 +484,7 @@ pub const CUDABackend = struct {
             return false;
         }
 
+        self.recordCompletedKernel();
         result_cuda.markGPUModified();
         return true;
     }
@@ -471,6 +502,7 @@ pub const CUDABackend = struct {
             return false;
         }
 
+        self.recordCompletedKernel();
         result_cuda.markGPUModified();
         return true;
     }
@@ -488,6 +520,7 @@ pub const CUDABackend = struct {
             return false;
         }
 
+        self.recordCompletedKernel();
         result_cuda.markGPUModified();
         return true;
     }
@@ -507,15 +540,14 @@ pub const CUDABackend = struct {
             return false;
         }
 
+        self.recordCompletedKernel();
         result_cuda.markGPUModified();
         return true;
     }
 
     pub fn initMatrix(ptr: *anyopaque, allocator: Allocator, rows: usize, cols: usize) error{OutOfMemory}!*Matrix {
         const self = @as(*CUDABackend, @ptrCast(@alignCast(ptr)));
-        const backend_ref = self.backend orelse return error.OutOfMemory;
-
-        const cuda_matrix = CUDAMatrix.init(allocator, rows, cols, backend_ref) catch |err| {
+        const cuda_matrix = CUDAMatrix.init(allocator, rows, cols, self) catch |err| {
             std.log.warn("CUDA matrix initialization failed: {s}", .{@errorName(err)});
             return error.OutOfMemory;
         };

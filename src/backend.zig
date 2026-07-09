@@ -17,6 +17,18 @@ pub const BackendType = enum {
     CUDA, // NVIDIA GPUs
 };
 
+/// Cumulative backend work counters. GPU implementations update these at the
+/// point where buffers, transfers, kernels, and synchronization actually occur.
+pub const RuntimeStats = struct {
+    buffer_allocations: usize = 0,
+    host_to_device_transfers: usize = 0,
+    host_to_device_bytes: usize = 0,
+    device_to_host_transfers: usize = 0,
+    device_to_host_bytes: usize = 0,
+    kernel_launches: usize = 0,
+    synchronizations: usize = 0,
+};
+
 /// ComputeBackend is an interface for different computation backends (CPU, GPU via Metal, GPU via CUDA)
 /// It abstracts away the details of how matrix operations and activation functions are implemented
 pub const ComputeBackend = struct {

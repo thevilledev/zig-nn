@@ -232,10 +232,11 @@ const MetalMatrix = struct {
     buffer: ?*Metal.Buffer, // GPU-side buffer
     host_data: []f32, // CPU-side data (for transfers)
     allocator: Allocator,
+    owner: *MetalBackend,
     dirty: bool, // CPU data needs to be uploaded to GPU
     gpu_dirty: bool, // GPU data needs to be downloaded to CPU
 
-    pub fn init(allocator: Allocator, rows: usize, cols: usize, device: *Metal.Device) !*MetalMatrix {
+    pub fn init(allocator: Allocator, rows: usize, cols: usize, owner: *MetalBackend) !*MetalMatrix {
         const metal_matrix = try allocator.create(MetalMatrix);
         errdefer allocator.destroy(metal_matrix);
 
@@ -246,7 +247,7 @@ const MetalMatrix = struct {
 
         // Allocate GPU buffer (using sizeof(float) since Metal uses 32-bit floats)
         const buffer_size = rows * cols * @sizeOf(f32);
-        const buffer = Metal.deviceCreateBuffer(device, buffer_size, Metal.BufferOptions.StorageModeShared) orelse return error.BufferCreationFailed;
+        const buffer = Metal.deviceCreateBuffer(owner.device.?, buffer_size, Metal.BufferOptions.StorageModeShared) orelse return error.BufferCreationFailed;
         errdefer Metal.release(buffer);
 
         metal_matrix.* = MetalMatrix{
@@ -255,9 +256,11 @@ const MetalMatrix = struct {
             .buffer = buffer,
             .host_data = host_data,
             .allocator = allocator,
+            .owner = owner,
             .dirty = true, // Mark as dirty to ensure first upload
             .gpu_dirty = false,
         };
+        owner.stats.buffer_allocations += 1;
 
         return metal_matrix;
     }
@@ -279,6 +282,8 @@ const MetalMatrix = struct {
         if (!Metal.bufferUploadF32(buffer, self.host_data)) {
             return false;
         }
+        self.owner.stats.host_to_device_transfers += 1;
+        self.owner.stats.host_to_device_bytes += self.host_data.len * @sizeOf(f32);
 
         self.dirty = false;
         self.gpu_dirty = false;
@@ -293,6 +298,8 @@ const MetalMatrix = struct {
         if (!Metal.bufferDownloadF32(buffer, self.host_data)) {
             return false;
         }
+        self.owner.stats.device_to_host_transfers += 1;
+        self.owner.stats.device_to_host_bytes += self.host_data.len * @sizeOf(f32);
 
         self.dirty = false;
         self.gpu_dirty = false;
@@ -313,6 +320,7 @@ const MetalMatrix = struct {
 /// Metal backend implementation
 pub const MetalBackend = struct {
     allocator: Allocator,
+    stats: backend.RuntimeStats,
 
     // Metal-specific state
     device: ?*Metal.Device,
@@ -366,6 +374,7 @@ pub const MetalBackend = struct {
         };
         metal_backend.* = MetalBackend{
             .allocator = allocator,
+            .stats = .{},
             .device = device,
             .command_queue = null, // Initialize all fields to null
             .library = null,
@@ -463,6 +472,21 @@ pub const MetalBackend = struct {
         try self.loadPipeline(&self.swiglu_pipeline, "apply_swiglu");
     }
 
+    pub fn runtimeStats(ptr: *anyopaque) backend.RuntimeStats {
+        const self = @as(*MetalBackend, @ptrCast(@alignCast(ptr)));
+        return self.stats;
+    }
+
+    pub fn resetRuntimeStats(ptr: *anyopaque) void {
+        const self = @as(*MetalBackend, @ptrCast(@alignCast(ptr)));
+        self.stats = .{};
+    }
+
+    fn recordCompletedKernel(self: *MetalBackend) void {
+        self.stats.kernel_launches += 1;
+        self.stats.synchronizations += 1;
+    }
+
     fn loadPipeline(self: *MetalBackend, slot: *?*Metal.ComputePipelineState, name: [*:0]const u8) !void {
         const library = self.library orelse return error.ShaderCompilationFailed;
         const device = self.device orelse return error.MetalDeviceNotFound;
@@ -534,6 +558,7 @@ pub const MetalBackend = struct {
         Metal.commandBufferCommit(command_buffer);
         if (!Metal.commandBufferWaitUntilCompleted(command_buffer)) return false;
 
+        self.recordCompletedKernel();
         result_metal.markGPUModified();
         return true;
     }
@@ -566,6 +591,7 @@ pub const MetalBackend = struct {
         Metal.commandBufferCommit(command_buffer);
         if (!Metal.commandBufferWaitUntilCompleted(command_buffer)) return false;
 
+        self.recordCompletedKernel();
         result_metal.markGPUModified();
         return true;
     }
@@ -596,6 +622,7 @@ pub const MetalBackend = struct {
         Metal.commandBufferCommit(command_buffer);
         if (!Metal.commandBufferWaitUntilCompleted(command_buffer)) return false;
 
+        self.recordCompletedKernel();
         result_metal.markGPUModified();
         return true;
     }
@@ -625,6 +652,7 @@ pub const MetalBackend = struct {
         Metal.commandBufferCommit(command_buffer);
         if (!Metal.commandBufferWaitUntilCompleted(command_buffer)) return false;
 
+        self.recordCompletedKernel();
         result_metal.markGPUModified();
         return true;
     }
@@ -654,6 +682,7 @@ pub const MetalBackend = struct {
         Metal.commandBufferCommit(command_buffer);
         if (!Metal.commandBufferWaitUntilCompleted(command_buffer)) return false;
 
+        self.recordCompletedKernel();
         result_metal.markGPUModified();
         return true;
     }
@@ -684,6 +713,7 @@ pub const MetalBackend = struct {
         Metal.commandBufferCommit(command_buffer);
         if (!Metal.commandBufferWaitUntilCompleted(command_buffer)) return false;
 
+        self.recordCompletedKernel();
         result_metal.markGPUModified();
         return true;
     }
@@ -712,6 +742,7 @@ pub const MetalBackend = struct {
         Metal.commandBufferCommit(command_buffer);
         if (!Metal.commandBufferWaitUntilCompleted(command_buffer)) return false;
 
+        self.recordCompletedKernel();
         result_metal.markGPUModified();
         return true;
     }
@@ -741,6 +772,7 @@ pub const MetalBackend = struct {
         Metal.commandBufferCommit(command_buffer);
         if (!Metal.commandBufferWaitUntilCompleted(command_buffer)) return false;
 
+        self.recordCompletedKernel();
         result_metal.markGPUModified();
         return true;
     }
@@ -772,6 +804,7 @@ pub const MetalBackend = struct {
         Metal.commandBufferCommit(command_buffer);
         if (!Metal.commandBufferWaitUntilCompleted(command_buffer)) return false;
 
+        self.recordCompletedKernel();
         result_metal.markGPUModified();
         return true;
     }
@@ -783,7 +816,7 @@ pub const MetalBackend = struct {
         const self = @as(*MetalBackend, @ptrCast(@alignCast(ptr)));
 
         // Create Metal matrix
-        const metal_matrix = MetalMatrix.init(allocator, rows, cols, self.device.?) catch |err| {
+        const metal_matrix = MetalMatrix.init(allocator, rows, cols, self) catch |err| {
             std.log.warn("Metal matrix initialization failed: {s}", .{@errorName(err)});
             return error.OutOfMemory;
         };

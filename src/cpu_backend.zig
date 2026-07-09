@@ -15,12 +15,14 @@ const CPUMatrix = struct {
 /// CPU backend implementation
 pub const CPUBackend = struct {
     allocator: Allocator,
+    stats: backend.RuntimeStats,
 
     /// Initialize a new CPU backend
     pub fn init(allocator: Allocator) !*CPUBackend {
         const cpu_backend = try allocator.create(CPUBackend);
         cpu_backend.* = CPUBackend{
             .allocator = allocator,
+            .stats = .{},
         };
         return cpu_backend;
     }
@@ -31,7 +33,8 @@ pub const CPUBackend = struct {
     }
 
     // ComputeBackend interface implementations
-    pub fn initMatrix(_: *anyopaque, allocator: Allocator, rows: usize, cols: usize) error{OutOfMemory}!*Matrix {
+    pub fn initMatrix(ptr: *anyopaque, allocator: Allocator, rows: usize, cols: usize) error{OutOfMemory}!*Matrix {
+        const self = @as(*CPUBackend, @ptrCast(@alignCast(ptr)));
         // Allocate the matrix wrapper
         const matrix = try allocator.create(Matrix);
         errdefer allocator.destroy(matrix);
@@ -60,8 +63,19 @@ pub const CPUBackend = struct {
             .backend = undefined, // Will be set by the caller
             .impl_data = cpu_data,
         };
+        self.stats.buffer_allocations += 1;
 
         return matrix;
+    }
+
+    pub fn runtimeStats(ptr: *anyopaque) backend.RuntimeStats {
+        const self = @as(*CPUBackend, @ptrCast(@alignCast(ptr)));
+        return self.stats;
+    }
+
+    pub fn resetRuntimeStats(ptr: *anyopaque) void {
+        const self = @as(*CPUBackend, @ptrCast(@alignCast(ptr)));
+        self.stats = .{};
     }
 
     pub fn deinitMatrix(_: *anyopaque, matrix: *Matrix) void {
@@ -121,7 +135,7 @@ pub const CPUBackend = struct {
     pub fn copyMatrix(ptr: *anyopaque, source: *const Matrix, allocator: Allocator) error{OutOfMemory}!*Matrix {
         _ = @as(*CPUBackend, @ptrCast(@alignCast(ptr)));
 
-        const result = try initMatrix(undefined, allocator, source.rows, source.cols);
+        const result = try initMatrix(ptr, allocator, source.rows, source.cols);
         errdefer deinitMatrix(undefined, result);
 
         const source_cpu_data = @as(*const CPUMatrix, @ptrCast(@alignCast(source.impl_data)));
@@ -140,7 +154,7 @@ pub const CPUBackend = struct {
 
         _ = @as(*CPUBackend, @ptrCast(@alignCast(ptr)));
 
-        const result = try initMatrix(undefined, allocator, a.rows, b.cols);
+        const result = try initMatrix(ptr, allocator, a.rows, b.cols);
         errdefer deinitMatrix(undefined, result);
 
         const a_cpu = @as(*const CPUMatrix, @ptrCast(@alignCast(a.impl_data)));
@@ -166,7 +180,7 @@ pub const CPUBackend = struct {
 
         _ = @as(*CPUBackend, @ptrCast(@alignCast(ptr)));
 
-        const result = try initMatrix(undefined, allocator, a.rows, a.cols);
+        const result = try initMatrix(ptr, allocator, a.rows, a.cols);
         errdefer deinitMatrix(undefined, result);
 
         const a_cpu = @as(*const CPUMatrix, @ptrCast(@alignCast(a.impl_data)));
@@ -187,7 +201,7 @@ pub const CPUBackend = struct {
 
         _ = @as(*CPUBackend, @ptrCast(@alignCast(ptr)));
 
-        const result = try initMatrix(undefined, allocator, a.rows, a.cols);
+        const result = try initMatrix(ptr, allocator, a.rows, a.cols);
         errdefer deinitMatrix(undefined, result);
 
         const a_cpu = @as(*const CPUMatrix, @ptrCast(@alignCast(a.impl_data)));
@@ -208,7 +222,7 @@ pub const CPUBackend = struct {
 
         _ = @as(*CPUBackend, @ptrCast(@alignCast(ptr)));
 
-        const result = try initMatrix(undefined, allocator, a.rows, a.cols);
+        const result = try initMatrix(ptr, allocator, a.rows, a.cols);
         errdefer deinitMatrix(undefined, result);
 
         const a_cpu = @as(*const CPUMatrix, @ptrCast(@alignCast(a.impl_data)));
@@ -225,7 +239,7 @@ pub const CPUBackend = struct {
     pub fn scale(ptr: *anyopaque, matrix: *const Matrix, scalar: f64, allocator: Allocator) error{OutOfMemory}!*Matrix {
         _ = @as(*CPUBackend, @ptrCast(@alignCast(ptr)));
 
-        const result = try initMatrix(undefined, allocator, matrix.rows, matrix.cols);
+        const result = try initMatrix(ptr, allocator, matrix.rows, matrix.cols);
         errdefer deinitMatrix(undefined, result);
 
         const matrix_cpu = @as(*const CPUMatrix, @ptrCast(@alignCast(matrix.impl_data)));
@@ -241,7 +255,7 @@ pub const CPUBackend = struct {
     pub fn sumRows(ptr: *anyopaque, matrix: *const Matrix, allocator: Allocator) error{OutOfMemory}!*Matrix {
         _ = @as(*CPUBackend, @ptrCast(@alignCast(ptr)));
 
-        const result = try initMatrix(undefined, allocator, 1, matrix.cols);
+        const result = try initMatrix(ptr, allocator, 1, matrix.cols);
         errdefer deinitMatrix(undefined, result);
 
         const matrix_cpu = @as(*const CPUMatrix, @ptrCast(@alignCast(matrix.impl_data)));
@@ -260,7 +274,7 @@ pub const CPUBackend = struct {
     pub fn transpose(ptr: *anyopaque, matrix: *const Matrix, allocator: Allocator) error{OutOfMemory}!*Matrix {
         _ = @as(*CPUBackend, @ptrCast(@alignCast(ptr)));
 
-        const result = try initMatrix(undefined, allocator, matrix.cols, matrix.rows);
+        const result = try initMatrix(ptr, allocator, matrix.cols, matrix.rows);
         errdefer deinitMatrix(undefined, result);
 
         for (0..matrix.rows) |i| {
@@ -281,7 +295,7 @@ pub const CPUBackend = struct {
         _ = @as(*CPUBackend, @ptrCast(@alignCast(ptr)));
 
         const batch_size = end - start;
-        const result = try initMatrix(undefined, allocator, batch_size, matrix.cols);
+        const result = try initMatrix(ptr, allocator, batch_size, matrix.cols);
         errdefer deinitMatrix(undefined, result);
 
         const matrix_cpu = @as(*const CPUMatrix, @ptrCast(@alignCast(matrix.impl_data)));
@@ -311,7 +325,7 @@ pub const CPUBackend = struct {
     pub fn applyActivation(ptr: *anyopaque, matrix: *const Matrix, activation: *const fn (f64) f64, allocator: Allocator) error{OutOfMemory}!*Matrix {
         _ = @as(*CPUBackend, @ptrCast(@alignCast(ptr)));
 
-        const result = try initMatrix(undefined, allocator, matrix.rows, matrix.cols);
+        const result = try initMatrix(ptr, allocator, matrix.rows, matrix.cols);
         errdefer deinitMatrix(undefined, result);
 
         const matrix_cpu = @as(*const CPUMatrix, @ptrCast(@alignCast(matrix.impl_data)));
@@ -327,7 +341,7 @@ pub const CPUBackend = struct {
     pub fn applySoftmax(ptr: *anyopaque, matrix: *const Matrix, allocator: Allocator) error{OutOfMemory}!*Matrix {
         _ = @as(*CPUBackend, @ptrCast(@alignCast(ptr)));
 
-        const result = try initMatrix(undefined, allocator, matrix.rows, matrix.cols);
+        const result = try initMatrix(ptr, allocator, matrix.rows, matrix.cols);
         errdefer deinitMatrix(undefined, result);
 
         // Process each row independently

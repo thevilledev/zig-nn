@@ -69,6 +69,7 @@ pub const Device = tensor_mod.Device;
 pub const DevicePreference = tensor_mod.DevicePreference;
 pub const ExecutionContext = tensor_mod.ExecutionContext;
 pub const ExecutionStats = tensor_mod.ExecutionStats;
+pub const BackendRuntimeStats = backend_mod.RuntimeStats;
 
 // Export backend interface types
 pub const BackendMatrix = backend_mod.Matrix;
@@ -101,6 +102,22 @@ pub const BackendInstance = union(BackendType) {
             .CUDA => |ptr| CUDABackend.initMatrix(ptr, allocator, rows, cols),
         };
         return self.attachBackend(matrix);
+    }
+
+    pub fn runtimeStats(self: BackendInstance) BackendRuntimeStats {
+        return switch (self) {
+            .CPU => |ptr| CPUBackend.runtimeStats(ptr),
+            .Metal => |ptr| MetalBackend.runtimeStats(ptr),
+            .CUDA => |ptr| CUDABackend.runtimeStats(ptr),
+        };
+    }
+
+    pub fn resetRuntimeStats(self: BackendInstance) void {
+        switch (self) {
+            .CPU => |ptr| CPUBackend.resetRuntimeStats(ptr),
+            .Metal => |ptr| MetalBackend.resetRuntimeStats(ptr),
+            .CUDA => |ptr| CUDABackend.resetRuntimeStats(ptr),
+        }
     }
 
     pub fn deinitMatrix(self: BackendInstance, matrix: *BackendMatrix) void {
