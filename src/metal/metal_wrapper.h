@@ -29,8 +29,8 @@ int metal_command_buffer_wait_until_completed(MTLCommandBufferRef command_buffer
 // Buffer creation
 MTLBufferRef metal_device_create_buffer(MTLDeviceRef device, unsigned long length, unsigned int options);
 unsigned long metal_buffer_length(MTLBufferRef buffer);
-int metal_buffer_upload_f64(MTLBufferRef buffer, const double* source, unsigned long count);
-int metal_buffer_download_f64(MTLBufferRef buffer, double* destination, unsigned long count);
+int metal_buffer_upload_f32(MTLBufferRef buffer, const float* source, unsigned long count);
+int metal_buffer_download_f32(MTLBufferRef buffer, float* destination, unsigned long count);
 
 // Shader library and pipeline creation
 MTLLibraryRef metal_device_create_library_from_source(MTLDeviceRef device, const char* source, char* error_buffer, unsigned long error_buffer_len);

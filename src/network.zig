@@ -2039,6 +2039,8 @@ pub const Network = struct {
 };
 
 // Tests
+const backend_f32_tolerance: f64 = 1e-5;
+
 test "network initialization and layer addition" {
     const allocator = testing.allocator;
 
@@ -2193,7 +2195,7 @@ test "network backend inference matches cpu forward for mixed layers" {
     try testing.expectEqual(cpu_output.cols, backend_cpu_output.cols);
     for (0..cpu_output.rows) |row| {
         for (0..cpu_output.cols) |col| {
-            try testing.expectApproxEqAbs(try cpu_output.get(row, col), try backend_cpu_output.get(row, col), 1e-12);
+            try testing.expectApproxEqAbs(try cpu_output.get(row, col), try backend_cpu_output.get(row, col), backend_f32_tolerance);
         }
     }
 
@@ -2270,7 +2272,7 @@ test "backend network snapshot keeps persistent inference parameters" {
     var snapshot_cpu_output = try snapshot_output.toMatrix(allocator);
     defer snapshot_cpu_output.deinit();
 
-    try testing.expectApproxEqAbs(try cpu_output.get(0, 0), try snapshot_cpu_output.get(0, 0), 1e-12);
+    try testing.expectApproxEqAbs(try cpu_output.get(0, 0), try snapshot_cpu_output.get(0, 0), backend_f32_tolerance);
 
     try hidden.bias.set(0, 0, 10.0);
     try hidden.bias.set(0, 1, 10.0);
@@ -2284,7 +2286,7 @@ test "backend network snapshot keeps persistent inference parameters" {
     defer stable_snapshot_cpu_output.deinit();
 
     try testing.expect((try mutated_cpu_output.get(0, 0)) > (try cpu_output.get(0, 0)) + 1.0);
-    try testing.expectApproxEqAbs(try cpu_output.get(0, 0), try stable_snapshot_cpu_output.get(0, 0), 1e-12);
+    try testing.expectApproxEqAbs(try cpu_output.get(0, 0), try stable_snapshot_cpu_output.get(0, 0), backend_f32_tolerance);
 }
 
 test "backend trainer keeps standard parameters on backend until sync" {
@@ -2659,17 +2661,17 @@ test "backend train batch matches cpu train batch on cpu backend" {
 
     const cpu_loss = try cpu_network.trainBatch(inputs, targets);
     const backend_loss = try backend_network.trainBatchBackend(backend_inputs, backend_targets);
-    try testing.expectApproxEqAbs(cpu_loss, backend_loss, 1e-12);
+    try testing.expectApproxEqAbs(cpu_loss, backend_loss, backend_f32_tolerance);
 
     for (cpu_network.layers.items, backend_network.layers.items) |cpu_layer, backend_layer| {
         switch (cpu_layer) {
             .Standard => |cpu_standard| {
                 const backend_standard = backend_layer.Standard;
                 for (0..cpu_standard.weights.data.len) |i| {
-                    try testing.expectApproxEqAbs(cpu_standard.weights.data[i], backend_standard.weights.data[i], 1e-12);
+                    try testing.expectApproxEqAbs(cpu_standard.weights.data[i], backend_standard.weights.data[i], backend_f32_tolerance);
                 }
                 for (0..cpu_standard.bias.data.len) |i| {
-                    try testing.expectApproxEqAbs(cpu_standard.bias.data[i], backend_standard.bias.data[i], 1e-12);
+                    try testing.expectApproxEqAbs(cpu_standard.bias.data[i], backend_standard.bias.data[i], backend_f32_tolerance);
                 }
             },
             .Gated => unreachable,

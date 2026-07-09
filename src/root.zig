@@ -128,6 +128,22 @@ pub const BackendInstance = union(BackendType) {
         };
     }
 
+    pub fn writeMatrixF32(self: BackendInstance, matrix: *BackendMatrix, values: []const f32) bool {
+        return switch (self) {
+            .CPU => |ptr| CPUBackend.writeMatrixF32(ptr, matrix, values),
+            .Metal => |ptr| MetalBackend.writeMatrixF32(ptr, matrix, values),
+            .CUDA => |ptr| CUDABackend.writeMatrixF32(ptr, matrix, values),
+        };
+    }
+
+    pub fn readMatrixF32(self: BackendInstance, matrix: *const BackendMatrix, values: []f32) bool {
+        return switch (self) {
+            .CPU => |ptr| CPUBackend.readMatrixF32(ptr, matrix, values),
+            .Metal => |ptr| MetalBackend.readMatrixF32(ptr, matrix, values),
+            .CUDA => |ptr| CUDABackend.readMatrixF32(ptr, matrix, values),
+        };
+    }
+
     pub fn setMatrixElement(self: BackendInstance, matrix: *BackendMatrix, row: usize, col: usize, value: f64) void {
         switch (self) {
             .CPU => |ptr| CPUBackend.setMatrixElement(ptr, matrix, row, col, value),

@@ -243,14 +243,6 @@ pub const Layer = struct {
         var weighted_sum = try input.dotProduct(self.weights, self.allocator);
         defer weighted_sum.deinit();
 
-        // Store weighted sum for backpropagation
-        if (self.last_weighted_sum != null) {
-            self.last_weighted_sum.?.deinit();
-            self.last_weighted_sum = null;
-        }
-        self.last_weighted_sum = try Matrix.copy(weighted_sum, self.allocator);
-        errdefer if (self.last_weighted_sum) |last_weighted_sum| last_weighted_sum.deinit();
-
         // Add bias to each row (broadcast bias to match batch size)
         var biased = try Matrix.init(self.allocator, weighted_sum.rows, weighted_sum.cols);
         errdefer biased.deinit();
@@ -259,6 +251,14 @@ pub const Layer = struct {
                 try biased.set(i, j, (try weighted_sum.get(i, j)) + (try self.bias.get(0, j)));
             }
         }
+
+        // Store the complete pre-activation z = xW + b for backpropagation.
+        if (self.last_weighted_sum != null) {
+            self.last_weighted_sum.?.deinit();
+            self.last_weighted_sum = null;
+        }
+        self.last_weighted_sum = try Matrix.copy(biased, self.allocator);
+        errdefer if (self.last_weighted_sum) |last_weighted_sum| last_weighted_sum.deinit();
 
         // Apply activation function y = σ(z)
         var output: Matrix = undefined;
@@ -321,10 +321,12 @@ pub const Layer = struct {
         self.last_backend_weights = try BackendMatrix.fromMatrix(backend_instance, self.weights, self.allocator);
         self.last_backend_bias = try BackendMatrix.fromMatrix(backend_instance, self.bias, self.allocator);
 
-        self.last_backend_weighted_sum = try input.dotProduct(self.last_backend_weights.?, self.allocator);
+        const weighted_sum = try input.dotProduct(self.last_backend_weights.?, self.allocator);
+        defer weighted_sum.deinit();
 
-        const biased = try addBackendBias(self.last_backend_weighted_sum.?, self.last_backend_bias.?, self.allocator);
+        const biased = try addBackendBias(weighted_sum, self.last_backend_bias.?, self.allocator);
         defer biased.deinit();
+        self.last_backend_weighted_sum = try biased.copy(self.allocator);
 
         const output = if (self.activation_fn == Activation.softmax)
             try biased.applySoftmax(self.allocator)

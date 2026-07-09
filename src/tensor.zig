@@ -349,3 +349,28 @@ test "explicit device selection never silently falls back" {
         try testing.expectError(error.BackendUnavailable, Device.init(allocator, .cuda));
     }
 }
+
+test "auto device supports bulk f32 round trip" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var device = try Device.init(allocator, .auto);
+    defer device.deinit();
+    var context = ExecutionContext.init(&device);
+
+    const expected = [_]f32{ -1.25, 0.5, 2.75, 4.0 };
+    var tensor = try context.upload(&.{ 2, 2 }, &expected);
+    defer tensor.deinit();
+
+    var actual: [expected.len]f32 = undefined;
+    try context.readback(tensor, &actual);
+    try testing.expectEqualSlices(f32, &expected, &actual);
+
+    if (builtin.os.tag == .macos and build_options.enable_metal) {
+        try testing.expectEqual(BackendType.Metal, device.backendType());
+    } else if (builtin.os.tag == .linux and build_options.enable_cuda) {
+        try testing.expectEqual(BackendType.CUDA, device.backendType());
+    } else {
+        try testing.expectEqual(BackendType.CPU, device.backendType());
+    }
+}

@@ -32,8 +32,8 @@ int cuda_backend_device_name(CUDABackendRef backend_ref, char* output, unsigned 
 
 CUDABufferRef cuda_backend_create_buffer(CUDABackendRef backend_ref, unsigned long count);
 void cuda_backend_destroy_buffer(CUDABackendRef backend_ref, CUDABufferRef buffer_ref);
-int cuda_buffer_upload_f64(CUDABackendRef backend_ref, CUDABufferRef buffer_ref, const double* source, unsigned long count);
-int cuda_buffer_download_f64(CUDABackendRef backend_ref, CUDABufferRef buffer_ref, double* destination, unsigned long count);
+int cuda_buffer_upload_f32(CUDABackendRef backend_ref, CUDABufferRef buffer_ref, const float* source, unsigned long count);
+int cuda_buffer_download_f32(CUDABackendRef backend_ref, CUDABufferRef buffer_ref, float* destination, unsigned long count);
 
 int cuda_launch_matrix_multiply(CUDABackendRef backend_ref, CUDABufferRef a_ref, CUDABufferRef b_ref, CUDABufferRef result_ref, unsigned int a_rows, unsigned int a_cols, unsigned int b_cols);
 int cuda_launch_binary_kernel(CUDABackendRef backend_ref, int kernel_id, CUDABufferRef a_ref, CUDABufferRef b_ref, CUDABufferRef result_ref, unsigned int rows, unsigned int cols);

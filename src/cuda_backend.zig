@@ -93,12 +93,12 @@ const CUDA = if (enable_cuda) struct {
         c.cuda_backend_destroy_buffer(toC(backend_ref), if (buffer) |value| toC(value) else null);
     }
 
-    pub fn bufferUploadF64(backend_ref: *Backend, buffer: *Buffer, data: []const f64) bool {
-        return c.cuda_buffer_upload_f64(toC(backend_ref), toC(buffer), data.ptr, data.len) != 0;
+    pub fn bufferUploadF32(backend_ref: *Backend, buffer: *Buffer, data: []const f32) bool {
+        return c.cuda_buffer_upload_f32(toC(backend_ref), toC(buffer), data.ptr, data.len) != 0;
     }
 
-    pub fn bufferDownloadF64(backend_ref: *Backend, buffer: *Buffer, data: []f64) bool {
-        return c.cuda_buffer_download_f64(toC(backend_ref), toC(buffer), data.ptr, data.len) != 0;
+    pub fn bufferDownloadF32(backend_ref: *Backend, buffer: *Buffer, data: []f32) bool {
+        return c.cuda_buffer_download_f32(toC(backend_ref), toC(buffer), data.ptr, data.len) != 0;
     }
 
     pub fn launchMatrixMultiply(backend_ref: *Backend, a: *Buffer, b: *Buffer, result: *Buffer, a_rows: u32, a_cols: u32, b_cols: u32) bool {
@@ -174,11 +174,11 @@ const CUDA = if (enable_cuda) struct {
 
     pub fn destroyBuffer(_: *Backend, _: ?*Buffer) void {}
 
-    pub fn bufferUploadF64(_: *Backend, _: *Buffer, _: []const f64) bool {
+    pub fn bufferUploadF32(_: *Backend, _: *Buffer, _: []const f32) bool {
         return false;
     }
 
-    pub fn bufferDownloadF64(_: *Backend, _: *Buffer, _: []f64) bool {
+    pub fn bufferDownloadF32(_: *Backend, _: *Buffer, _: []f32) bool {
         return false;
     }
 
@@ -223,7 +223,7 @@ const CUDAMatrix = struct {
     rows: usize,
     cols: usize,
     buffer: ?*CUDA.Buffer,
-    host_data: []f64,
+    host_data: []f32,
     allocator: Allocator,
     backend: *CUDA.Backend,
     dirty: bool,
@@ -233,7 +233,7 @@ const CUDAMatrix = struct {
         const cuda_matrix = try allocator.create(CUDAMatrix);
         errdefer allocator.destroy(cuda_matrix);
 
-        const host_data = try allocator.alloc(f64, rows * cols);
+        const host_data = try allocator.alloc(f32, rows * cols);
         errdefer allocator.free(host_data);
         @memset(host_data, 0);
 
@@ -263,7 +263,7 @@ const CUDAMatrix = struct {
         if (!self.dirty) return true;
 
         const buffer = self.buffer orelse return false;
-        if (!CUDA.bufferUploadF64(self.backend, buffer, self.host_data)) {
+        if (!CUDA.bufferUploadF32(self.backend, buffer, self.host_data)) {
             return false;
         }
 
@@ -276,7 +276,7 @@ const CUDAMatrix = struct {
         if (!self.gpu_dirty) return true;
 
         const buffer = self.buffer orelse return false;
-        if (!CUDA.bufferDownloadF64(self.backend, buffer, self.host_data)) {
+        if (!CUDA.bufferDownloadF32(self.backend, buffer, self.host_data)) {
             return false;
         }
 
@@ -558,7 +558,23 @@ pub const CUDABackend = struct {
         if (!cuda_matrix.syncToCPU()) {
             std.log.warn("CUDA buffer download failed while reading matrix element", .{});
         }
-        return cuda_matrix.host_data[row * matrix.cols + col];
+        return @floatCast(cuda_matrix.host_data[row * matrix.cols + col]);
+    }
+
+    pub fn writeMatrixF32(_: *anyopaque, matrix: *Matrix, values: []const f32) bool {
+        const cuda_matrix = getCUDAMatrix(matrix);
+        if (values.len != cuda_matrix.host_data.len) return false;
+        @memcpy(cuda_matrix.host_data, values);
+        cuda_matrix.markHostModified();
+        return true;
+    }
+
+    pub fn readMatrixF32(_: *anyopaque, matrix: *const Matrix, values: []f32) bool {
+        const cuda_matrix = getCUDAMatrix(matrix);
+        if (values.len != cuda_matrix.host_data.len) return false;
+        ensureHostData(cuda_matrix);
+        @memcpy(values, cuda_matrix.host_data);
+        return true;
     }
 
     pub fn setMatrixElement(_: *anyopaque, matrix: *Matrix, row: usize, col: usize, value: f64) void {
@@ -567,14 +583,14 @@ pub const CUDABackend = struct {
         }
 
         const cuda_matrix = getCUDAMatrix(matrix);
-        cuda_matrix.host_data[row * matrix.cols + col] = value;
+        cuda_matrix.host_data[row * matrix.cols + col] = @floatCast(value);
         cuda_matrix.markHostModified();
     }
 
     pub fn fillMatrix(_: *anyopaque, matrix: *Matrix, value: f64) void {
         const cuda_matrix = getCUDAMatrix(matrix);
         for (cuda_matrix.host_data) |*element| {
-            element.* = value;
+            element.* = @floatCast(value);
         }
         cuda_matrix.markHostModified();
     }
@@ -598,7 +614,7 @@ pub const CUDABackend = struct {
         ensureHostData(b_cuda);
         for (0..a.rows) |i| {
             for (0..b.cols) |j| {
-                var sum: f64 = 0.0;
+                var sum: f32 = 0.0;
                 for (0..a.cols) |k| {
                     sum += a_cuda.host_data[i * a.cols + k] * b_cuda.host_data[k * b.cols + j];
                 }
@@ -693,7 +709,7 @@ pub const CUDABackend = struct {
 
         ensureHostData(matrix_cuda);
         for (0..matrix.rows * matrix.cols) |i| {
-            result_cuda.host_data[i] = matrix_cuda.host_data[i] * scalar;
+            result_cuda.host_data[i] = matrix_cuda.host_data[i] * @as(f32, @floatCast(scalar));
         }
         result_cuda.markHostModified();
         return result;
@@ -711,7 +727,7 @@ pub const CUDABackend = struct {
 
         ensureHostData(matrix_cuda);
         for (0..matrix.cols) |j| {
-            var sum: f64 = 0.0;
+            var sum: f32 = 0.0;
             for (0..matrix.rows) |i| {
                 sum += matrix_cuda.host_data[i * matrix.cols + j];
             }
@@ -768,7 +784,7 @@ pub const CUDABackend = struct {
         var rng = std.Random.DefaultPrng.init(randomSeed());
         for (cuda_matrix.host_data) |*element| {
             const random_float = rng.random().float(f64);
-            element.* = min + random_float * (max - min);
+            element.* = @floatCast(min + random_float * (max - min));
         }
         cuda_matrix.markHostModified();
     }
@@ -810,7 +826,7 @@ pub const CUDABackend = struct {
 
         ensureHostData(matrix_cuda);
         for (0..matrix.rows * matrix.cols) |i| {
-            result_cuda.host_data[i] = activation(matrix_cuda.host_data[i]);
+            result_cuda.host_data[i] = @floatCast(activation(@floatCast(matrix_cuda.host_data[i])));
         }
         result_cuda.markHostModified();
         return result;
@@ -828,12 +844,12 @@ pub const CUDABackend = struct {
 
         ensureHostData(matrix_cuda);
         for (0..matrix.rows) |i| {
-            var max_val: f64 = -std.math.inf(f64);
+            var max_val: f32 = -std.math.inf(f32);
             for (0..matrix.cols) |j| {
                 max_val = @max(max_val, matrix_cuda.host_data[i * matrix.cols + j]);
             }
 
-            var sum: f64 = 0.0;
+            var sum: f32 = 0.0;
             for (0..matrix.cols) |j| {
                 const idx = i * matrix.cols + j;
                 const exp_val = std.math.exp(matrix_cuda.host_data[idx] - max_val);

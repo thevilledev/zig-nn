@@ -148,8 +148,8 @@ pub const ComputeBackend = struct {
     }
 };
 
-/// Matrix represents a 2D array of f64 values, now abstracted to support different backends
-/// This is a wrapper that contains backend-specific implementation details
+/// Matrix represents a backend-aware 2D array with native f32 storage.
+/// Scalar access remains f64-compatible for the legacy public API.
 pub const Matrix = struct {
     rows: usize,
     cols: usize,
@@ -225,10 +225,7 @@ pub const Matrix = struct {
         if (values.len != self.rows * self.cols) {
             return error.DimensionMismatch;
         }
-
-        for (values, 0..) |value, index| {
-            self.set(index / self.cols, index % self.cols, @floatCast(value));
-        }
+        if (!self.backend.writeMatrixF32(self, values)) return error.DataTransferFailed;
     }
 
     /// Reads all matrix values into a contiguous f32 slice.
@@ -240,9 +237,7 @@ pub const Matrix = struct {
             return error.DimensionMismatch;
         }
 
-        for (values, 0..) |*value, index| {
-            value.* = @floatCast(self.get(index / self.cols, index % self.cols));
-        }
+        if (!self.backend.readMatrixF32(self, values)) return error.DataTransferFailed;
     }
 
     /// Creates a deep copy of an existing matrix

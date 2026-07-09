@@ -78,7 +78,7 @@ unsigned long metal_buffer_length(MTLBufferRef buffer_ref) {
     return [buffer length];
 }
 
-int metal_buffer_upload_f64(MTLBufferRef buffer_ref, const double* source, unsigned long count) {
+int metal_buffer_upload_f32(MTLBufferRef buffer_ref, const float* source, unsigned long count) {
     id<MTLBuffer> buffer = (id<MTLBuffer>)buffer_ref;
     if (buffer == nil || source == NULL) {
         return 0;
@@ -94,14 +94,12 @@ int metal_buffer_upload_f64(MTLBufferRef buffer_ref, const double* source, unsig
         return 0;
     }
 
-    for (unsigned long i = 0; i < count; i++) {
-        destination[i] = (float)source[i];
-    }
+    memcpy(destination, source, required_len);
 
     return 1;
 }
 
-int metal_buffer_download_f64(MTLBufferRef buffer_ref, double* destination, unsigned long count) {
+int metal_buffer_download_f32(MTLBufferRef buffer_ref, float* destination, unsigned long count) {
     id<MTLBuffer> buffer = (id<MTLBuffer>)buffer_ref;
     if (buffer == nil || destination == NULL) {
         return 0;
@@ -117,9 +115,7 @@ int metal_buffer_download_f64(MTLBufferRef buffer_ref, double* destination, unsi
         return 0;
     }
 
-    for (unsigned long i = 0; i < count; i++) {
-        destination[i] = (double)source[i];
-    }
+    memcpy(destination, source, required_len);
 
     return 1;
 }

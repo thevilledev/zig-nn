@@ -8,7 +8,7 @@ const randomSeed = @import("matrix.zig").randomSeed;
 
 /// CPU-specific implementation of a matrix
 const CPUMatrix = struct {
-    data: []f64,
+    data: []f32,
     allocator: Allocator,
 };
 
@@ -41,7 +41,7 @@ pub const CPUBackend = struct {
         errdefer allocator.destroy(cpu_data);
 
         // Allocate the data array
-        const data = try allocator.alloc(f64, rows * cols);
+        const data = try allocator.alloc(f32, rows * cols);
         errdefer allocator.free(data);
 
         // Initialize with zeros
@@ -85,7 +85,21 @@ pub const CPUBackend = struct {
         }
 
         const cpu_data = @as(*const CPUMatrix, @ptrCast(@alignCast(matrix.impl_data)));
-        return cpu_data.data[row * matrix.cols + col];
+        return @floatCast(cpu_data.data[row * matrix.cols + col]);
+    }
+
+    pub fn writeMatrixF32(_: *anyopaque, matrix: *Matrix, values: []const f32) bool {
+        const cpu_data = @as(*CPUMatrix, @ptrCast(@alignCast(matrix.impl_data)));
+        if (values.len != cpu_data.data.len) return false;
+        @memcpy(cpu_data.data, values);
+        return true;
+    }
+
+    pub fn readMatrixF32(_: *anyopaque, matrix: *const Matrix, values: []f32) bool {
+        const cpu_data = @as(*const CPUMatrix, @ptrCast(@alignCast(matrix.impl_data)));
+        if (values.len != cpu_data.data.len) return false;
+        @memcpy(values, cpu_data.data);
+        return true;
     }
 
     pub fn setMatrixElement(_: *anyopaque, matrix: *Matrix, row: usize, col: usize, value: f64) void {
@@ -94,13 +108,13 @@ pub const CPUBackend = struct {
         }
 
         const cpu_data = @as(*CPUMatrix, @ptrCast(@alignCast(matrix.impl_data)));
-        cpu_data.data[row * matrix.cols + col] = value;
+        cpu_data.data[row * matrix.cols + col] = @floatCast(value);
     }
 
     pub fn fillMatrix(_: *anyopaque, matrix: *Matrix, value: f64) void {
         const cpu_data = @as(*CPUMatrix, @ptrCast(@alignCast(matrix.impl_data)));
         for (cpu_data.data) |*element| {
-            element.* = value;
+            element.* = @floatCast(value);
         }
     }
 
@@ -134,7 +148,7 @@ pub const CPUBackend = struct {
 
         for (0..a.rows) |i| {
             for (0..b.cols) |j| {
-                var sum: f64 = 0;
+                var sum: f32 = 0;
                 for (0..a.cols) |k| {
                     sum += a_cpu.data[i * a.cols + k] * b_cpu.data[k * b.cols + j];
                 }
@@ -218,7 +232,7 @@ pub const CPUBackend = struct {
         const result_cpu = @as(*CPUMatrix, @ptrCast(@alignCast(result.impl_data)));
 
         for (0..matrix.rows * matrix.cols) |i| {
-            result_cpu.data[i] = matrix_cpu.data[i] * scalar;
+            result_cpu.data[i] = matrix_cpu.data[i] * @as(f32, @floatCast(scalar));
         }
 
         return result;
@@ -233,7 +247,7 @@ pub const CPUBackend = struct {
         const matrix_cpu = @as(*const CPUMatrix, @ptrCast(@alignCast(matrix.impl_data)));
 
         for (0..matrix.cols) |j| {
-            var sum: f64 = 0;
+            var sum: f32 = 0;
             for (0..matrix.rows) |i| {
                 sum += matrix_cpu.data[i * matrix.cols + j];
             }
@@ -290,7 +304,7 @@ pub const CPUBackend = struct {
 
         for (0..matrix.rows * matrix.cols) |i| {
             const rand_float = rand.float(f64);
-            matrix_cpu.data[i] = min + (rand_float * (max - min));
+            matrix_cpu.data[i] = @floatCast(min + (rand_float * (max - min)));
         }
     }
 
@@ -304,7 +318,7 @@ pub const CPUBackend = struct {
         const result_cpu = @as(*CPUMatrix, @ptrCast(@alignCast(result.impl_data)));
 
         for (0..matrix.rows * matrix.cols) |i| {
-            result_cpu.data[i] = activation(matrix_cpu.data[i]);
+            result_cpu.data[i] = @floatCast(activation(@floatCast(matrix_cpu.data[i])));
         }
 
         return result;

@@ -79,12 +79,12 @@ const Metal = if (@import("builtin").os.tag == .macos and enable_metal) struct {
         return fromC(Buffer, c.metal_device_create_buffer(toC(device), length, options));
     }
 
-    pub fn bufferUploadF64(buffer: *Buffer, data: []const f64) bool {
-        return c.metal_buffer_upload_f64(toC(buffer), data.ptr, data.len) != 0;
+    pub fn bufferUploadF32(buffer: *Buffer, data: []const f32) bool {
+        return c.metal_buffer_upload_f32(toC(buffer), data.ptr, data.len) != 0;
     }
 
-    pub fn bufferDownloadF64(buffer: *Buffer, data: []f64) bool {
-        return c.metal_buffer_download_f64(toC(buffer), data.ptr, data.len) != 0;
+    pub fn bufferDownloadF32(buffer: *Buffer, data: []f32) bool {
+        return c.metal_buffer_download_f32(toC(buffer), data.ptr, data.len) != 0;
     }
 
     pub fn deviceCreateLibraryFromSource(device: *Device, source: [*:0]const u8) ?*Library {
@@ -183,11 +183,11 @@ const Metal = if (@import("builtin").os.tag == .macos and enable_metal) struct {
         return null;
     }
 
-    pub fn bufferUploadF64(_: *Buffer, _: []const f64) bool {
+    pub fn bufferUploadF32(_: *Buffer, _: []const f32) bool {
         return false;
     }
 
-    pub fn bufferDownloadF64(_: *Buffer, _: []f64) bool {
+    pub fn bufferDownloadF32(_: *Buffer, _: []f32) bool {
         return false;
     }
 
@@ -230,7 +230,7 @@ const MetalMatrix = struct {
     rows: usize,
     cols: usize,
     buffer: ?*Metal.Buffer, // GPU-side buffer
-    host_data: []f64, // CPU-side data (for transfers)
+    host_data: []f32, // CPU-side data (for transfers)
     allocator: Allocator,
     dirty: bool, // CPU data needs to be uploaded to GPU
     gpu_dirty: bool, // GPU data needs to be downloaded to CPU
@@ -240,7 +240,7 @@ const MetalMatrix = struct {
         errdefer allocator.destroy(metal_matrix);
 
         // Allocate host memory
-        const host_data = try allocator.alloc(f64, rows * cols);
+        const host_data = try allocator.alloc(f32, rows * cols);
         errdefer allocator.free(host_data);
         @memset(host_data, 0);
 
@@ -276,7 +276,7 @@ const MetalMatrix = struct {
         if (!self.dirty) return true;
 
         const buffer = self.buffer orelse return false;
-        if (!Metal.bufferUploadF64(buffer, self.host_data)) {
+        if (!Metal.bufferUploadF32(buffer, self.host_data)) {
             return false;
         }
 
@@ -290,7 +290,7 @@ const MetalMatrix = struct {
         if (!self.gpu_dirty) return true;
 
         const buffer = self.buffer orelse return false;
-        if (!Metal.bufferDownloadF64(buffer, self.host_data)) {
+        if (!Metal.bufferDownloadF32(buffer, self.host_data)) {
             return false;
         }
 
@@ -843,14 +843,30 @@ pub const MetalBackend = struct {
         }
 
         // Return element
-        return metal_matrix.host_data[index];
+        return @floatCast(metal_matrix.host_data[index]);
+    }
+
+    pub fn writeMatrixF32(_: *anyopaque, matrix: *Matrix, values: []const f32) bool {
+        const metal_matrix = getMetalMatrix(matrix);
+        if (values.len != metal_matrix.host_data.len) return false;
+        @memcpy(metal_matrix.host_data, values);
+        metal_matrix.markHostModified();
+        return true;
+    }
+
+    pub fn readMatrixF32(_: *anyopaque, matrix: *const Matrix, values: []f32) bool {
+        const metal_matrix = getMetalMatrix(matrix);
+        if (values.len != metal_matrix.host_data.len) return false;
+        ensureHostData(metal_matrix);
+        @memcpy(values, metal_matrix.host_data);
+        return true;
     }
 
     pub fn setMatrixElement(_: *anyopaque, matrix: *Matrix, row: usize, col: usize, value: f64) void {
         const metal_matrix = getMetalMatrix(matrix);
 
         // Update CPU data
-        metal_matrix.host_data[row * matrix.cols + col] = value;
+        metal_matrix.host_data[row * matrix.cols + col] = @floatCast(value);
         metal_matrix.markHostModified();
     }
 
@@ -859,7 +875,7 @@ pub const MetalBackend = struct {
 
         // Fill CPU data
         for (metal_matrix.host_data) |*element| {
-            element.* = value;
+            element.* = @floatCast(value);
         }
 
         metal_matrix.markHostModified();
@@ -892,7 +908,7 @@ pub const MetalBackend = struct {
         // This ensures we have valid data when accessed
         for (0..a.rows) |i| {
             for (0..b.cols) |j| {
-                var sum: f64 = 0.0;
+                var sum: f32 = 0.0;
                 for (0..a.cols) |k| {
                     sum += a_metal.host_data[i * a.cols + k] * b_metal.host_data[k * b.cols + j];
                 }
@@ -1012,7 +1028,7 @@ pub const MetalBackend = struct {
         ensureHostData(matrix_metal);
 
         for (0..matrix.rows * matrix.cols) |i| {
-            result_metal.host_data[i] = matrix_metal.host_data[i] * scalar;
+            result_metal.host_data[i] = matrix_metal.host_data[i] * @as(f32, @floatCast(scalar));
         }
         result_metal.markHostModified();
 
@@ -1036,7 +1052,7 @@ pub const MetalBackend = struct {
         ensureHostData(matrix_metal);
 
         for (0..matrix.cols) |j| {
-            var sum: f64 = 0;
+            var sum: f32 = 0;
             for (0..matrix.rows) |i| {
                 sum += matrix_metal.host_data[i * matrix.cols + j];
             }
@@ -1114,7 +1130,7 @@ pub const MetalBackend = struct {
         // Fill with random values
         for (metal_matrix.host_data) |*element| {
             const random_float = rng.random().float(f64);
-            element.* = min + random_float * (max - min);
+            element.* = @floatCast(min + random_float * (max - min));
         }
 
         metal_matrix.markHostModified();
@@ -1161,7 +1177,7 @@ pub const MetalBackend = struct {
 
         // Unknown custom activations fall back to CPU.
         for (0..matrix.rows * matrix.cols) |i| {
-            result_metal.host_data[i] = activation(matrix_metal.host_data[i]);
+            result_metal.host_data[i] = @floatCast(activation(@floatCast(matrix_metal.host_data[i])));
         }
 
         result_metal.markHostModified();
@@ -1186,12 +1202,12 @@ pub const MetalBackend = struct {
         ensureHostData(matrix_metal);
 
         for (0..matrix.rows) |i| {
-            var max_val: f64 = -std.math.inf(f64);
+            var max_val: f32 = -std.math.inf(f32);
             for (0..matrix.cols) |j| {
                 max_val = @max(max_val, matrix_metal.host_data[i * matrix.cols + j]);
             }
 
-            var sum: f64 = 0.0;
+            var sum: f32 = 0.0;
             for (0..matrix.cols) |j| {
                 const idx = i * matrix.cols + j;
                 const exp_val = std.math.exp(matrix_metal.host_data[idx] - max_val);

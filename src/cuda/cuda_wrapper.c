@@ -383,48 +383,24 @@ void cuda_backend_destroy_buffer(CUDABackendRef backend_ref, CUDABufferRef buffe
     free(buffer);
 }
 
-int cuda_buffer_upload_f64(CUDABackendRef backend_ref, CUDABufferRef buffer_ref, const double* source, unsigned long count) {
+int cuda_buffer_upload_f32(CUDABackendRef backend_ref, CUDABufferRef buffer_ref, const float* source, unsigned long count) {
     ZigNNCUDABackend* backend = (ZigNNCUDABackend*)backend_ref;
     ZigNNCUDABuffer* buffer = (ZigNNCUDABuffer*)buffer_ref;
     if (!cuda_set_context(backend) || buffer == NULL || source == NULL || count > buffer->count) {
         return 0;
     }
 
-    float* converted = (float*)malloc(count * sizeof(float));
-    if (converted == NULL) {
-        return 0;
-    }
-
-    for (unsigned long i = 0; i < count; i++) {
-        converted[i] = (float)source[i];
-    }
-
-    CUresult result = cuMemcpyHtoD(buffer->device_ptr, converted, count * sizeof(float));
-    free(converted);
-    return result == CUDA_SUCCESS;
+    return cuMemcpyHtoD(buffer->device_ptr, source, count * sizeof(float)) == CUDA_SUCCESS;
 }
 
-int cuda_buffer_download_f64(CUDABackendRef backend_ref, CUDABufferRef buffer_ref, double* destination, unsigned long count) {
+int cuda_buffer_download_f32(CUDABackendRef backend_ref, CUDABufferRef buffer_ref, float* destination, unsigned long count) {
     ZigNNCUDABackend* backend = (ZigNNCUDABackend*)backend_ref;
     ZigNNCUDABuffer* buffer = (ZigNNCUDABuffer*)buffer_ref;
     if (!cuda_set_context(backend) || buffer == NULL || destination == NULL || count > buffer->count) {
         return 0;
     }
 
-    float* converted = (float*)malloc(count * sizeof(float));
-    if (converted == NULL) {
-        return 0;
-    }
-
-    CUresult result = cuMemcpyDtoH(converted, buffer->device_ptr, count * sizeof(float));
-    if (result == CUDA_SUCCESS) {
-        for (unsigned long i = 0; i < count; i++) {
-            destination[i] = (double)converted[i];
-        }
-    }
-
-    free(converted);
-    return result == CUDA_SUCCESS;
+    return cuMemcpyDtoH(destination, buffer->device_ptr, count * sizeof(float)) == CUDA_SUCCESS;
 }
 
 static int cuda_launch_1d(ZigNNCUDABackend* backend, CUfunction function, unsigned int width, void** args) {
