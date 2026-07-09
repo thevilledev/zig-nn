@@ -275,6 +275,64 @@ pub const ExecutionContext = struct {
         };
     }
 
+    pub fn subtract(self: *ExecutionContext, a: Tensor, b: Tensor) !Tensor {
+        if (!a.shape.eql(b.shape)) return error.DimensionMismatch;
+        if (a.backendType() != b.backendType()) return error.BackendMismatch;
+
+        const matrix = try a.matrix.subtract(b.matrix, self.device.allocator);
+        self.stats.kernels += 1;
+        return .{
+            .matrix = matrix,
+            .shape = a.shape,
+            .allocator = self.device.allocator,
+        };
+    }
+
+    pub fn multiply(self: *ExecutionContext, a: Tensor, b: Tensor) !Tensor {
+        if (!a.shape.eql(b.shape)) return error.DimensionMismatch;
+        if (a.backendType() != b.backendType()) return error.BackendMismatch;
+
+        const matrix = try a.matrix.elementWiseMultiply(b.matrix, self.device.allocator);
+        self.stats.kernels += 1;
+        return .{
+            .matrix = matrix,
+            .shape = a.shape,
+            .allocator = self.device.allocator,
+        };
+    }
+
+    pub fn scale(self: *ExecutionContext, input: Tensor, scalar: f32) !Tensor {
+        const matrix = try input.matrix.scale(scalar, self.device.allocator);
+        self.stats.kernels += 1;
+        return .{
+            .matrix = matrix,
+            .shape = input.shape,
+            .allocator = self.device.allocator,
+        };
+    }
+
+    pub fn transpose(self: *ExecutionContext, input: Tensor) !Tensor {
+        if (input.shape.rank != 2) return error.InvalidRank;
+        const matrix = try input.matrix.transpose(self.device.allocator);
+        self.stats.kernels += 1;
+        return .{
+            .matrix = matrix,
+            .shape = try Shape.init(&.{ input.shape.dims[1], input.shape.dims[0] }),
+            .allocator = self.device.allocator,
+        };
+    }
+
+    pub fn sumRows(self: *ExecutionContext, input: Tensor) !Tensor {
+        if (input.shape.rank != 2) return error.InvalidRank;
+        const matrix = try input.matrix.sumRows(self.device.allocator);
+        self.stats.kernels += 1;
+        return .{
+            .matrix = matrix,
+            .shape = try Shape.init(&.{ 1, input.shape.dims[1] }),
+            .allocator = self.device.allocator,
+        };
+    }
+
     pub fn addRowBias(self: *ExecutionContext, input: Tensor, bias: Tensor) !Tensor {
         if (input.shape.rank != 2 or bias.shape.rank != 2) return error.InvalidRank;
         if (bias.shape.dims[0] != 1 or bias.shape.dims[1] != input.shape.dims[1]) return error.DimensionMismatch;

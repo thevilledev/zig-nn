@@ -45,8 +45,115 @@ pub const Linear = struct {
         return context.linear(input, self.weights, self.bias);
     }
 
+    pub fn backward(self: *const Linear, context: *ExecutionContext, input: Tensor, output_gradient: Tensor) !LinearGradients {
+        if (input.shape.rank != 2 or output_gradient.shape.rank != 2 or
+            input.shape.dims[0] != output_gradient.shape.dims[0] or
+            input.shape.dims[1] != self.weights.shape.dims[0] or
+            output_gradient.shape.dims[1] != self.weights.shape.dims[1])
+        {
+            return error.DimensionMismatch;
+        }
+
+        var transposed_weights = try context.transpose(self.weights);
+        defer transposed_weights.deinit();
+        var input_gradient = try context.matmul(output_gradient, transposed_weights);
+        errdefer input_gradient.deinit();
+        var transposed_input = try context.transpose(input);
+        defer transposed_input.deinit();
+        var weights_gradient = try context.matmul(transposed_input, output_gradient);
+        errdefer weights_gradient.deinit();
+        const bias_gradient = try context.sumRows(output_gradient);
+        return .{
+            .input = input_gradient,
+            .weights = weights_gradient,
+            .bias = bias_gradient,
+        };
+    }
+
     pub fn parameterCount(self: Linear) usize {
         return self.weights.elementCount() + self.bias.elementCount();
+    }
+};
+
+pub const LinearGradients = struct {
+    input: Tensor,
+    weights: Tensor,
+    bias: Tensor,
+
+    pub fn deinit(self: *LinearGradients) void {
+        self.input.deinit();
+        self.weights.deinit();
+        self.bias.deinit();
+        self.* = undefined;
+    }
+};
+
+pub const Sgd = struct {
+    learning_rate: f32,
+
+    pub fn init(learning_rate: f32) !Sgd {
+        if (learning_rate <= 0 or !std.math.isFinite(learning_rate)) return error.InvalidLearningRate;
+        return .{ .learning_rate = learning_rate };
+    }
+
+    pub fn stepLinear(self: Sgd, context: *ExecutionContext, linear: *Linear, gradients: LinearGradients) !void {
+        if (!linear.weights.shape.eql(gradients.weights.shape) or !linear.bias.shape.eql(gradients.bias.shape)) {
+            return error.DimensionMismatch;
+        }
+
+        var scaled_weights = try context.scale(gradients.weights, self.learning_rate);
+        defer scaled_weights.deinit();
+        var scaled_bias = try context.scale(gradients.bias, self.learning_rate);
+        defer scaled_bias.deinit();
+        var updated_weights = try context.subtract(linear.weights, scaled_weights);
+        errdefer updated_weights.deinit();
+        const updated_bias = try context.subtract(linear.bias, scaled_bias);
+
+        linear.weights.deinit();
+        linear.bias.deinit();
+        linear.weights = updated_weights;
+        linear.bias = updated_bias;
+    }
+};
+
+pub const SoftmaxCrossEntropy = struct {
+    probabilities: Tensor,
+    gradient: Tensor,
+
+    pub fn init(context: *ExecutionContext, logits: Tensor, targets: Tensor) !SoftmaxCrossEntropy {
+        if (logits.shape.rank != 2 or !logits.shape.eql(targets.shape)) return error.DimensionMismatch;
+        var probabilities = try context.softmax(logits);
+        errdefer probabilities.deinit();
+        var difference = try context.subtract(probabilities, targets);
+        defer difference.deinit();
+        const row_count = @as(f32, @floatFromInt(logits.shape.dims[0]));
+        const gradient = try context.scale(difference, 1.0 / row_count);
+        return .{ .probabilities = probabilities, .gradient = gradient };
+    }
+
+    pub fn deinit(self: *SoftmaxCrossEntropy) void {
+        self.probabilities.deinit();
+        self.gradient.deinit();
+        self.* = undefined;
+    }
+
+    /// Reads probabilities and one-hot targets after the execution batch has
+    /// completed and returns the mean cross-entropy loss.
+    pub fn loss(self: SoftmaxCrossEntropy, context: *ExecutionContext, targets: Tensor) !f32 {
+        if (!self.probabilities.shape.eql(targets.shape)) return error.DimensionMismatch;
+        const allocator = context.device.allocator;
+        const probability_values = try allocator.alloc(f32, self.probabilities.elementCount());
+        defer allocator.free(probability_values);
+        const target_values = try allocator.alloc(f32, targets.elementCount());
+        defer allocator.free(target_values);
+        try context.readback(self.probabilities, probability_values);
+        try context.readback(targets, target_values);
+
+        var total: f32 = 0;
+        for (probability_values, target_values) |probability, target| {
+            if (target != 0) total -= target * @log(@max(probability, 1e-7));
+        }
+        return total / @as(f32, @floatFromInt(self.probabilities.shape.dims[0]));
     }
 };
 
@@ -274,4 +381,53 @@ test "decoder block runs a finite device-resident forward pass" {
         try testing.expectEqual(@as(usize, 1), runtime_stats.device_to_host_transfers);
         try testing.expectEqual(@as(usize, 1), runtime_stats.synchronizations);
     }
+}
+
+test "linear classifier trains with device-resident gradients" {
+    const testing = std.testing;
+    const allocator: Allocator = testing.allocator;
+
+    var device = try tensor.Device.init(allocator, .auto);
+    defer device.deinit();
+    var context = ExecutionContext.init(&device);
+    var prng = std.Random.DefaultPrng.init(7);
+    var classifier = try Linear.init(&context, 2, 2, prng.random());
+    defer classifier.deinit();
+    const optimizer = try Sgd.init(0.25);
+
+    var inputs = try context.upload(&.{ 4, 2 }, &.{
+        1.0, 0.0,
+        0.0, 1.0,
+        1.2, 0.1,
+        0.1, 1.2,
+    });
+    defer inputs.deinit();
+    var targets = try context.upload(&.{ 4, 2 }, &.{
+        1, 0,
+        0, 1,
+        1, 0,
+        0, 1,
+    });
+    defer targets.deinit();
+
+    var initial_loss: f32 = 0;
+    var final_loss: f32 = 0;
+    for (0..40) |step| {
+        try context.beginBatch();
+        var logits = try classifier.forward(&context, inputs);
+        var objective = try SoftmaxCrossEntropy.init(&context, logits, targets);
+        var gradients = try classifier.backward(&context, inputs, objective.gradient);
+        try optimizer.stepLinear(&context, &classifier, gradients);
+        gradients.deinit();
+        logits.deinit();
+        try context.endBatch();
+
+        const loss = try objective.loss(&context, targets);
+        objective.deinit();
+        if (step == 0) initial_loss = loss;
+        final_loss = loss;
+    }
+
+    try testing.expect(final_loss < initial_loss * 0.35);
+    try testing.expect(final_loss < 0.2);
 }
