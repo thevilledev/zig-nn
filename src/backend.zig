@@ -4,6 +4,7 @@ const testing = std.testing;
 const cpu_backend_mod = @import("cpu_backend.zig");
 const metal_backend_mod = @import("metal_backend.zig"); // Ensure this import exists
 const cuda_backend_mod = @import("cuda_backend.zig");
+const rocm_backend_mod = @import("rocm_backend.zig");
 const matrix_mod = @import("matrix.zig");
 const root = @import("root.zig");
 const BackendInstance = root.BackendInstance;
@@ -15,6 +16,7 @@ pub const BackendType = enum {
     CPU,
     Metal, // macOS only
     CUDA, // NVIDIA GPUs
+    ROCm, // AMD GPUs
 };
 
 /// Cumulative backend work counters. GPU implementations update these at the
@@ -56,7 +58,7 @@ pub const AttentionGradients = struct {
     }
 };
 
-/// ComputeBackend is an interface for different computation backends (CPU, GPU via Metal, GPU via CUDA)
+/// ComputeBackend is an interface for different computation backends (CPU, GPU via Metal, GPU via CUDA, GPU via ROCm)
 /// It abstracts away the details of how matrix operations and activation functions are implemented
 pub const ComputeBackend = struct {
     // Pointer to the implementation of this backend
@@ -409,6 +411,17 @@ pub fn createBackend(allocator: Allocator, backend_type: BackendType) !BackendIn
             return BackendInstance{ .CUDA = cuda_ptr };
         } else {
             std.debug.print("CUDA backend requested but not enabled in build, falling back to CPU\n", .{});
+        }
+    } else if (backend_type == .ROCm) {
+        if (build_options.enable_rocm) {
+            std.debug.print("ROCm backend requested. Attempting to create...\n", .{});
+            const rocm_ptr = rocm_backend_mod.createROCmBackend(allocator) catch |err| {
+                std.debug.print("Failed to create ROCm backend: {}, falling back to CPU\n", .{err});
+                return BackendInstance{ .CPU = try cpu_backend_mod.createCPUBackend(allocator) };
+            };
+            return BackendInstance{ .ROCm = rocm_ptr };
+        } else {
+            std.debug.print("ROCm backend requested but not enabled in build, falling back to CPU\n", .{});
         }
     }
 

@@ -13,7 +13,7 @@ Run the human-readable `nnctl` report:
 ```
 
 That command runs the ReleaseFast benchmark with GPU auto-detection enabled,
-groups results by suite, and shows CPU vs Metal and CPU vs CUDA timing deltas
+groups results by suite, and shows CPU vs Metal, CUDA, and ROCm timing deltas
 where those backends are available. Use `--csv` to print the raw benchmark CSV.
 
 Run the default release-mode suite. The `benchmark` step pins the benchmark
@@ -34,6 +34,12 @@ Run the same suite with CUDA backend cases enabled on Linux:
 
 ```bash
 zig build benchmark -Dgpu=cuda
+```
+
+Run the same suite with ROCm backend cases enabled on Linux:
+
+```bash
+zig build benchmark -Dgpu=rocm
 ```
 
 Run Debug-mode timings for comparison:
@@ -173,15 +179,16 @@ spot instances running after the benchmark is captured.
 
 ## Coverage
 
-- `matmul`: backend-aware `BackendMatrix.dotProduct` on CPU, Metal, and CUDA,
-  from small smoke shapes up to 1024x1024x1024.
+- `matmul`: backend-aware `BackendMatrix.dotProduct` on CPU plus Metal, CUDA,
+  and ROCm, from small smoke shapes up to 1024x1024x1024.
 - `activation`: backend-aware ReLU, tanh, Swish, softmax, GLU, and SwiGLU on
-  CPU, Metal, and CUDA, including multi-million element activation cases.
-- `gpu_heavy`: GPU-only Metal and CUDA rows for larger matrix multiplication and
-  activation workloads. CPU rows and CPU sample-error comparisons are omitted so
-  these cases can exceed practical CPU baseline sizes.
+  CPU, Metal, CUDA, and ROCm, including multi-million element activation cases.
+- `gpu_heavy`: GPU-only Metal, CUDA, and ROCm rows for larger matrix
+  multiplication and activation workloads. CPU rows and CPU sample-error
+  comparisons are omitted so these cases can exceed practical CPU baseline
+  sizes.
 - `training`: CPU `Network.trainBatch` loops plus `Network.trainBatchBackend`
-  rows for Metal and CUDA when those backends are available.
+  rows for Metal, CUDA, and ROCm when those backends are available.
 - `tiny_gpt`: legacy CPU TinyGPT forward passes through the example model, with
   a larger four-layer decoder row in the default suite. The device decoder is
   covered by transfer/kernel/synchronization assertions and deterministic
@@ -191,8 +198,9 @@ spot instances running after the benchmark is captured.
   decode, error measurement, and KV-cache-shaped TurboQuant loops over
   per-head key/value vectors, including larger flat-vector and KV-cache rows.
 
-GPU rows include `sample_error`, sampled against the CPU result. The Metal and
-CUDA kernels currently use f32 buffers, so small non-zero errors are expected.
+GPU rows include `sample_error`, sampled against the CPU result. The Metal,
+CUDA, and ROCm kernels currently use f32 buffers, so small non-zero errors are
+expected.
 
 ## Remote GPU Results So Far
 

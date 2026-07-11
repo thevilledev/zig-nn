@@ -13,7 +13,7 @@ pub fn main() !void {
     defer _ = gpa.deinit();
 
     std.debug.print("Creating requested GPU backend...\n", .{});
-    const requested_backend: BackendType = if (nn.enable_cuda) .CUDA else .Metal;
+    const requested_backend: BackendType = if (nn.enable_cuda) .CUDA else if (nn.enable_rocm) .ROCm else .Metal;
     var backend_instance = try nn.createBackend(allocator, requested_backend);
     defer backend_instance.deinit();
 

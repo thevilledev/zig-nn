@@ -7,11 +7,14 @@ backend-aware matrix path.
 
 - `src/matrix.zig` powers the high-level `Network`, `Layer`, training examples,
   and default inference helpers.
-- `src/backend.zig`, `src/cpu_backend.zig`, `src/metal_backend.zig`, and
-  `src/cuda_backend.zig` power the backend-aware `BackendMatrix` API.
+- `src/backend.zig`, `src/cpu_backend.zig`, `src/metal_backend.zig`,
+  `src/cuda_backend.zig`, and `src/rocm_backend.zig` power the backend-aware
+  `BackendMatrix` API.
 - Metal support is available for backend matrix operations on macOS.
 - CUDA support is available for backend matrix operations on Linux with the
   NVIDIA driver, CUDA toolkit headers, and NVRTC libraries available.
+- ROCm support is available for backend matrix operations on Linux with AMD
+  ROCm HIP, HIPRTC, and rocBLAS libraries available.
 - `Network.forwardBackend` and `Network.predictBackend` can run inference with
   `BackendMatrix` inputs through the selected backend.
 - `Network.trainBatchBackend` and `Network.trainBackend` can train with
@@ -27,12 +30,12 @@ backend-aware matrix path.
 - `Network.trainBatchBackend` and `Network.trainBackend` remain available for
   direct CPU-owned backend training calls.
 - `Device`, `Tensor`, and `ExecutionContext` provide the backend-neutral f32
-  runtime for rank-aware model code. Explicit `metal` and `cuda` selections
-  fail when unavailable; only `auto` may fall back to CPU.
+  runtime for rank-aware model code. Explicit `metal`, `cuda`, and `rocm`
+  selections fail when unavailable; only `auto` may fall back to CPU.
 - `Transformer.Decoder` keeps embeddings, decoder blocks, optimizer updates,
   and KV caches on one backend. Linear/GELU/layer-normalization, causal
   attention, their backward passes, and embedding gradients have native Metal
-  and CUDA kernels.
+  CUDA, and ROCm kernels.
 - `ExecutionContext.beginBatch` and `endBatch` form an explicit synchronization
   boundary. Runtime telemetry reports allocations, transfers, kernels, vendor
   GEMMs, and synchronizations so tests can catch accidental host round trips.
@@ -51,10 +54,10 @@ zig build run_tiny_gpt -Dgpu=auto -- \
   --weight-decay 0 --no-corpus-prior
 ```
 
-Use `--backend metal` or `--backend cuda` to require that exact accelerator.
-Device training currently supports SGD, one context window per update, and no
-weight decay. AdamW, gradient accumulation, and multi-window device batches
-remain on the CPU educational trainer for now.
+Use `--backend metal`, `--backend cuda`, or `--backend rocm` to require that
+exact accelerator. Device training currently supports SGD, one context window
+per update, and no weight decay. AdamW, gradient accumulation, and multi-window
+device batches remain on the CPU educational trainer for now.
 
 With `--no-corpus-prior`, backend-selected generation uses per-layer KV caches.
 The cache appends projected keys and values in place and replays the current
@@ -100,8 +103,30 @@ To compare CUDA against CPU matrix multiplication:
 zig build run_gpu_benchmark -Dgpu=cuda -Doptimize=ReleaseFast
 ```
 
-The broader benchmark suite emits `cpu`, `metal`, and `cuda` rows. On machines
-without a particular GPU backend, that backend is reported as skipped.
+## ROCm Verification
+
+On Linux with an AMD GPU and ROCm toolkit, run:
+
+```bash
+zig build -Dgpu=rocm test-rocm_backend --summary all
+zig build -Dgpu=rocm run_gpu
+```
+
+If ROCm is installed somewhere other than `/opt/rocm`, pass the toolkit root
+explicitly:
+
+```bash
+zig build -Dgpu=rocm -Drocm-path=/path/to/rocm test-rocm_backend --summary all
+```
+
+To compare ROCm against CPU matrix multiplication:
+
+```bash
+zig build run_gpu_benchmark -Dgpu=rocm -Doptimize=ReleaseFast
+```
+
+The broader benchmark suite emits `cpu`, `metal`, `cuda`, and `rocm` rows. On
+machines without a particular GPU backend, that backend is reported as skipped.
 
 ## CPU Verification
 
@@ -119,8 +144,8 @@ backend creation falls back to CPU.
 ## Working On Backends
 
 Use `nnctl doctor` to print local tool versions, platform-specific backend
-availability, and the exact Metal/CUDA verification commands for the current
-machine.
+availability, and the exact Metal/CUDA/ROCm verification commands for the
+current machine.
 
 Use `BackendMatrix` when testing backend behavior directly. Use
 `Network.forwardBackend`, `Network.predictBackend`, `BackendNetwork`,

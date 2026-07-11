@@ -10,6 +10,8 @@ This project targets Zig `0.16.0`. The package records that requirement in
 - macOS, only if you want to run the Metal backend checks
 - Linux with NVIDIA drivers and CUDA toolkit, only if you want to run the CUDA
   backend checks
+- Linux with AMD ROCm, HIPRTC, and rocBLAS, only if you want to run the ROCm
+  backend checks
 
 The core build has no third-party package dependencies.
 
@@ -78,6 +80,7 @@ zig build test-backend
 zig build test-cpu_backend
 zig build test-metal_backend
 zig build test-cuda_backend
+zig build test-rocm_backend
 ```
 
 ## Data And Model Files

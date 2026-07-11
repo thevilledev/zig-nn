@@ -87,6 +87,12 @@ A reference list for topics covered by this repository's
   - CUDA optimization, profiling, memory hierarchy, and numerical accuracy.
 - [cuBLAS](https://docs.nvidia.com/cuda/cublas/index.html) - NVIDIA BLAS
   library documentation.
+- [ROCm HIP documentation](https://rocm.docs.amd.com/projects/HIP/en/latest/)
+  - AMD HIP programming model and runtime documentation.
+- [HIPRTC](https://rocm.docs.amd.com/projects/HIP/en/latest/how-to/hip_rtc.html)
+  - Runtime compilation for HIP kernels.
+- [rocBLAS](https://rocm.docs.amd.com/projects/rocBLAS/en/latest/) - AMD BLAS
+  library documentation.
 
 ## Serving And Tooling
 

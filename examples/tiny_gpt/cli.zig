@@ -461,6 +461,7 @@ fn parseDevicePreference(value: []const u8) !nn.DevicePreference {
     if (std.mem.eql(u8, value, "auto")) return .auto;
     if (std.mem.eql(u8, value, "metal")) return .metal;
     if (std.mem.eql(u8, value, "cuda")) return .cuda;
+    if (std.mem.eql(u8, value, "rocm")) return .rocm;
     return error.UnknownBackend;
 }
 
@@ -503,7 +504,7 @@ fn printUsage(writer: anytype) !void {
         \\  --full-train-stride <n>  Full-model corpus window stride (default: 1)
         \\  --full-batch-size <n>    Full-model corpus windows per step (default: 1)
         \\  --optimizer <name>       sgd or adamw for full training (default: sgd)
-        \\  --backend <name>         Train via cpu, auto, metal, or cuda tensor backend
+        \\  --backend <name>         Train via cpu, auto, metal, cuda, or rocm tensor backend
         \\  --weight-decay <f>       Full-training weight decay (default: 0)
         \\  --adam-beta1 <f>         AdamW beta1 (default: 0.9)
         \\  --adam-beta2 <f>         AdamW beta2 (default: 0.999)

@@ -59,23 +59,25 @@ pub fn main(init: std.process.Init) !void {
     defer if (metal) |backend| backend.deinit();
     const cuda = createCUDABackend(allocator);
     defer if (cuda) |backend| backend.deinit();
+    const rocm = createROCmBackend(allocator);
+    defer if (rocm) |backend| backend.deinit();
 
-    printHeader(options, metal != null, cuda != null);
+    printHeader(options, metal != null, cuda != null, rocm != null);
 
     if (shouldRun(options, "matmul")) {
-        try benchmarkMatmul(allocator, cpu, metal, cuda, options);
+        try benchmarkMatmul(allocator, cpu, metal, cuda, rocm, options);
     }
     if (shouldRun(options, "activation")) {
-        try benchmarkActivations(allocator, cpu, metal, cuda, options);
+        try benchmarkActivations(allocator, cpu, metal, cuda, rocm, options);
     }
     if (shouldRun(options, "gpu_heavy")) {
-        try benchmarkGpuHeavy(allocator, metal, cuda, options);
+        try benchmarkGpuHeavy(allocator, metal, cuda, rocm, options);
     }
     if (shouldRun(options, "layer_norm")) {
         try benchmarkLayerNorm(allocator, options);
     }
     if (shouldRun(options, "training")) {
-        try benchmarkTraining(allocator, metal, cuda, options);
+        try benchmarkTraining(allocator, metal, cuda, rocm, options);
     }
     if (shouldRun(options, "tiny_gpt")) {
         try benchmarkTinyGpt(allocator, options);
@@ -139,9 +141,14 @@ fn createCUDABackend(allocator: Allocator) ?BackendInstance {
     return BackendInstance{ .CUDA = ptr };
 }
 
-fn printHeader(options: Options, metal_available: bool, cuda_available: bool) void {
+fn createROCmBackend(allocator: Allocator) ?BackendInstance {
+    const ptr = nn.createROCmBackend(allocator) catch return null;
+    return BackendInstance{ .ROCm = ptr };
+}
+
+fn printHeader(options: Options, metal_available: bool, cuda_available: bool, rocm_available: bool) void {
     std.debug.print("# zig-nn benchmark suite\n", .{});
-    std.debug.print("# mode={s} quick={} metal_available={} cuda_available={}\n", .{ modeName(), options.quick, metal_available, cuda_available });
+    std.debug.print("# mode={s} quick={} metal_available={} cuda_available={} rocm_available={}\n", .{ modeName(), options.quick, metal_available, cuda_available, rocm_available });
     std.debug.print("# repeatability: fixed shapes, fixed seeds, deterministic data, warmups excluded\n", .{});
     std.debug.print(
         "suite,case,backend,mode,warmups,iterations,avg_ns,min_ns,max_ns,checksum,sample_error,status\n",
@@ -163,6 +170,7 @@ fn benchmarkMatmul(
     cpu: BackendInstance,
     metal: ?BackendInstance,
     cuda: ?BackendInstance,
+    rocm: ?BackendInstance,
     options: Options,
 ) !void {
     const cases = [_]struct {
@@ -227,6 +235,21 @@ fn benchmarkMatmul(
         } else {
             printSkipped("matmul", case_name, "cuda", warmups, iterations, "skipped_cuda_unavailable");
         }
+
+        if (rocm) |rocm_backend| {
+            var rocm_a = try BackendMatrix.init(rocm_backend, allocator, case.m, case.k);
+            defer rocm_a.deinit();
+            var rocm_b = try BackendMatrix.init(rocm_backend, allocator, case.k, case.n);
+            defer rocm_b.deinit();
+            fillBackendMatrix(rocm_a, 11);
+            fillBackendMatrix(rocm_b, 29);
+
+            const rocm_timing = try timeMatmul(allocator, rocm_a, rocm_b, warmups, iterations);
+            const sample_error = try compareMatmul(allocator, cpu_a, cpu_b, rocm_a, rocm_b);
+            printResult("matmul", case_name, "rocm", rocm_timing, sample_error, "ok");
+        } else {
+            printSkipped("matmul", case_name, "rocm", warmups, iterations, "skipped_rocm_unavailable");
+        }
     }
 }
 
@@ -289,6 +312,7 @@ fn benchmarkActivations(
     cpu: BackendInstance,
     metal: ?BackendInstance,
     cuda: ?BackendInstance,
+    rocm: ?BackendInstance,
     options: Options,
 ) !void {
     const cases = [_]struct {
@@ -357,6 +381,21 @@ fn benchmarkActivations(
             printResult("activation", case.name, "cuda", cuda_timing, sample_error, "ok");
         } else {
             printSkipped("activation", case.name, "cuda", warmups, iterations, "skipped_cuda_unavailable");
+        }
+
+        if (rocm) |rocm_backend| {
+            var rocm_input = try BackendMatrix.init(rocm_backend, allocator, case.rows, case.cols);
+            defer rocm_input.deinit();
+            var rocm_gate = try BackendMatrix.init(rocm_backend, allocator, case.rows, case.cols);
+            defer rocm_gate.deinit();
+            fillBackendMatrix(rocm_input, 43);
+            fillBackendMatrix(rocm_gate, 71);
+
+            const rocm_timing = try timeActivation(allocator, case.op, rocm_input, rocm_gate, warmups, iterations);
+            const sample_error = try compareActivation(allocator, case.op, cpu_input, cpu_gate, rocm_input, rocm_gate);
+            printResult("activation", case.name, "rocm", rocm_timing, sample_error, "ok");
+        } else {
+            printSkipped("activation", case.name, "rocm", warmups, iterations, "skipped_rocm_unavailable");
         }
     }
 }
@@ -437,6 +476,7 @@ fn benchmarkGpuHeavy(
     allocator: Allocator,
     metal: ?BackendInstance,
     cuda: ?BackendInstance,
+    rocm: ?BackendInstance,
     options: Options,
 ) !void {
     const matmul_cases = [_]struct {
@@ -480,6 +520,12 @@ fn benchmarkGpuHeavy(
         } else {
             printSkipped("gpu_heavy", case.name, "cuda", case.warmups, case.iterations, "skipped_cuda_unavailable");
         }
+
+        if (rocm) |rocm_backend| {
+            try benchmarkGpuHeavyMatmulCase(allocator, rocm_backend, "rocm", case.name, case.m, case.k, case.n, case.warmups, case.iterations);
+        } else {
+            printSkipped("gpu_heavy", case.name, "rocm", case.warmups, case.iterations, "skipped_rocm_unavailable");
+        }
     }
 
     for (activation_cases) |case| {
@@ -498,6 +544,12 @@ fn benchmarkGpuHeavy(
             try benchmarkGpuHeavyActivationCase(allocator, cuda_backend, "cuda", case.name, case.op, case.rows, case.cols, case.warmups, case.iterations);
         } else {
             printSkipped("gpu_heavy", case.name, "cuda", case.warmups, case.iterations, "skipped_cuda_unavailable");
+        }
+
+        if (rocm) |rocm_backend| {
+            try benchmarkGpuHeavyActivationCase(allocator, rocm_backend, "rocm", case.name, case.op, case.rows, case.cols, case.warmups, case.iterations);
+        } else {
+            printSkipped("gpu_heavy", case.name, "rocm", case.warmups, case.iterations, "skipped_rocm_unavailable");
         }
     }
 }
@@ -554,6 +606,7 @@ fn benchmarkGpuHeavyActivationCase(
 fn printGpuHeavyQuickSkipped(case_name: []const u8) void {
     printSkipped("gpu_heavy", case_name, "metal", 0, 0, "skipped_quick_mode");
     printSkipped("gpu_heavy", case_name, "cuda", 0, 0, "skipped_quick_mode");
+    printSkipped("gpu_heavy", case_name, "rocm", 0, 0, "skipped_quick_mode");
 }
 
 fn benchmarkLayerNorm(allocator: Allocator, options: Options) !void {
@@ -591,6 +644,7 @@ fn benchmarkLayerNorm(allocator: Allocator, options: Options) !void {
         printResult("layer_norm", case.name, "cpu", timing, 0.0, "ok");
         printSkipped("layer_norm", case.name, "metal", timing.warmups, timing.iterations, "skipped_cpu_only_path");
         printSkipped("layer_norm", case.name, "cuda", timing.warmups, timing.iterations, "skipped_cpu_only_path");
+        printSkipped("layer_norm", case.name, "rocm", timing.warmups, timing.iterations, "skipped_cpu_only_path");
     }
 }
 
@@ -637,6 +691,7 @@ fn benchmarkTraining(
     allocator: Allocator,
     metal: ?BackendInstance,
     cuda: ?BackendInstance,
+    rocm: ?BackendInstance,
     options: Options,
 ) !void {
     const cases = [_]struct {
@@ -719,6 +774,28 @@ fn benchmarkTraining(
             printResult("training", case.name, "cuda", cuda_timing, @abs(timing.checksum - cuda_timing.checksum), "ok");
         } else {
             printSkipped("training", case.name, "cuda", timing.warmups, timing.iterations, "skipped_cuda_unavailable");
+        }
+
+        if (rocm) |rocm_backend| {
+            var rocm_network = try makeTrainingNetwork(allocator, case.input_size, case.hidden_size, case.output_size);
+            defer rocm_network.deinit();
+
+            const rocm_inputs = try BackendMatrix.fromMatrix(rocm_backend, inputs, allocator);
+            defer rocm_inputs.deinit();
+            const rocm_targets = try BackendMatrix.fromMatrix(rocm_backend, targets, allocator);
+            defer rocm_targets.deinit();
+
+            const rocm_timing = try timeTrainingLoopBackend(
+                &rocm_network,
+                rocm_inputs,
+                rocm_targets,
+                case.steps,
+                quickCount(options, case.warmups),
+                quickCount(options, case.iterations),
+            );
+            printResult("training", case.name, "rocm", rocm_timing, @abs(timing.checksum - rocm_timing.checksum), "ok");
+        } else {
+            printSkipped("training", case.name, "rocm", timing.warmups, timing.iterations, "skipped_rocm_unavailable");
         }
     }
 }
@@ -894,6 +971,7 @@ fn benchmarkTinyGpt(allocator: Allocator, options: Options) !void {
         printResult("tiny_gpt", case.name, "cpu", timing, 0.0, "ok");
         printSkipped("tiny_gpt", case.name, "metal", timing.warmups, timing.iterations, "skipped_cpu_only_path");
         printSkipped("tiny_gpt", case.name, "cuda", timing.warmups, timing.iterations, "skipped_cpu_only_path");
+        printSkipped("tiny_gpt", case.name, "rocm", timing.warmups, timing.iterations, "skipped_cpu_only_path");
     }
 }
 
@@ -987,6 +1065,7 @@ fn benchmarkQuantization(allocator: Allocator, options: Options) !void {
         printResult("quantization", case.name, "cpu", timing, 0.0, "ok");
         printSkipped("quantization", case.name, "metal", timing.warmups, timing.iterations, "skipped_cpu_only_path");
         printSkipped("quantization", case.name, "cuda", timing.warmups, timing.iterations, "skipped_cpu_only_path");
+        printSkipped("quantization", case.name, "rocm", timing.warmups, timing.iterations, "skipped_cpu_only_path");
     }
 
     for (kv_cases, 0..) |case, index| {
@@ -1017,6 +1096,7 @@ fn benchmarkQuantization(allocator: Allocator, options: Options) !void {
         printResult("quantization", case.name, "cpu", timing, 0.0, "ok");
         printSkipped("quantization", case.name, "metal", timing.warmups, timing.iterations, "skipped_cpu_only_path");
         printSkipped("quantization", case.name, "cuda", timing.warmups, timing.iterations, "skipped_cpu_only_path");
+        printSkipped("quantization", case.name, "rocm", timing.warmups, timing.iterations, "skipped_cpu_only_path");
     }
 }
 

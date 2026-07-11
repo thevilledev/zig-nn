@@ -33,8 +33,12 @@ pub fn main() !void {
     var cpu = try nn.createBackend(allocator, .CPU);
     defer cpu.deinit();
 
-    const requested_backend: BackendType = if (nn.enable_cuda) .CUDA else .Metal;
-    const gpu_name = if (requested_backend == .CUDA) "cuda" else "metal";
+    const requested_backend: BackendType = if (nn.enable_cuda) .CUDA else if (nn.enable_rocm) .ROCm else .Metal;
+    const gpu_name = switch (requested_backend) {
+        .CUDA => "cuda",
+        .ROCm => "rocm",
+        else => "metal",
+    };
     var gpu = try nn.createBackend(allocator, requested_backend);
     defer gpu.deinit();
 

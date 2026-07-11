@@ -63,10 +63,11 @@ zig build run_tiny_gpt -Dgpu=auto -- \
   --weight-decay 0 --no-corpus-prior --prompt "to be"
 ```
 
-`--backend metal` and `--backend cuda` require the requested accelerator;
-`--backend auto` may fall back to CPU. Device training currently supports SGD
-with one context window per update and no weight decay. The legacy trainer
-continues to provide AdamW, gradient clipping, and averaged mini-batches.
+`--backend metal`, `--backend cuda`, and `--backend rocm` require the requested
+accelerator; `--backend auto` may fall back to CPU. Device training currently
+supports SGD with one context window per update and no weight decay. The legacy
+trainer continues to provide AdamW, gradient clipping, and averaged
+mini-batches.
 
 Run the OpenAI-compatible inference service:
 

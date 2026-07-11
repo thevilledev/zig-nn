@@ -336,8 +336,10 @@ test "device decoder adapter preserves TinyGPT logits" {
 }
 
 test "CLI parses explicit tensor backend" {
-    const options = try cli.parseArgs(&.{ "--train-full", "--backend", "cpu", "--optimizer", "sgd" });
-    try testing.expectEqual(nn.DevicePreference.cpu, options.device_preference.?);
+    const cpu_options = try cli.parseArgs(&.{ "--train-full", "--backend", "cpu", "--optimizer", "sgd" });
+    try testing.expectEqual(nn.DevicePreference.cpu, cpu_options.device_preference.?);
+    const rocm_options = try cli.parseArgs(&.{ "--backend", "rocm" });
+    try testing.expectEqual(nn.DevicePreference.rocm, rocm_options.device_preference.?);
     try testing.expectError(error.UnknownBackend, cli.parseArgs(&.{ "--backend", "quantum" }));
 }
 

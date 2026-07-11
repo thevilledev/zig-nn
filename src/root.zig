@@ -17,6 +17,7 @@ const backend_mod = @import("backend.zig");
 const cpu_backend_mod = @import("cpu_backend.zig");
 const metal_backend_mod = @import("metal_backend.zig");
 const cuda_backend_mod = @import("cuda_backend.zig");
+const rocm_backend_mod = @import("rocm_backend.zig");
 const quantization_mod = @import("quantization.zig");
 const tensor_mod = @import("tensor.zig");
 const transformer_mod = @import("transformer.zig");
@@ -78,17 +79,20 @@ pub const BackendMatrix = backend_mod.Matrix;
 pub const BackendType = backend_mod.BackendType;
 pub const enable_metal = build_options.enable_metal;
 pub const enable_cuda = build_options.enable_cuda;
+pub const enable_rocm = build_options.enable_rocm;
 
 // Export concrete backend types
 pub const CPUBackend = cpu_backend_mod.CPUBackend;
 pub const MetalBackend = metal_backend_mod.MetalBackend;
 pub const CUDABackend = cuda_backend_mod.CUDABackend;
+pub const ROCmBackend = rocm_backend_mod.ROCmBackend;
 
 // Define the BackendInstance tagged union using *anyopaque
 pub const BackendInstance = union(BackendType) {
     CPU: *anyopaque,
     Metal: *anyopaque,
     CUDA: *anyopaque,
+    ROCm: *anyopaque,
 
     // --- Mirrored Interface Methods ---
 
@@ -102,6 +106,7 @@ pub const BackendInstance = union(BackendType) {
             .CPU => |ptr| CPUBackend.initMatrix(ptr, allocator, rows, cols),
             .Metal => |ptr| MetalBackend.initMatrix(ptr, allocator, rows, cols),
             .CUDA => |ptr| CUDABackend.initMatrix(ptr, allocator, rows, cols),
+            .ROCm => |ptr| ROCmBackend.initMatrix(ptr, allocator, rows, cols),
         };
         return self.attachBackend(matrix);
     }
@@ -111,6 +116,7 @@ pub const BackendInstance = union(BackendType) {
             .CPU => |ptr| CPUBackend.runtimeStats(ptr),
             .Metal => |ptr| MetalBackend.runtimeStats(ptr),
             .CUDA => |ptr| CUDABackend.runtimeStats(ptr),
+            .ROCm => |ptr| ROCmBackend.runtimeStats(ptr),
         };
     }
 
@@ -119,6 +125,7 @@ pub const BackendInstance = union(BackendType) {
             .CPU => |ptr| CPUBackend.resetRuntimeStats(ptr),
             .Metal => |ptr| MetalBackend.resetRuntimeStats(ptr),
             .CUDA => |ptr| CUDABackend.resetRuntimeStats(ptr),
+            .ROCm => |ptr| ROCmBackend.resetRuntimeStats(ptr),
         }
     }
 
@@ -127,6 +134,7 @@ pub const BackendInstance = union(BackendType) {
             .CPU => |ptr| try CPUBackend.beginBatch(ptr),
             .Metal => |ptr| try MetalBackend.beginBatch(ptr),
             .CUDA => |ptr| try CUDABackend.beginBatch(ptr),
+            .ROCm => |ptr| try ROCmBackend.beginBatch(ptr),
         }
     }
 
@@ -135,6 +143,7 @@ pub const BackendInstance = union(BackendType) {
             .CPU => |ptr| try CPUBackend.endBatch(ptr),
             .Metal => |ptr| try MetalBackend.endBatch(ptr),
             .CUDA => |ptr| try CUDABackend.endBatch(ptr),
+            .ROCm => |ptr| try ROCmBackend.endBatch(ptr),
         }
     }
 
@@ -143,6 +152,7 @@ pub const BackendInstance = union(BackendType) {
             .CPU => |ptr| try CPUBackend.synchronize(ptr),
             .Metal => |ptr| try MetalBackend.synchronize(ptr),
             .CUDA => |ptr| try CUDABackend.synchronize(ptr),
+            .ROCm => |ptr| try ROCmBackend.synchronize(ptr),
         }
     }
 
@@ -151,6 +161,7 @@ pub const BackendInstance = union(BackendType) {
             .CPU => |ptr| CPUBackend.deinitMatrix(ptr, matrix),
             .Metal => |ptr| MetalBackend.deinitMatrix(ptr, matrix),
             .CUDA => |ptr| CUDABackend.deinitMatrix(ptr, matrix),
+            .ROCm => |ptr| ROCmBackend.deinitMatrix(ptr, matrix),
         }
     }
 
@@ -159,6 +170,7 @@ pub const BackendInstance = union(BackendType) {
             .CPU => |ptr| CPUBackend.copyMatrix(ptr, source, allocator),
             .Metal => |ptr| MetalBackend.copyMatrix(ptr, source, allocator),
             .CUDA => |ptr| CUDABackend.copyMatrix(ptr, source, allocator),
+            .ROCm => |ptr| ROCmBackend.copyMatrix(ptr, source, allocator),
         };
         return self.attachBackend(matrix);
     }
@@ -168,6 +180,7 @@ pub const BackendInstance = union(BackendType) {
             .CPU => |ptr| CPUBackend.getMatrixElement(ptr, matrix, row, col),
             .Metal => |ptr| MetalBackend.getMatrixElement(ptr, matrix, row, col),
             .CUDA => |ptr| CUDABackend.getMatrixElement(ptr, matrix, row, col),
+            .ROCm => |ptr| ROCmBackend.getMatrixElement(ptr, matrix, row, col),
         };
     }
 
@@ -176,6 +189,7 @@ pub const BackendInstance = union(BackendType) {
             .CPU => |ptr| CPUBackend.writeMatrixF32(ptr, matrix, values),
             .Metal => |ptr| MetalBackend.writeMatrixF32(ptr, matrix, values),
             .CUDA => |ptr| CUDABackend.writeMatrixF32(ptr, matrix, values),
+            .ROCm => |ptr| ROCmBackend.writeMatrixF32(ptr, matrix, values),
         };
     }
 
@@ -184,6 +198,7 @@ pub const BackendInstance = union(BackendType) {
             .CPU => |ptr| CPUBackend.readMatrixF32(ptr, matrix, values),
             .Metal => |ptr| MetalBackend.readMatrixF32(ptr, matrix, values),
             .CUDA => |ptr| CUDABackend.readMatrixF32(ptr, matrix, values),
+            .ROCm => |ptr| ROCmBackend.readMatrixF32(ptr, matrix, values),
         };
     }
 
@@ -192,6 +207,7 @@ pub const BackendInstance = union(BackendType) {
             .CPU => |ptr| CPUBackend.setMatrixElement(ptr, matrix, row, col, value),
             .Metal => |ptr| MetalBackend.setMatrixElement(ptr, matrix, row, col, value),
             .CUDA => |ptr| CUDABackend.setMatrixElement(ptr, matrix, row, col, value),
+            .ROCm => |ptr| ROCmBackend.setMatrixElement(ptr, matrix, row, col, value),
         }
     }
 
@@ -200,6 +216,7 @@ pub const BackendInstance = union(BackendType) {
             .CPU => |ptr| CPUBackend.fillMatrix(ptr, matrix, value),
             .Metal => |ptr| MetalBackend.fillMatrix(ptr, matrix, value),
             .CUDA => |ptr| CUDABackend.fillMatrix(ptr, matrix, value),
+            .ROCm => |ptr| ROCmBackend.fillMatrix(ptr, matrix, value),
         }
     }
 
@@ -208,6 +225,7 @@ pub const BackendInstance = union(BackendType) {
             .CPU => |ptr| CPUBackend.dotProduct(ptr, a, b, allocator),
             .Metal => |ptr| MetalBackend.dotProduct(ptr, a, b, allocator),
             .CUDA => |ptr| CUDABackend.dotProduct(ptr, a, b, allocator),
+            .ROCm => |ptr| ROCmBackend.dotProduct(ptr, a, b, allocator),
         };
         return self.attachBackend(matrix);
     }
@@ -217,6 +235,7 @@ pub const BackendInstance = union(BackendType) {
             .CPU => |ptr| CPUBackend.add(ptr, a, b, allocator),
             .Metal => |ptr| MetalBackend.add(ptr, a, b, allocator),
             .CUDA => |ptr| CUDABackend.add(ptr, a, b, allocator),
+            .ROCm => |ptr| ROCmBackend.add(ptr, a, b, allocator),
         };
         return self.attachBackend(matrix);
     }
@@ -226,6 +245,7 @@ pub const BackendInstance = union(BackendType) {
             .CPU => |ptr| CPUBackend.addRowBias(ptr, matrix, bias, allocator),
             .Metal => |ptr| MetalBackend.addRowBias(ptr, matrix, bias, allocator),
             .CUDA => |ptr| CUDABackend.addRowBias(ptr, matrix, bias, allocator),
+            .ROCm => |ptr| ROCmBackend.addRowBias(ptr, matrix, bias, allocator),
         };
         return self.attachBackend(result);
     }
@@ -235,6 +255,7 @@ pub const BackendInstance = union(BackendType) {
             .CPU => |ptr| CPUBackend.subtract(ptr, a, b, allocator),
             .Metal => |ptr| MetalBackend.subtract(ptr, a, b, allocator),
             .CUDA => |ptr| CUDABackend.subtract(ptr, a, b, allocator),
+            .ROCm => |ptr| ROCmBackend.subtract(ptr, a, b, allocator),
         };
         return self.attachBackend(matrix);
     }
@@ -244,6 +265,7 @@ pub const BackendInstance = union(BackendType) {
             .CPU => |ptr| CPUBackend.elementWiseMultiply(ptr, a, b, allocator),
             .Metal => |ptr| MetalBackend.elementWiseMultiply(ptr, a, b, allocator),
             .CUDA => |ptr| CUDABackend.elementWiseMultiply(ptr, a, b, allocator),
+            .ROCm => |ptr| ROCmBackend.elementWiseMultiply(ptr, a, b, allocator),
         };
         return self.attachBackend(matrix);
     }
@@ -253,6 +275,7 @@ pub const BackendInstance = union(BackendType) {
             .CPU => |ptr| CPUBackend.scale(ptr, matrix, scalar, allocator),
             .Metal => |ptr| MetalBackend.scale(ptr, matrix, scalar, allocator),
             .CUDA => |ptr| CUDABackend.scale(ptr, matrix, scalar, allocator),
+            .ROCm => |ptr| ROCmBackend.scale(ptr, matrix, scalar, allocator),
         };
         return self.attachBackend(result);
     }
@@ -262,6 +285,7 @@ pub const BackendInstance = union(BackendType) {
             .CPU => |ptr| CPUBackend.sumRows(ptr, matrix, allocator),
             .Metal => |ptr| MetalBackend.sumRows(ptr, matrix, allocator),
             .CUDA => |ptr| CUDABackend.sumRows(ptr, matrix, allocator),
+            .ROCm => |ptr| ROCmBackend.sumRows(ptr, matrix, allocator),
         };
         return self.attachBackend(result);
     }
@@ -271,6 +295,7 @@ pub const BackendInstance = union(BackendType) {
             .CPU => |ptr| CPUBackend.transpose(ptr, matrix, allocator),
             .Metal => |ptr| MetalBackend.transpose(ptr, matrix, allocator),
             .CUDA => |ptr| CUDABackend.transpose(ptr, matrix, allocator),
+            .ROCm => |ptr| ROCmBackend.transpose(ptr, matrix, allocator),
         };
         return self.attachBackend(result);
     }
@@ -280,6 +305,7 @@ pub const BackendInstance = union(BackendType) {
             .CPU => |ptr| CPUBackend.extractBatch(ptr, matrix, start, end, allocator),
             .Metal => |ptr| MetalBackend.extractBatch(ptr, matrix, start, end, allocator),
             .CUDA => |ptr| CUDABackend.extractBatch(ptr, matrix, start, end, allocator),
+            .ROCm => |ptr| ROCmBackend.extractBatch(ptr, matrix, start, end, allocator),
         };
         return self.attachBackend(result);
     }
@@ -289,6 +315,7 @@ pub const BackendInstance = union(BackendType) {
             .CPU => |ptr| CPUBackend.randomize(ptr, matrix, min, max),
             .Metal => |ptr| MetalBackend.randomize(ptr, matrix, min, max),
             .CUDA => |ptr| CUDABackend.randomize(ptr, matrix, min, max),
+            .ROCm => |ptr| ROCmBackend.randomize(ptr, matrix, min, max),
         }
     }
 
@@ -297,6 +324,7 @@ pub const BackendInstance = union(BackendType) {
             .CPU => |ptr| CPUBackend.applyActivation(ptr, matrix, activation_fn, allocator),
             .Metal => |ptr| MetalBackend.applyActivation(ptr, matrix, activation_fn, allocator),
             .CUDA => |ptr| CUDABackend.applyActivation(ptr, matrix, activation_fn, allocator),
+            .ROCm => |ptr| ROCmBackend.applyActivation(ptr, matrix, activation_fn, allocator),
         };
         return self.attachBackend(result);
     }
@@ -306,6 +334,7 @@ pub const BackendInstance = union(BackendType) {
             .CPU => |ptr| CPUBackend.applySoftmax(ptr, matrix, allocator),
             .Metal => |ptr| MetalBackend.applySoftmax(ptr, matrix, allocator),
             .CUDA => |ptr| CUDABackend.applySoftmax(ptr, matrix, allocator),
+            .ROCm => |ptr| ROCmBackend.applySoftmax(ptr, matrix, allocator),
         };
         return self.attachBackend(result);
     }
@@ -315,6 +344,7 @@ pub const BackendInstance = union(BackendType) {
             .CPU => |ptr| CPUBackend.layerNorm(ptr, matrix, gamma, beta, epsilon, allocator),
             .Metal => |ptr| MetalBackend.layerNorm(ptr, matrix, gamma, beta, epsilon, allocator),
             .CUDA => |ptr| CUDABackend.layerNorm(ptr, matrix, gamma, beta, epsilon, allocator),
+            .ROCm => |ptr| ROCmBackend.layerNorm(ptr, matrix, gamma, beta, epsilon, allocator),
         };
         return self.attachBackend(result);
     }
@@ -324,6 +354,7 @@ pub const BackendInstance = union(BackendType) {
             .CPU => |ptr| CPUBackend.layerNormBackward(ptr, input, gamma, output_gradient, epsilon, allocator),
             .Metal => |ptr| MetalBackend.layerNormBackward(ptr, input, gamma, output_gradient, epsilon, allocator),
             .CUDA => |ptr| CUDABackend.layerNormBackward(ptr, input, gamma, output_gradient, epsilon, allocator),
+            .ROCm => |ptr| ROCmBackend.layerNormBackward(ptr, input, gamma, output_gradient, epsilon, allocator),
         };
         gradients.input = self.attachBackend(gradients.input);
         gradients.gamma = self.attachBackend(gradients.gamma);
@@ -336,6 +367,7 @@ pub const BackendInstance = union(BackendType) {
             .CPU => |ptr| CPUBackend.causalSelfAttention(ptr, query, key, value, heads, allocator),
             .Metal => |ptr| MetalBackend.causalSelfAttention(ptr, query, key, value, heads, allocator),
             .CUDA => |ptr| CUDABackend.causalSelfAttention(ptr, query, key, value, heads, allocator),
+            .ROCm => |ptr| ROCmBackend.causalSelfAttention(ptr, query, key, value, heads, allocator),
         };
         return self.attachBackend(result);
     }
@@ -345,6 +377,7 @@ pub const BackendInstance = union(BackendType) {
             .CPU => |ptr| CPUBackend.causalSelfAttentionBackward(ptr, query, key, value, output_gradient, heads, allocator),
             .Metal => |ptr| MetalBackend.causalSelfAttentionBackward(ptr, query, key, value, output_gradient, heads, allocator),
             .CUDA => |ptr| CUDABackend.causalSelfAttentionBackward(ptr, query, key, value, output_gradient, heads, allocator),
+            .ROCm => |ptr| ROCmBackend.causalSelfAttentionBackward(ptr, query, key, value, output_gradient, heads, allocator),
         };
         gradients.query = self.attachBackend(gradients.query);
         gradients.key = self.attachBackend(gradients.key);
@@ -357,6 +390,7 @@ pub const BackendInstance = union(BackendType) {
             .CPU => |ptr| CPUBackend.embeddingLookup(ptr, table, indices, allocator),
             .Metal => |ptr| MetalBackend.embeddingLookup(ptr, table, indices, allocator),
             .CUDA => |ptr| CUDABackend.embeddingLookup(ptr, table, indices, allocator),
+            .ROCm => |ptr| ROCmBackend.embeddingLookup(ptr, table, indices, allocator),
         };
         return self.attachBackend(result);
     }
@@ -366,6 +400,7 @@ pub const BackendInstance = union(BackendType) {
             .CPU => |ptr| CPUBackend.embeddingGradient(ptr, indices, output_gradient, vocabulary_size, allocator),
             .Metal => |ptr| MetalBackend.embeddingGradient(ptr, indices, output_gradient, vocabulary_size, allocator),
             .CUDA => |ptr| CUDABackend.embeddingGradient(ptr, indices, output_gradient, vocabulary_size, allocator),
+            .ROCm => |ptr| ROCmBackend.embeddingGradient(ptr, indices, output_gradient, vocabulary_size, allocator),
         };
         return self.attachBackend(result);
     }
@@ -375,6 +410,7 @@ pub const BackendInstance = union(BackendType) {
             .CPU => |ptr| CPUBackend.cachedSelfAttention(ptr, query, key, value, key_cache, value_cache, position, heads, allocator),
             .Metal => |ptr| MetalBackend.cachedSelfAttention(ptr, query, key, value, key_cache, value_cache, position, heads, allocator),
             .CUDA => |ptr| CUDABackend.cachedSelfAttention(ptr, query, key, value, key_cache, value_cache, position, heads, allocator),
+            .ROCm => |ptr| ROCmBackend.cachedSelfAttention(ptr, query, key, value, key_cache, value_cache, position, heads, allocator),
         };
         return self.attachBackend(result);
     }
@@ -384,6 +420,7 @@ pub const BackendInstance = union(BackendType) {
             .CPU => |ptr| CPUBackend.applyGLU(ptr, linear_part, gating_part, allocator),
             .Metal => |ptr| MetalBackend.applyGLU(ptr, linear_part, gating_part, allocator),
             .CUDA => |ptr| CUDABackend.applyGLU(ptr, linear_part, gating_part, allocator),
+            .ROCm => |ptr| ROCmBackend.applyGLU(ptr, linear_part, gating_part, allocator),
         };
         return self.attachBackend(result);
     }
@@ -393,6 +430,7 @@ pub const BackendInstance = union(BackendType) {
             .CPU => |ptr| CPUBackend.applySwiGLU(ptr, linear_part, gating_part, allocator),
             .Metal => |ptr| MetalBackend.applySwiGLU(ptr, linear_part, gating_part, allocator),
             .CUDA => |ptr| CUDABackend.applySwiGLU(ptr, linear_part, gating_part, allocator),
+            .ROCm => |ptr| ROCmBackend.applySwiGLU(ptr, linear_part, gating_part, allocator),
         };
         return self.attachBackend(result);
     }
@@ -410,6 +448,7 @@ pub const BackendInstance = union(BackendType) {
             .CPU => |ptr| @as(*cpu_backend_mod.CPUBackend, @ptrCast(@alignCast(ptr))).deinit(),
             .Metal => |ptr| @as(*metal_backend_mod.MetalBackend, @ptrCast(@alignCast(ptr))).deinit(),
             .CUDA => |ptr| @as(*cuda_backend_mod.CUDABackend, @ptrCast(@alignCast(ptr))).deinit(),
+            .ROCm => |ptr| @as(*rocm_backend_mod.ROCmBackend, @ptrCast(@alignCast(ptr))).deinit(),
         }
     }
 };
@@ -418,5 +457,6 @@ pub const BackendInstance = union(BackendType) {
 pub const createCPUBackend = cpu_backend_mod.createCPUBackend;
 pub const createMetalBackend = metal_backend_mod.createMetalBackend;
 pub const createCUDABackend = cuda_backend_mod.createCUDABackend;
+pub const createROCmBackend = rocm_backend_mod.createROCmBackend;
 // Keep the generic createBackend that returns the union
 pub const createBackend = backend_mod.createBackend;

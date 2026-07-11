@@ -7,7 +7,8 @@ A small neural-network playground written in Zig.
 This is for learning neural-network fundamentals by building the pieces
 directly: matrix math, layers, training loops, small examples, focused
 experiments, and a CPU-first path with separate backend-aware matrix operations
-plus a device-resident f32 tensor and Transformer path for CPU, Metal, and CUDA.
+plus a device-resident f32 tensor and Transformer path for CPU, Metal, CUDA,
+and ROCm.
 It is not trying to be a production ML framework.
 
 ## Start Here
@@ -53,8 +54,8 @@ checks, see [Development Environment](docs/development.md). GPU details are in
   benchmark commands
 - [Experiments](docs/experiments.md) - research-style probes, metrics, and
   current experiment notes
-- [GPU and Backend Notes](docs/gpu.md) - current backend boundaries, Metal and
-  CUDA verification
+- [GPU and Backend Notes](docs/gpu.md) - current backend boundaries, Metal,
+  CUDA, and ROCm verification
 - [Neural Network Architecture](docs/architecture.md) - design principles and
   component overview
 - [Advanced Activation Functions](docs/activation_functions.md) - Swish, GLU,

@@ -23,6 +23,7 @@ pub fn main() !void {
 
 fn requestedBackendType() nn.BackendType {
     if (nn.enable_cuda) return .CUDA;
+    if (nn.enable_rocm) return .ROCm;
     if (nn.enable_metal) return .Metal;
     return .CPU;
 }
@@ -32,6 +33,7 @@ fn backendName(backend_type: nn.BackendType) []const u8 {
         .CPU => "cpu",
         .Metal => "metal",
         .CUDA => "cuda",
+        .ROCm => "rocm",
     };
 }
 

@@ -23,6 +23,7 @@ pub const DevicePreference = enum {
     auto,
     metal,
     cuda,
+    rocm,
 };
 
 pub const Shape = struct {
@@ -76,6 +77,7 @@ pub const Device = struct {
             .cpu => .CPU,
             .metal => .Metal,
             .cuda => .CUDA,
+            .rocm => .ROCm,
             .auto => autoBackendType(),
         };
 
@@ -115,6 +117,7 @@ pub const Device = struct {
 
     fn autoBackendType() BackendType {
         if (builtin.os.tag == .linux and build_options.enable_cuda) return .CUDA;
+        if (builtin.os.tag == .linux and build_options.enable_rocm) return .ROCm;
         if (builtin.os.tag == .macos and build_options.enable_metal) return .Metal;
         return .CPU;
     }
@@ -674,6 +677,9 @@ test "explicit device selection never silently falls back" {
     if (!build_options.enable_cuda) {
         try testing.expectError(error.BackendUnavailable, Device.init(allocator, .cuda));
     }
+    if (!build_options.enable_rocm) {
+        try testing.expectError(error.BackendUnavailable, Device.init(allocator, .rocm));
+    }
 }
 
 test "auto device supports bulk f32 round trip" {
@@ -701,7 +707,7 @@ test "auto device supports bulk f32 round trip" {
     try testing.expectEqual(@as(usize, 3), runtime_stats.buffer_allocations);
 
     switch (device.backendType()) {
-        .Metal, .CUDA => {
+        .Metal, .CUDA, .ROCm => {
             try testing.expectEqual(@as(usize, 2), runtime_stats.host_to_device_transfers);
             try testing.expectEqual(@as(usize, 1), runtime_stats.device_to_host_transfers);
             try testing.expectEqual(@as(usize, 1), runtime_stats.kernel_launches);

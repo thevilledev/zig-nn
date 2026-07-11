@@ -38,11 +38,12 @@ Two main layer types:
   - Binary Cross Entropy
 - Mini-batch training capabilities
 
-### Backends (`backend.zig`, `cpu_backend.zig`, `metal_backend.zig`, `cuda_backend.zig`)
+### Backends (`backend.zig`, `cpu_backend.zig`, `metal_backend.zig`, `cuda_backend.zig`, `rocm_backend.zig`)
 - `BackendMatrix` provides a separate backend-aware matrix API
 - CPU backend implements all backend matrix operations
 - Metal backend accelerates backend matrix operations on macOS
 - CUDA backend accelerates backend matrix operations on Linux with NVIDIA GPUs
+- ROCm backend accelerates backend matrix operations on Linux with AMD GPUs
 - `Network.forwardBackend` and `Network.predictBackend` provide
   backend-aware inference without updating training caches
 - `Network.trainBatchBackend` and `Network.trainBackend` provide
@@ -112,6 +113,7 @@ Using Zig's error union types for handling:
 4. **GPU Backend Operations**
    - Metal compute kernels for backend matrix operations on macOS
    - CUDA kernels for backend matrix operations on Linux with NVIDIA GPUs
+   - ROCm HIP kernels for backend matrix operations on Linux with AMD GPUs
    - CPU fallback when a requested GPU backend is unavailable
 
 ## Future Considerations

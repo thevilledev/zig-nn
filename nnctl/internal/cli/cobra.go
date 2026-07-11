@@ -173,7 +173,7 @@ func (a *App) newBenchmarkCommand(withRepo repoRunner) *cobra.Command {
 		Use:   "benchmark",
 		Short: "Run benchmarks with readable CPU/GPU comparisons",
 		Long: `Runs the Zig benchmark suite and renders the CSV as grouped tables.
-The default uses ReleaseFast and GPU auto-detection so CPU, Metal, and CUDA rows
+The default uses ReleaseFast and GPU auto-detection so CPU, Metal, CUDA, and ROCm rows
 can be compared where those backends are available.
 Use --csv to print the raw benchmark CSV instead. Use --compare with a previous
 raw CSV file to print current-vs-baseline deltas.`,
@@ -754,7 +754,7 @@ func addModeFlags(cmd *cobra.Command, mode *string) {
 }
 
 func addGPUFlag(cmd *cobra.Command, gpu *string) {
-	cmd.Flags().StringVar(gpu, "gpu", *gpu, "GPU backend: none, auto, metal, or cuda")
+	cmd.Flags().StringVar(gpu, "gpu", *gpu, "GPU backend: none, auto, metal, cuda, or rocm")
 	cmd.Flags().SortFlags = false
 }
 

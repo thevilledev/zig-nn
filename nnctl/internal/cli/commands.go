@@ -141,10 +141,13 @@ func (a *App) runDoctor(ctx context.Context) error {
 
 func (a *App) printBackendDoctor() {
 	cudaPath := getenvDefault("CUDA_PATH", "/usr/local/cuda")
+	rocmPath := getenvDefault("ROCM_PATH", "/opt/rocm")
 	fmt.Fprintf(a.stdout(), "metal: %s\n", metalDoctorStatus(runtime.GOOS))
 	fmt.Fprintf(a.stdout(), "cuda: %s\n", cudaDoctorStatus(runtime.GOOS, cudaPath, pathExists))
+	fmt.Fprintf(a.stdout(), "rocm: %s\n", rocmDoctorStatus(runtime.GOOS, rocmPath, pathExists))
 	fmt.Fprintf(a.stdout(), "verify metal: zig build -Dgpu=metal test-metal_backend --summary all\n")
 	fmt.Fprintf(a.stdout(), "verify cuda: zig build -Dgpu=cuda -Dcuda-path=%s test-cuda_backend --summary all\n", cudaPath)
+	fmt.Fprintf(a.stdout(), "verify rocm: zig build -Dgpu=rocm -Drocm-path=%s test-rocm_backend --summary all\n", rocmPath)
 	fmt.Fprintf(a.stdout(), "benchmark gpu: nnctl benchmark --gpu auto --quick\n")
 }
 
@@ -163,6 +166,16 @@ func cudaDoctorStatus(goos, cudaPath string, exists func(string) bool) string {
 		return fmt.Sprintf("toolkit candidate found at %s", cudaPath)
 	}
 	return fmt.Sprintf("toolkit not found at %s; pass -Dcuda-path or set CUDA_PATH", cudaPath)
+}
+
+func rocmDoctorStatus(goos, rocmPath string, exists func(string) bool) string {
+	if goos != "linux" {
+		return "build option unavailable on this OS; ROCm backend currently targets Linux"
+	}
+	if exists(rocmPath) {
+		return fmt.Sprintf("toolkit candidate found at %s", rocmPath)
+	}
+	return fmt.Sprintf("toolkit not found at %s; pass -Drocm-path or set ROCM_PATH", rocmPath)
 }
 
 func pathExists(path string) bool {

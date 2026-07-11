@@ -19,13 +19,18 @@ pub fn build(b: *std.Build) void {
     const gpu_option = b.option(
         []const u8,
         "gpu",
-        "GPU backend to use: auto, metal, cuda, or none (default: none)",
+        "GPU backend to use: auto, metal, cuda, rocm, or none (default: none)",
     ) orelse "none";
     const cuda_path = b.option(
         []const u8,
         "cuda-path",
         "CUDA toolkit root used for headers and NVRTC libraries (default: /usr/local/cuda)",
     ) orelse "/usr/local/cuda";
+    const rocm_path = b.option(
+        []const u8,
+        "rocm-path",
+        "ROCm toolkit root used for HIP, HIPRTC, and rocBLAS libraries (default: /opt/rocm)",
+    ) orelse "/opt/rocm";
 
     // Determine enabled GPU backends based on target and option
     const enable_gpu = !std.mem.eql(u8, gpu_option, "none");
@@ -37,12 +42,14 @@ pub fn build(b: *std.Build) void {
 
     const enable_cuda = is_linux and (std.mem.eql(u8, gpu_option, "cuda") or
         std.mem.eql(u8, gpu_option, "auto"));
+    const enable_rocm = is_linux and std.mem.eql(u8, gpu_option, "rocm");
 
     // Build options
     const build_options = b.addOptions();
     build_options.addOption(bool, "enable_gpu", enable_gpu);
     build_options.addOption(bool, "enable_metal", enable_metal);
     build_options.addOption(bool, "enable_cuda", enable_cuda);
+    build_options.addOption(bool, "enable_rocm", enable_rocm);
 
     // This creates a "module", which represents a collection of source files alongside
     // some compilation options, such as optimization mode and linked system libraries.
@@ -62,6 +69,7 @@ pub fn build(b: *std.Build) void {
 
     addMetalSupport(b, lib_mod, enable_metal, true);
     addCudaSupport(b, lib_mod, enable_cuda, true, cuda_path);
+    addRocmSupport(b, lib_mod, enable_rocm, true, rocm_path);
 
     // Now, we will create a static library based on the module we created above.
     // This creates a `std.Build.Step.Compile`, which is the build step responsible
@@ -126,6 +134,9 @@ pub fn build(b: *std.Build) void {
             if (enable_cuda) {
                 addCudaSupport(b, exe_mod, enable_cuda, false, cuda_path);
             }
+            if (enable_rocm) {
+                addRocmSupport(b, exe_mod, enable_rocm, false, rocm_path);
+            }
         }
 
         // Install the example executable
@@ -155,7 +166,9 @@ pub fn build(b: *std.Build) void {
         build_options,
         enable_metal,
         enable_cuda,
+        enable_rocm,
         cuda_path,
+        rocm_path,
         .ReleaseFast,
         "zig_nn_benchmark",
         "benchmark",
@@ -167,7 +180,9 @@ pub fn build(b: *std.Build) void {
         build_options,
         enable_metal,
         enable_cuda,
+        enable_rocm,
         cuda_path,
+        rocm_path,
         .Debug,
         "zig_nn_benchmark_debug",
         "benchmark-debug",
@@ -179,22 +194,23 @@ pub fn build(b: *std.Build) void {
 
     // Create individual test steps for each source file
     // Run them in a logical order: matrix -> activation -> layer -> network
-    var prev_step = addTestStep(b, test_step, "matrix", "src/matrix.zig", null, target, optimize, build_options, enable_metal, enable_cuda, cuda_path, null);
-    prev_step = addTestStep(b, test_step, "activation", "src/activation.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, cuda_path, null);
-    prev_step = addTestStep(b, test_step, "tensor", "src/tensor.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, cuda_path, null);
-    prev_step = addTestStep(b, test_step, "transformer", "src/transformer.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, cuda_path, null);
-    prev_step = addTestStep(b, test_step, "layer", "src/layer.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, cuda_path, null);
-    prev_step = addTestStep(b, test_step, "layer_norm", "src/layer_norm.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, cuda_path, null);
-    prev_step = addTestStep(b, test_step, "network", "src/network.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, cuda_path, null);
-    prev_step = addTestStep(b, test_step, "inference_service", "src/inference_service.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, cuda_path, null);
-    prev_step = addTestStep(b, test_step, "visualiser", "src/visualiser.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, cuda_path, null);
-    prev_step = addTestStep(b, test_step, "quantization", "src/quantization.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, cuda_path, null);
+    var prev_step = addTestStep(b, test_step, "matrix", "src/matrix.zig", null, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
+    prev_step = addTestStep(b, test_step, "activation", "src/activation.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
+    prev_step = addTestStep(b, test_step, "tensor", "src/tensor.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
+    prev_step = addTestStep(b, test_step, "transformer", "src/transformer.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
+    prev_step = addTestStep(b, test_step, "layer", "src/layer.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
+    prev_step = addTestStep(b, test_step, "layer_norm", "src/layer_norm.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
+    prev_step = addTestStep(b, test_step, "network", "src/network.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
+    prev_step = addTestStep(b, test_step, "inference_service", "src/inference_service.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
+    prev_step = addTestStep(b, test_step, "visualiser", "src/visualiser.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
+    prev_step = addTestStep(b, test_step, "quantization", "src/quantization.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
 
     // Add backend-related tests
-    prev_step = addTestStep(b, test_step, "backend", "src/backend.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, cuda_path, null);
-    prev_step = addTestStep(b, test_step, "cpu_backend", "src/cpu_backend.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, cuda_path, null);
-    prev_step = addTestStep(b, test_step, "metal_backend", "src/metal_backend.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, cuda_path, null);
-    _ = addTestStep(b, test_step, "cuda_backend", "src/cuda_backend.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, cuda_path, null);
+    prev_step = addTestStep(b, test_step, "backend", "src/backend.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
+    prev_step = addTestStep(b, test_step, "cpu_backend", "src/cpu_backend.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
+    prev_step = addTestStep(b, test_step, "metal_backend", "src/metal_backend.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
+    prev_step = addTestStep(b, test_step, "cuda_backend", "src/cuda_backend.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
+    _ = addTestStep(b, test_step, "rocm_backend", "src/rocm_backend.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
 
     // Create a step for running acceptance tests from examples
     const acceptance_test_step = b.step("test-acceptance", "Run all example acceptance tests");
@@ -221,7 +237,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "tiny_gpt", .path = "examples/tiny_gpt/tiny_gpt.zig" },
         .{ .name = "tiny_gpt_openai", .path = "examples/tiny_gpt/openai_server.zig" },
     }) |example| {
-        example_prev_step = addTestStep(b, acceptance_test_step, example.name, example.path, example_prev_step, target, optimize, build_options, enable_metal, enable_cuda, cuda_path, lib_mod);
+        example_prev_step = addTestStep(b, acceptance_test_step, example.name, example.path, example_prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, lib_mod);
     }
 }
 
@@ -231,7 +247,9 @@ fn addBenchmarkStep(
     build_options: *std.Build.Step.Options,
     enable_metal: bool,
     enable_cuda: bool,
+    enable_rocm: bool,
     cuda_path: []const u8,
+    rocm_path: []const u8,
     benchmark_optimize: std.builtin.OptimizeMode,
     exe_name: []const u8,
     step_name: []const u8,
@@ -245,6 +263,7 @@ fn addBenchmarkStep(
     bench_nn_mod.addOptions("build_options", build_options);
     addMetalSupport(b, bench_nn_mod, enable_metal, true);
     addCudaSupport(b, bench_nn_mod, enable_cuda, true, cuda_path);
+    addRocmSupport(b, bench_nn_mod, enable_rocm, true, rocm_path);
 
     const bench_mod = b.createModule(.{
         .root_source_file = b.path("benchmarks/benchmark.zig"),
@@ -266,6 +285,9 @@ fn addBenchmarkStep(
     }
     if (enable_cuda) {
         addCudaSupport(b, bench_mod, enable_cuda, false, cuda_path);
+    }
+    if (enable_rocm) {
+        addRocmSupport(b, bench_mod, enable_rocm, false, rocm_path);
     }
 
     const exe = b.addExecutable(.{
@@ -328,6 +350,30 @@ fn addCudaSupport(b: *std.Build, mod: *std.Build.Module, enable_cuda: bool, incl
     }
 }
 
+fn addRocmSupport(b: *std.Build, mod: *std.Build.Module, enable_rocm: bool, include_wrapper: bool, rocm_path: []const u8) void {
+    if (!enable_rocm) return;
+
+    const include_path = b.fmt("{s}/include", .{rocm_path});
+    const lib_path = b.fmt("{s}/lib", .{rocm_path});
+
+    mod.addIncludePath(b.path("src/rocm"));
+    mod.addSystemIncludePath(.{ .cwd_relative = include_path });
+    mod.addLibraryPath(.{ .cwd_relative = lib_path });
+    mod.addRPath(.{ .cwd_relative = lib_path });
+    mod.linkSystemLibrary("amdhip64", .{});
+    mod.linkSystemLibrary("hiprtc", .{});
+    mod.linkSystemLibrary("rocblas", .{});
+    mod.linkSystemLibrary("c", .{});
+    mod.linkSystemLibrary("c++", .{});
+
+    if (include_wrapper) {
+        mod.addCSourceFile(.{
+            .file = b.path("src/rocm/rocm_wrapper.c"),
+            .flags = &.{ "-Wall", "-Wextra", "-D__HIP_PLATFORM_AMD__" },
+        });
+    }
+}
+
 // Helper function to create a test step for a specific file
 fn addTestStep(
     b: *std.Build,
@@ -340,7 +386,9 @@ fn addTestStep(
     build_options: *std.Build.Step.Options,
     enable_metal: bool,
     enable_cuda: bool,
+    enable_rocm: bool,
     cuda_path: []const u8,
+    rocm_path: []const u8,
     nn_mod: ?*std.Build.Module,
 ) *std.Build.Step {
     const test_mod = b.createModule(.{
@@ -354,6 +402,7 @@ fn addTestStep(
     }
     addMetalSupport(b, test_mod, enable_metal, nn_mod == null);
     addCudaSupport(b, test_mod, enable_cuda, nn_mod == null, cuda_path);
+    addRocmSupport(b, test_mod, enable_rocm, nn_mod == null, rocm_path);
 
     const test_artifact = b.addTest(.{
         .root_module = test_mod,

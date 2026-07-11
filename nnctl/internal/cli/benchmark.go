@@ -209,6 +209,7 @@ func printBenchmarkReport(dst interface{ Write([]byte) (int, error) }, rows []be
 		cpu   *benchmarkRow
 		metal *benchmarkRow
 		cuda  *benchmarkRow
+		rocm  *benchmarkRow
 	}
 
 	suiteOrder := make([]string, 0)
@@ -233,6 +234,8 @@ func printBenchmarkReport(dst interface{ Write([]byte) (int, error) }, rows []be
 			pairs[row.Suite][row.Case].metal = row
 		case "cuda":
 			pairs[row.Suite][row.Case].cuda = row
+		case "rocm":
+			pairs[row.Suite][row.Case].rocm = row
 		}
 	}
 
@@ -240,12 +243,12 @@ func printBenchmarkReport(dst interface{ Write([]byte) (int, error) }, rows []be
 		fmt.Fprintf(dst, "%s\n", suite)
 		var table bytes.Buffer
 		tw := tabwriter.NewWriter(&table, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(tw, "case\tcpu avg\tmetal avg\tmetal diff\tmetal speedup\tcuda avg\tcuda diff\tcuda speedup\terror\tstatus")
+		fmt.Fprintln(tw, "case\tcpu avg\tmetal avg\tmetal diff\tmetal speedup\tcuda avg\tcuda diff\tcuda speedup\trocm avg\trocm diff\trocm speedup\terror\tstatus")
 		for _, caseName := range caseOrder[suite] {
 			pair := pairs[suite][caseName]
 			fmt.Fprintf(
 				tw,
-				"%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				"%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 				caseName,
 				formatBenchmarkTime(pair.cpu),
 				formatBenchmarkTime(pair.metal),
@@ -254,8 +257,11 @@ func printBenchmarkReport(dst interface{ Write([]byte) (int, error) }, rows []be
 				formatBenchmarkTime(pair.cuda),
 				formatBenchmarkDiff(pair.cpu, pair.cuda),
 				formatBenchmarkSpeedup(pair.cpu, pair.cuda),
-				formatBenchmarkErrors(pair.metal, pair.cuda),
-				formatBenchmarkStatus(pair.cpu, pair.metal, pair.cuda),
+				formatBenchmarkTime(pair.rocm),
+				formatBenchmarkDiff(pair.cpu, pair.rocm),
+				formatBenchmarkSpeedup(pair.cpu, pair.rocm),
+				formatBenchmarkErrors(pair.metal, pair.cuda, pair.rocm),
+				formatBenchmarkStatus(pair.cpu, pair.metal, pair.cuda, pair.rocm),
 			)
 		}
 		_ = tw.Flush()
@@ -296,35 +302,49 @@ func formatBenchmarkError(row *benchmarkRow) string {
 	return fmt.Sprintf("%.2e", row.SampleError)
 }
 
-func formatBenchmarkErrors(metal, cuda *benchmarkRow) string {
+func formatBenchmarkErrors(metal, cuda, rocm *benchmarkRow) string {
 	metalError := formatBenchmarkError(metal)
 	cudaError := formatBenchmarkError(cuda)
+	rocmError := formatBenchmarkError(rocm)
 
-	switch {
-	case metalError == "-" && cudaError == "-":
-		return "-"
-	case cudaError == "-":
-		return metalError
-	case metalError == "-":
-		return cudaError
-	default:
-		return fmt.Sprintf("metal=%s cuda=%s", metalError, cudaError)
+	errors := make([]string, 0, 3)
+	if metalError != "-" {
+		errors = append(errors, "metal="+metalError)
 	}
+	if cudaError != "-" {
+		errors = append(errors, "cuda="+cudaError)
+	}
+	if rocmError != "-" {
+		errors = append(errors, "rocm="+rocmError)
+	}
+	if len(errors) == 0 {
+		return "-"
+	}
+	if len(errors) == 1 {
+		if _, value, ok := strings.Cut(errors[0], "="); ok {
+			return value
+		}
+		return errors[0]
+	}
+	return strings.Join(errors, " ")
 }
 
-func formatBenchmarkStatus(cpu, metal, cuda *benchmarkRow) string {
-	if cpu == nil && metal == nil && cuda == nil {
+func formatBenchmarkStatus(cpu, metal, cuda, rocm *benchmarkRow) string {
+	if cpu == nil && metal == nil && cuda == nil && rocm == nil {
 		return "missing"
 	}
 	if cpu != nil && cpu.Status != "ok" {
 		return "cpu: " + cpu.Status
 	}
-	statuses := make([]string, 0, 2)
+	statuses := make([]string, 0, 3)
 	if metal != nil && metal.Status != "ok" {
 		statuses = append(statuses, "metal: "+metal.Status)
 	}
 	if cuda != nil && cuda.Status != "ok" {
 		statuses = append(statuses, "cuda: "+cuda.Status)
+	}
+	if rocm != nil && rocm.Status != "ok" {
+		statuses = append(statuses, "rocm: "+rocm.Status)
 	}
 	if len(statuses) > 0 {
 		return strings.Join(statuses, ", ")
