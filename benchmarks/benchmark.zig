@@ -73,6 +73,9 @@ pub fn main(init: std.process.Init) !void {
     if (shouldRun(options, "gpu_heavy")) {
         try benchmarkGpuHeavy(allocator, metal, cuda, rocm, options);
     }
+    if (shouldRunExplicit(options, "gpu_peak")) {
+        try benchmarkGpuPeak(allocator, metal, cuda, rocm, options);
+    }
     if (shouldRun(options, "layer_norm")) {
         try benchmarkLayerNorm(allocator, options);
     }
@@ -118,6 +121,7 @@ fn printHelp() void {
         \\  matmul        backend matrix multiplication
         \\  activation    backend activations and gated activations
         \\  gpu_heavy     GPU-only large matmul and activation workloads
+        \\  gpu_peak      opt-in huge GEMM workloads for high-end GPUs
         \\  layer_norm    CPU LayerNorm forward passes
         \\  training      CPU Network.trainBatch loops
         \\  tiny_gpt      CPU TinyGPT forward passes
@@ -128,6 +132,11 @@ fn printHelp() void {
 
 fn shouldRun(options: Options, suite: []const u8) bool {
     const filter = options.filter orelse return true;
+    return std.mem.indexOf(u8, suite, filter) != null;
+}
+
+fn shouldRunExplicit(options: Options, suite: []const u8) bool {
+    const filter = options.filter orelse return false;
     return std.mem.indexOf(u8, suite, filter) != null;
 }
 
@@ -607,6 +616,81 @@ fn printGpuHeavyQuickSkipped(case_name: []const u8) void {
     printSkipped("gpu_heavy", case_name, "metal", 0, 0, "skipped_quick_mode");
     printSkipped("gpu_heavy", case_name, "cuda", 0, 0, "skipped_quick_mode");
     printSkipped("gpu_heavy", case_name, "rocm", 0, 0, "skipped_quick_mode");
+}
+
+fn benchmarkGpuPeak(
+    allocator: Allocator,
+    metal: ?BackendInstance,
+    cuda: ?BackendInstance,
+    rocm: ?BackendInstance,
+    options: Options,
+) !void {
+    const cases = [_]struct {
+        name: []const u8,
+        m: usize,
+        k: usize,
+        n: usize,
+        warmups: usize,
+        iterations: usize,
+    }{
+        .{ .name = "matmul_8192x8192x8192", .m = 8192, .k = 8192, .n = 8192, .warmups = 1, .iterations = 2 },
+        .{ .name = "matmul_12288x12288x12288", .m = 12288, .k = 12288, .n = 12288, .warmups = 1, .iterations = 2 },
+        .{ .name = "matmul_16384x8192x16384", .m = 16384, .k = 8192, .n = 16384, .warmups = 1, .iterations = 2 },
+        .{ .name = "matmul_24576x4096x24576", .m = 24576, .k = 4096, .n = 24576, .warmups = 1, .iterations = 2 },
+    };
+
+    for (cases) |case| {
+        if (options.quick) {
+            printGpuPeakQuickSkipped(case.name);
+            continue;
+        }
+
+        if (metal) |metal_backend| {
+            try benchmarkGpuPeakMatmulCase(allocator, metal_backend, "metal", case.name, case.m, case.k, case.n, case.warmups, case.iterations);
+        } else {
+            printSkipped("gpu_peak", case.name, "metal", case.warmups, case.iterations, "skipped_metal_unavailable");
+        }
+
+        if (cuda) |cuda_backend| {
+            try benchmarkGpuPeakMatmulCase(allocator, cuda_backend, "cuda", case.name, case.m, case.k, case.n, case.warmups, case.iterations);
+        } else {
+            printSkipped("gpu_peak", case.name, "cuda", case.warmups, case.iterations, "skipped_cuda_unavailable");
+        }
+
+        if (rocm) |rocm_backend| {
+            try benchmarkGpuPeakMatmulCase(allocator, rocm_backend, "rocm", case.name, case.m, case.k, case.n, case.warmups, case.iterations);
+        } else {
+            printSkipped("gpu_peak", case.name, "rocm", case.warmups, case.iterations, "skipped_rocm_unavailable");
+        }
+    }
+}
+
+fn benchmarkGpuPeakMatmulCase(
+    allocator: Allocator,
+    backend: BackendInstance,
+    backend_name: []const u8,
+    case_name: []const u8,
+    m: usize,
+    k: usize,
+    n: usize,
+    warmups: usize,
+    iterations: usize,
+) !void {
+    var a = try BackendMatrix.init(backend, allocator, m, k);
+    defer a.deinit();
+    var b = try BackendMatrix.init(backend, allocator, k, n);
+    defer b.deinit();
+    fillBackendMatrix(a, 1597);
+    fillBackendMatrix(b, 3251);
+
+    const timing = try timeMatmul(allocator, a, b, warmups, iterations);
+    printResult("gpu_peak", case_name, backend_name, timing, 0.0, "ok");
+}
+
+fn printGpuPeakQuickSkipped(case_name: []const u8) void {
+    printSkipped("gpu_peak", case_name, "metal", 0, 0, "skipped_quick_mode");
+    printSkipped("gpu_peak", case_name, "cuda", 0, 0, "skipped_quick_mode");
+    printSkipped("gpu_peak", case_name, "rocm", 0, 0, "skipped_quick_mode");
 }
 
 fn benchmarkLayerNorm(allocator: Allocator, options: Options) !void {

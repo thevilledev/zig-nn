@@ -1,3 +1,5 @@
+#define ZIG_NN_CUDA_INFINITY __int_as_float(0x7f800000)
+
 extern "C" __global__ void matrix_multiply(
     const float* A,
     const float* B,
@@ -370,7 +372,7 @@ extern "C" __global__ void causal_self_attention(
     unsigned int head_width = channels / heads;
     unsigned int channel_offset = head * head_width;
     float scale = rsqrtf((float)head_width);
-    float max_score = -INFINITY;
+    float max_score = -ZIG_NN_CUDA_INFINITY;
     for (unsigned int key_position = 0; key_position <= query_position; key_position++) {
         float score = 0.0f;
         for (unsigned int channel = 0; channel < head_width; channel++) {
@@ -422,7 +424,7 @@ extern "C" __global__ void causal_attention_probabilities_backward(
     unsigned int head_width = channels / heads;
     unsigned int channel_offset = head * head_width;
     float scale = rsqrtf((float)head_width);
-    float max_score = -INFINITY;
+    float max_score = -ZIG_NN_CUDA_INFINITY;
     for (unsigned int key_position = 0; key_position <= query_position; key_position++) {
         float score = 0.0f;
         for (unsigned int channel = 0; channel < head_width; channel++) {
@@ -566,7 +568,7 @@ extern "C" __global__ void cached_self_attention(
         value_cache[position * channels + offset + channel] = value[offset + channel];
     }
     float scale = rsqrtf((float)head_width);
-    float max_score = -INFINITY;
+    float max_score = -ZIG_NN_CUDA_INFINITY;
     for (unsigned int key_position = 0; key_position <= position; key_position++) {
         float score = 0.0f;
         for (unsigned int channel = 0; channel < head_width; channel++) score += query[offset + channel] * key_cache[key_position * channels + offset + channel];

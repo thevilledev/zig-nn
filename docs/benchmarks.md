@@ -58,6 +58,15 @@ The default suite includes heavier workloads intended to move more rows into
 millisecond-scale timings, plus a GPU-only `gpu_heavy` suite with larger matrix
 and activation shapes. Use `--quick` when you only need compilation and basic
 benchmark plumbing coverage; the GPU-heavy rows are skipped in quick mode.
+The `gpu_peak` suite is opt-in and focuses on huge GEMM workloads for high-end
+GPUs; it is skipped unless selected with `--filter gpu_peak`.
+
+Run the high-end GPU peak suite:
+
+```bash
+zig build benchmark -Dgpu=cuda -- --filter gpu_peak
+zig build benchmark -Dgpu=rocm -- --filter gpu_peak
+```
 
 Save a raw `nnctl` CSV baseline and compare a later run against it:
 
@@ -86,6 +95,7 @@ Run one suite:
 zig build benchmark -- --filter matmul
 zig build benchmark -- --filter activation
 zig build benchmark -- --filter gpu_heavy
+zig build benchmark -- --filter gpu_peak
 zig build benchmark -- --filter layer_norm
 zig build benchmark -- --filter training
 zig build benchmark -- --filter tiny_gpt
@@ -174,6 +184,10 @@ Use `nnctl cloud deploy` for NVIDIA CUDA benchmarks.
    ssh -o UserKnownHostsFile=/tmp/zig-nn-bench-known_hosts "$host" \
      "cd '$dest' && zig build benchmark -Dgpu=cuda" \
      > /tmp/zig-nn-benchmark-$(git rev-parse --short HEAD)-<gpu>.csv
+
+   ssh -o UserKnownHostsFile=/tmp/zig-nn-bench-known_hosts "$host" \
+     "cd '$dest' && zig build benchmark -Dgpu=cuda -- --filter gpu_peak" \
+     > /tmp/zig-nn-benchmark-$(git rev-parse --short HEAD)-<gpu>-peak.csv
    ```
 
 6. Destroy the instance and the cloned OS volume reported by deploy. Do not pass
@@ -226,6 +240,9 @@ driver, and cleanup support.
   multiplication and activation workloads. CPU rows and CPU sample-error
   comparisons are omitted so these cases can exceed practical CPU baseline
   sizes.
+- `gpu_peak`: opt-in GPU-only Metal, CUDA, and ROCm rows for huge GEMM
+  workloads sized for high-end accelerators. CPU rows and sample-error
+  comparisons are omitted, and quick mode skips the suite.
 - `training`: CPU `Network.trainBatch` loops plus `Network.trainBatchBackend`
   rows for Metal, CUDA, and ROCm when those backends are available.
 - `tiny_gpt`: legacy CPU TinyGPT forward passes through the example model, with
@@ -247,12 +264,11 @@ These results are from Verda single-GPU spot instances and a manually
 provisioned AMD ROCm host. Lower backend average time is better. CPU timings
 vary by VM, so use backend absolute timings for cross-GPU comparison.
 
-The successful CUDA rows were captured from
-`0c038481529517c45e74d139db1c330f65166f8e` plus the local
-`ZIG_NN_CUDA_INFINITY` NVRTC fix in `src/cuda/kernels.cu`. The run used CUDA
-toolkit 13.0 and NVIDIA driver 610.43.02.
+The successful CUDA rows include the `ZIG_NN_CUDA_INFINITY` NVRTC fix in
+`src/cuda/kernels.cu`. The run used CUDA toolkit 13.0 and NVIDIA driver
+610.43.02.
 
-The Radeon 890M ROCm rows were captured from the same source commit on a
+The Radeon 890M ROCm rows were captured from the same benchmark source on a
 Manjaro ROCm host with ROCm `7.2.53211-9999`, kernel `6.18.32-1-MANJARO`, and
 ISA `gfx1150`.
 
@@ -268,6 +284,30 @@ older GPU models back only after rerunning the workflows above.
 | AMD Radeon 890M Graphics | manual ROCm host | local | 4096 MiB | gfx1150 | ROCm 7.2.53211-9999 | n/a | ok |
 | Tesla V100-SXM2-16GB | 1V100.6V | FIN-01 | 16384 MiB | 7.0 | 580.173.02 | 0.0595 usd | no result: CUDA 13 NVRTC rejected the architecture flag |
 | NVIDIA RTX PRO 6000 CC | 1RTXPRO6000.30V.CC | FIN-03 | n/a | n/a | 610.43.02 | 0.6747 usd | no result: driver installed, but `nvidia-smi` found no device and reboot left the worker offline |
+
+### GPU Peak Timings
+
+The `gpu_peak` rows are intentionally much larger than the default comparison
+rows and are meant to separate integrated GPUs from high-end accelerator-class
+GPUs.
+
+The Radeon 890M ROCm baseline was captured on the Manjaro ROCm host described
+above. Values are backend `avg_ns` converted to milliseconds. Lower is better.
+
+| suite | case | Radeon 890M ROCm |
+| --- | --- | ---: |
+| gpu_peak | matmul_8192x8192x8192 | 3798.242 ms |
+| gpu_peak | matmul_12288x12288x12288 | 11371.647 ms |
+| gpu_peak | matmul_16384x8192x16384 | 6392.198 ms |
+| gpu_peak | matmul_24576x4096x24576 | 5947.610 ms |
+
+Verda spot coverage for `gpu_peak` was attempted on 2026-07-13, but no CUDA
+timings were captured from the spot inventory available at that time.
+
+| GPU | Instance type | Location | Source | Result |
+| --- | --- | --- | --- | --- |
+| NVIDIA A100-SXM4-80GB | 1A100.22V | FIN-01 | fresh Ubuntu image | no result: cloud-init installed Zig and CUDA headers, but no `nvidia-smi`; installing `cuda-drivers` dropped SSH and the worker disappeared from `nnctl cloud list --all` before a benchmark ran |
+| NVIDIA RTX PRO 6000 Blackwell Server Edition | 1RTXPRO6000.30V.CC | FIN-03 | fresh Ubuntu image | no result: the provided FIN-03 source volume was deleted, proprietary 610.43.02 failed `RmInitAdapter`, open 610.43.02 could not keep CUDA enumeration stable, `gpu_peak --quick` reported `CUDA_ERROR_INVALID_DEVICE`, and reboot left the worker offline |
 
 ### Backend Timings
 
