@@ -38,3 +38,27 @@ func TestCloneVolumeActionRequestUsesLocationCode(t *testing.T) {
 		t.Fatalf("type = %q, want empty", payload["type"])
 	}
 }
+
+func TestPermanentDeleteVolumeActionRequestUsesPermanentDelete(t *testing.T) {
+	actionReq := permanentDeleteVolumeActionRequest(" vol-trash ")
+
+	payloadBytes, err := json.Marshal(actionReq)
+	if err != nil {
+		t.Fatalf("marshal permanent delete volume action request: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(payloadBytes, &payload); err != nil {
+		t.Fatalf("unmarshal permanent delete volume action request: %v", err)
+	}
+
+	if payload["id"] != "vol-trash" {
+		t.Fatalf("id = %q, want vol-trash", payload["id"])
+	}
+	if payload["action"] != "delete" {
+		t.Fatalf("action = %q, want delete", payload["action"])
+	}
+	if payload["is_permanent"] != true {
+		t.Fatalf("is_permanent = %v, want true", payload["is_permanent"])
+	}
+}

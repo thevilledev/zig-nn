@@ -401,6 +401,34 @@ func (c *SDKClient) DeleteVolume(ctx context.Context, volumeID string, force boo
 	return c.client.Volumes.DeleteVolume(ctx, volumeID, force)
 }
 
+func (c *SDKClient) PermanentDeleteVolume(ctx context.Context, volumeID string) error {
+	actionReq := permanentDeleteVolumeActionRequest(volumeID)
+	if actionReq.ID == "" {
+		return fmt.Errorf("volume ID is required")
+	}
+
+	body, err := json.Marshal(actionReq)
+	if err != nil {
+		return fmt.Errorf("marshal permanent delete volume request: %w", err)
+	}
+	httpReq, err := c.client.NewRequest(ctx, http.MethodPut, "/volumes", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	if _, err := c.client.Do(httpReq, nil); err != nil {
+		return err
+	}
+	return nil
+}
+
+func permanentDeleteVolumeActionRequest(volumeID string) sdkverda.VolumeActionRequest {
+	return sdkverda.VolumeActionRequest{
+		ID:          strings.TrimSpace(volumeID),
+		Action:      sdkverda.VolumeActionDelete,
+		IsPermanent: true,
+	}
+}
+
 func (c *SDKClient) CreateInstance(ctx context.Context, req CreateInstanceRequest) (Instance, error) {
 	sdkReq := sdkverda.CreateInstanceRequest{
 		InstanceType: req.InstanceType,

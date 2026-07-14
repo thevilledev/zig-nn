@@ -12,13 +12,15 @@ type ListVolumesOptions struct {
 }
 
 type PurgeVolumesOptions struct {
-	VolumeIDs []string
-	BaseURL   string
-	DryRun    bool
+	VolumeIDs  []string
+	AllDeleted bool
+	BaseURL    string
+	DryRun     bool
 }
 
 type PurgeVolumesRequest struct {
-	VolumeIDs []string `json:"volume_ids"`
+	VolumeIDs  []string `json:"volume_ids,omitempty"`
+	AllDeleted bool     `json:"all_deleted,omitempty"`
 }
 
 type PurgeVolumeResult struct {
@@ -40,7 +42,7 @@ type VolumeListClient interface {
 
 type VolumePurgeClient interface {
 	ListDeletedVolumes(context.Context) ([]Volume, error)
-	DeleteVolume(context.Context, string, bool) error
+	PermanentDeleteVolume(context.Context, string) error
 }
 
 func ListVolumes(ctx context.Context, client VolumeListClient, opts ListVolumesOptions) ([]Volume, error) {
@@ -75,7 +77,10 @@ func PurgeVolumes(ctx context.Context, client VolumePurgeClient, opts PurgeVolum
 	result := &PurgeVolumesResult{
 		Provider: ProviderName,
 		DryRun:   normalized.DryRun,
-		Request:  PurgeVolumesRequest{VolumeIDs: normalized.VolumeIDs},
+		Request: PurgeVolumesRequest{
+			VolumeIDs:  normalized.VolumeIDs,
+			AllDeleted: normalized.AllDeleted,
+		},
 	}
 	if normalized.DryRun {
 		return result, nil
@@ -84,19 +89,17 @@ func PurgeVolumes(ctx context.Context, client VolumePurgeClient, opts PurgeVolum
 		return nil, fmt.Errorf("verda client is required")
 	}
 
-	deleted, err := client.ListDeletedVolumes(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list deleted Verda volumes: %w", err)
-	}
-	purgeable := purgeableVolumeIDs(deleted)
-	for _, volumeID := range normalized.VolumeIDs {
-		if !purgeable[volumeID] {
-			return nil, fmt.Errorf("verda volume %s is not in trash; run `nnctl cloud volume --include-deleted` to find purgeable volumes", volumeID)
+	if normalized.AllDeleted {
+		deleted, err := client.ListDeletedVolumes(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("list deleted Verda volumes: %w", err)
 		}
+		normalized.VolumeIDs = volumeIDsFromVolumes(restorableDeletedVolumes(deleted))
+		result.Request.VolumeIDs = normalized.VolumeIDs
 	}
 
 	for _, volumeID := range normalized.VolumeIDs {
-		if err := client.DeleteVolume(ctx, volumeID, true); err != nil {
+		if err := client.PermanentDeleteVolume(ctx, volumeID); err != nil {
 			return nil, fmt.Errorf("purge Verda volume %s: %w", volumeID, err)
 		}
 		result.Results = append(result.Results, PurgeVolumeResult{
@@ -110,7 +113,10 @@ func PurgeVolumes(ctx context.Context, client VolumePurgeClient, opts PurgeVolum
 func (o PurgeVolumesOptions) normalized() (PurgeVolumesOptions, error) {
 	o.VolumeIDs = compactStrings(o.VolumeIDs)
 	o.BaseURL = strings.TrimSpace(o.BaseURL)
-	if len(o.VolumeIDs) == 0 {
+	if o.AllDeleted && len(o.VolumeIDs) > 0 {
+		return PurgeVolumesOptions{}, fmt.Errorf("volume IDs cannot be combined with purge all")
+	}
+	if !o.AllDeleted && len(o.VolumeIDs) == 0 {
 		return PurgeVolumesOptions{}, fmt.Errorf("at least one volume ID is required")
 	}
 	return o, nil
@@ -138,15 +144,16 @@ func restorableDeletedVolumes(volumes []Volume) []Volume {
 	return restorable
 }
 
-func purgeableVolumeIDs(volumes []Volume) map[string]bool {
-	purgeable := map[string]bool{}
-	for _, volume := range restorableDeletedVolumes(volumes) {
+func volumeIDsFromVolumes(volumes []Volume) []string {
+	ids := make([]string, 0, len(volumes))
+	for _, volume := range volumes {
 		volumeID := strings.TrimSpace(volume.ID)
 		if volumeID != "" {
-			purgeable[volumeID] = true
+			ids = append(ids, volumeID)
 		}
 	}
-	return purgeable
+	sort.Strings(ids)
+	return ids
 }
 
 func sortVolumes(volumes []Volume) {

@@ -258,18 +258,28 @@ func (a *App) newCloudVolumeCommand() *cobra.Command {
 		Use:     "volume [VOLUME_ID...]",
 		Aliases: []string{"volumes"},
 		Short:   "List or purge Verda volumes",
-		Long:    "Lists active Verda volumes by default. Use --include-deleted to include deleted volumes that are still in trash, or --purge with volume IDs to permanently delete already-deleted volumes.",
+		Long:    "Lists active Verda volumes by default. Use --include-deleted to include deleted volumes that are still in trash. Use --purge with volume IDs to permanently delete volumes or images, or --purge-all to permanently delete every deleted volume.",
 		Example: `  nnctl cloud volume
   nnctl cloud volume --include-deleted
   nnctl cloud volume --json
   nnctl cloud volume volume_id --purge --dry-run
-  nnctl cloud volume volume_id --purge --json`,
+  nnctl cloud volume volume_id --purge --json
+  nnctl cloud volume --purge-all`,
 		Args: func(cmd *cobra.Command, args []string) error {
+			if opts.purge && opts.AllDeleted {
+				return fmt.Errorf("--purge and --purge-all cannot be combined")
+			}
+			if opts.AllDeleted {
+				if len(args) > 0 {
+					return fmt.Errorf("volume IDs cannot be combined with --purge-all")
+				}
+				return nil
+			}
 			if opts.purge {
 				return cobra.MinimumNArgs(1)(cmd, args)
 			}
 			if opts.DryRun {
-				return fmt.Errorf("--dry-run requires --purge")
+				return fmt.Errorf("--dry-run requires --purge or --purge-all")
 			}
 			if len(args) > 0 {
 				return fmt.Errorf("volume IDs require --purge")
@@ -283,7 +293,8 @@ func (a *App) newCloudVolumeCommand() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&opts.BaseURL, "base-url", opts.BaseURL, "Verda API base URL")
 	cmd.Flags().BoolVar(&opts.includeDeleted, "include-deleted", opts.includeDeleted, "include deleted volumes that have not been permanently deleted")
-	cmd.Flags().BoolVar(&opts.purge, "purge", opts.purge, "permanently delete already-deleted volume IDs instead of listing volumes")
+	cmd.Flags().BoolVar(&opts.purge, "purge", opts.purge, "permanently delete volume IDs instead of listing volumes")
+	cmd.Flags().BoolVar(&opts.AllDeleted, "purge-all", opts.AllDeleted, "permanently delete all deleted volumes instead of listing volumes")
 	cmd.Flags().BoolVar(&opts.DryRun, "dry-run", opts.DryRun, "print the planned purge request without reading keychain credentials")
 	cmd.Flags().BoolVar(&opts.jsonOutput, "json", opts.jsonOutput, "print machine-readable JSON")
 	cmd.Flags().SortFlags = false

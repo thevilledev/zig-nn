@@ -69,77 +69,125 @@ func TestPurgeVolumesDryRunBuildsRequestWithoutClient(t *testing.T) {
 	}
 }
 
-func TestPurgeVolumesRequiresVolumeInTrash(t *testing.T) {
-	client := &fakeVolumeClient{
-		deletedVolumes: []Volume{{ID: "vol-trash", Status: "deleted"}},
-	}
-
-	_, err := PurgeVolumes(context.Background(), client, PurgeVolumesOptions{VolumeIDs: []string{"vol-active"}})
-	if err == nil {
-		t.Fatal("expected purge refusal")
-	}
-	if !strings.Contains(err.Error(), "not in trash") {
-		t.Fatalf("error did not explain trash requirement: %v", err)
-	}
-	if len(client.deleteCalls) != 0 {
-		t.Fatalf("DeleteVolume was called: %#v", client.deleteCalls)
-	}
-}
-
-func TestPurgeVolumesSkipsPermanentlyDeletedTrashEntries(t *testing.T) {
-	client := &fakeVolumeClient{
-		deletedVolumes: []Volume{{ID: "vol-gone", Status: "deleted", IsPermanentlyDeleted: true}},
-	}
-
-	_, err := PurgeVolumes(context.Background(), client, PurgeVolumesOptions{VolumeIDs: []string{"vol-gone"}})
-	if err == nil {
-		t.Fatal("expected purge refusal")
-	}
-	if !strings.Contains(err.Error(), "not in trash") {
-		t.Fatalf("error did not explain trash requirement: %v", err)
-	}
-}
-
-func TestPurgeVolumesCallsPermanentDelete(t *testing.T) {
-	client := &fakeVolumeClient{
-		deletedVolumes: []Volume{
-			{ID: "vol-trash-1", Status: "deleted"},
-			{ID: "vol-trash-2", Status: "deleted"},
-		},
-	}
-
-	result, err := PurgeVolumes(context.Background(), client, PurgeVolumesOptions{
-		VolumeIDs: []string{"vol-trash-1", "vol-trash-2"},
+func TestPurgeAllDeletedVolumesDryRunBuildsRequestWithoutClient(t *testing.T) {
+	result, err := PurgeVolumes(context.Background(), nil, PurgeVolumesOptions{
+		AllDeleted: true,
+		DryRun:     true,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if len(client.deleteCalls) != 2 {
-		t.Fatalf("unexpected delete calls: %#v", client.deleteCalls)
+	if !result.DryRun || !result.Request.AllDeleted {
+		t.Fatalf("unexpected result: %#v", result)
 	}
-	for _, call := range client.deleteCalls {
-		if !call.force {
-			t.Fatalf("delete call did not use force=true: %#v", call)
-		}
+	if len(result.Request.VolumeIDs) != 0 {
+		t.Fatalf("dry-run purge-all should not resolve IDs: %#v", result.Request.VolumeIDs)
 	}
-	if len(result.Results) != 2 || result.Results[0].Status != "purged" || result.Results[1].VolumeID != "vol-trash-2" {
+}
+
+func TestPurgeVolumesCallsPermanentDelete(t *testing.T) {
+	client := &fakeVolumeClient{}
+
+	result, err := PurgeVolumes(context.Background(), client, PurgeVolumesOptions{
+		VolumeIDs: []string{"vol-active", "vol-trash"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(client.permanentDeleteCalls) != 2 {
+		t.Fatalf("unexpected delete calls: %#v", client.permanentDeleteCalls)
+	}
+	if client.permanentDeleteCalls[0] != "vol-active" || client.permanentDeleteCalls[1] != "vol-trash" {
+		t.Fatalf("unexpected delete calls: %#v", client.permanentDeleteCalls)
+	}
+	if client.listDeletedCalled {
+		t.Fatal("ListDeletedVolumes should not be required before purge")
+	}
+	if len(result.Results) != 2 || result.Results[0].Status != "purged" || result.Results[1].VolumeID != "vol-trash" {
 		t.Fatalf("unexpected purge result: %#v", result.Results)
+	}
+}
+
+func TestPurgeAllDeletedVolumesCallsPermanentDelete(t *testing.T) {
+	client := &fakeVolumeClient{
+		deletedVolumes: []Volume{
+			{ID: "vol-trash-b", Status: "deleted"},
+			{ID: "vol-gone", Status: "deleted", IsPermanentlyDeleted: true},
+			{ID: "", Status: "deleted"},
+			{ID: "vol-trash-a", Status: "deleted"},
+		},
+	}
+
+	result, err := PurgeVolumes(context.Background(), client, PurgeVolumesOptions{
+		AllDeleted: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !client.listDeletedCalled {
+		t.Fatal("ListDeletedVolumes was not called")
+	}
+	if len(client.permanentDeleteCalls) != 2 {
+		t.Fatalf("unexpected delete calls: %#v", client.permanentDeleteCalls)
+	}
+	if client.permanentDeleteCalls[0] != "vol-trash-a" || client.permanentDeleteCalls[1] != "vol-trash-b" {
+		t.Fatalf("deleted IDs were not sorted/filtered: %#v", client.permanentDeleteCalls)
+	}
+	if !result.Request.AllDeleted || len(result.Request.VolumeIDs) != 2 || result.Request.VolumeIDs[0] != "vol-trash-a" || result.Request.VolumeIDs[1] != "vol-trash-b" {
+		t.Fatalf("unexpected request: %#v", result.Request)
+	}
+	if len(result.Results) != 2 || result.Results[1].VolumeID != "vol-trash-b" {
+		t.Fatalf("unexpected purge result: %#v", result.Results)
+	}
+}
+
+func TestPurgeAllDeletedVolumesWithEmptyTrash(t *testing.T) {
+	client := &fakeVolumeClient{
+		deletedVolumes: []Volume{{ID: "vol-gone", IsPermanentlyDeleted: true}},
+	}
+
+	result, err := PurgeVolumes(context.Background(), client, PurgeVolumesOptions{
+		AllDeleted: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(client.permanentDeleteCalls) != 0 {
+		t.Fatalf("unexpected delete calls: %#v", client.permanentDeleteCalls)
+	}
+	if len(result.Results) != 0 || len(result.Request.VolumeIDs) != 0 {
+		t.Fatalf("unexpected result: %#v", result)
 	}
 }
 
 func TestPurgeVolumesReturnsDeleteError(t *testing.T) {
 	client := &fakeVolumeClient{
-		deletedVolumes: []Volume{{ID: "vol-trash", Status: "deleted"}},
-		deleteErr:      errors.New("api exploded"),
+		deleteErr: errors.New("api exploded"),
 	}
 
-	_, err := PurgeVolumes(context.Background(), client, PurgeVolumesOptions{VolumeIDs: []string{"vol-trash"}})
+	_, err := PurgeVolumes(context.Background(), client, PurgeVolumesOptions{VolumeIDs: []string{"vol-active"}})
 	if err == nil {
 		t.Fatal("expected delete error")
 	}
 	if !strings.Contains(err.Error(), "api exploded") {
 		t.Fatalf("error did not include delete error: %v", err)
+	}
+}
+
+func TestPurgeAllDeletedVolumesReturnsListError(t *testing.T) {
+	client := &fakeVolumeClient{
+		listDeletedErr: errors.New("api exploded"),
+	}
+
+	_, err := PurgeVolumes(context.Background(), client, PurgeVolumesOptions{AllDeleted: true})
+	if err == nil {
+		t.Fatal("expected list error")
+	}
+	if !strings.Contains(err.Error(), "api exploded") {
+		t.Fatalf("error did not include list error: %v", err)
 	}
 }
 
@@ -153,6 +201,19 @@ func TestPurgeVolumesRequiresVolumeID(t *testing.T) {
 	}
 }
 
+func TestPurgeVolumesRejectsIDsWithAllDeleted(t *testing.T) {
+	_, err := PurgeVolumes(context.Background(), nil, PurgeVolumesOptions{
+		VolumeIDs:  []string{"vol-1"},
+		AllDeleted: true,
+	})
+	if err == nil {
+		t.Fatal("expected all-deleted with volume IDs error")
+	}
+	if !strings.Contains(err.Error(), "purge all") {
+		t.Fatalf("error did not mention purge all: %v", err)
+	}
+}
+
 func volumeIDSet(volumes []Volume) map[string]bool {
 	ids := map[string]bool{}
 	for _, volume := range volumes {
@@ -162,16 +223,12 @@ func volumeIDSet(volumes []Volume) map[string]bool {
 }
 
 type fakeVolumeClient struct {
-	volumes           []Volume
-	deletedVolumes    []Volume
-	deleteCalls       []fakeVolumeDeleteCall
-	deleteErr         error
-	listDeletedCalled bool
-}
-
-type fakeVolumeDeleteCall struct {
-	volumeID string
-	force    bool
+	volumes              []Volume
+	deletedVolumes       []Volume
+	permanentDeleteCalls []string
+	deleteErr            error
+	listDeletedErr       error
+	listDeletedCalled    bool
 }
 
 func (c *fakeVolumeClient) ListVolumes(context.Context) ([]Volume, error) {
@@ -180,13 +237,13 @@ func (c *fakeVolumeClient) ListVolumes(context.Context) ([]Volume, error) {
 
 func (c *fakeVolumeClient) ListDeletedVolumes(context.Context) ([]Volume, error) {
 	c.listDeletedCalled = true
+	if c.listDeletedErr != nil {
+		return nil, c.listDeletedErr
+	}
 	return c.deletedVolumes, nil
 }
 
-func (c *fakeVolumeClient) DeleteVolume(_ context.Context, volumeID string, force bool) error {
-	c.deleteCalls = append(c.deleteCalls, fakeVolumeDeleteCall{
-		volumeID: volumeID,
-		force:    force,
-	})
+func (c *fakeVolumeClient) PermanentDeleteVolume(_ context.Context, volumeID string) error {
+	c.permanentDeleteCalls = append(c.permanentDeleteCalls, volumeID)
 	return c.deleteErr
 }

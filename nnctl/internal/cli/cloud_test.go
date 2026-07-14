@@ -343,6 +343,56 @@ func TestCloudVolumePurgeDryRunJSON(t *testing.T) {
 	}
 }
 
+func TestCloudVolumePurgeAllDryRunJSON(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	app := &App{Stdout: &stdout, Stderr: &stderr}
+
+	err := app.Run(context.Background(), []string{"cloud", "volume", "--purge-all", "--dry-run", "--json"})
+	if err != nil {
+		t.Fatalf("Run() error = %v\nstderr:\n%s", err, stderr.String())
+	}
+
+	var result verdacloud.PurgeVolumesResult
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("invalid JSON output: %v\n%s", err, stdout.String())
+	}
+	if result.Provider != "verda" || !result.DryRun {
+		t.Fatalf("unexpected result header: %#v", result)
+	}
+	if !result.Request.AllDeleted {
+		t.Fatalf("AllDeleted = false, want true: %#v", result.Request)
+	}
+	if len(result.Request.VolumeIDs) != 0 {
+		t.Fatalf("unexpected volume ids: %#v", result.Request.VolumeIDs)
+	}
+}
+
+func TestCloudVolumePurgeAllRejectsArgs(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	app := &App{Stdout: &stdout, Stderr: &stderr}
+
+	err := app.Run(context.Background(), []string{"cloud", "volume", "vol-1", "--purge-all"})
+	if err == nil {
+		t.Fatal("expected volume ID with purge-all error")
+	}
+	if !strings.Contains(err.Error(), "volume IDs cannot be combined with --purge-all") {
+		t.Fatalf("error did not explain purge-all args: %v", err)
+	}
+}
+
+func TestCloudVolumePurgeAllRejectsPurge(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	app := &App{Stdout: &stdout, Stderr: &stderr}
+
+	err := app.Run(context.Background(), []string{"cloud", "volume", "vol-1", "--purge", "--purge-all"})
+	if err == nil {
+		t.Fatal("expected conflicting purge flags error")
+	}
+	if !strings.Contains(err.Error(), "--purge and --purge-all cannot be combined") {
+		t.Fatalf("error did not explain conflicting purge flags: %v", err)
+	}
+}
+
 func TestCloudVolumeRejectsArgsWithoutPurge(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	app := &App{Stdout: &stdout, Stderr: &stderr}
@@ -364,7 +414,7 @@ func TestCloudVolumeDryRunRequiresPurge(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected dry-run without purge error")
 	}
-	if !strings.Contains(err.Error(), "--dry-run requires --purge") {
+	if !strings.Contains(err.Error(), "--dry-run requires --purge or --purge-all") {
 		t.Fatalf("error did not explain dry-run requirement: %v", err)
 	}
 }

@@ -112,7 +112,7 @@ func (a *App) runCloudSSHKeys(ctx context.Context, opts cloudSSHKeysOptions) err
 }
 
 func (a *App) runCloudVolumes(ctx context.Context, opts cloudVolumesOptions) error {
-	if opts.purge {
+	if opts.purge || opts.AllDeleted {
 		var client verdacloud.VolumePurgeClient
 		if !opts.DryRun {
 			sdkClient, err := a.newVerdaSDKClient(ctx, opts.BaseURL)
@@ -292,6 +292,22 @@ func (a *App) printCloudPurgeResult(result *verdacloud.PurgeVolumesResult, jsonO
 		enc := json.NewEncoder(a.stdout())
 		enc.SetIndent("", "  ")
 		return enc.Encode(result)
+	}
+
+	if result.Request.AllDeleted {
+		if result.DryRun {
+			fmt.Fprintln(a.stdout(), "dry run: would purge all deleted Verda volumes")
+			return nil
+		}
+		if len(result.Results) == 0 {
+			fmt.Fprintln(a.stdout(), "no deleted Verda volumes found")
+			return nil
+		}
+		fmt.Fprintln(a.stdout(), "purged all deleted Verda volumes")
+		for _, actionResult := range result.Results {
+			fmt.Fprintf(a.stdout(), "%s: %s\n", actionResult.VolumeID, firstNonEmpty(actionResult.Status, "purged"))
+		}
+		return nil
 	}
 
 	ids := strings.Join(result.Request.VolumeIDs, ", ")
