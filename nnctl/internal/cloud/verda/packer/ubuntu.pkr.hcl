@@ -19,7 +19,7 @@ variable "instance_type" {
 
 variable "image" {
   type    = string
-  default = "ubuntu-24.04"
+  default = "ubuntu-24.04-cuda-13.0-open"
 }
 
 variable "hostname" {
