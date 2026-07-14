@@ -257,17 +257,18 @@ func (a *App) newCloudDeployCommand() *cobra.Command {
 	}
 	cmd := &cobra.Command{
 		Use:   "deploy",
-		Short: "Deploy a Verda spot benchmark worker",
-		Long: `Deploys one Verda spot instance for nnctl benchmark work.
-The deployment policy is intentionally narrow: spot only, with CPU-only and
-single-GPU instance types accepted. When --source-os-volume-id is set, nnctl
+		Short: "Deploy a Verda benchmark worker",
+		Long: `Deploys one Verda instance for nnctl benchmark work.
+The deployment policy is intentionally narrow: CPU-only and single-GPU instance
+types accepted, with spot as the default market. When --source-os-volume-id is set, nnctl
 locks placement to that source volume location and clones it as the instance
 image. When --source-os-volume-name is set, nnctl chooses a matching source OS
-volume in an available spot location. Without a source volume, nnctl boots
+volume in an available market location. Without a source volume, nnctl boots
 --image and applies the embedded userdata script from
 nnctl/internal/cloud/verda/bootstrap.sh.`,
 		Example: `  nnctl cloud deploy --instance-type 1V100.6V --source-os-volume-name golden-ubuntu --ssh-key-id ssh_key_id
   nnctl cloud deploy --instance-type 1V100.6V --source-os-volume-id volume_id --ssh-key-id ssh_key_id
+  nnctl cloud deploy --instance-type 1H200.141S.44V --market on-demand --location-code FIN-02 --ssh-key-id ssh_key_id
   nnctl cloud deploy --instance-type 1V100.6V --ssh-key-id ssh_key_id
   nnctl cloud deploy --instance-type 1V100.6V --source-os-volume-id volume_id --dry-run --json
   nnctl cloud deploy --instance-type 1V100.6V --source-os-volume-id volume_id --location-code FIN-03
@@ -280,20 +281,21 @@ nnctl/internal/cloud/verda/bootstrap.sh.`,
 	}
 	cmd.Flags().StringVar(&opts.InstanceType, "instance-type", opts.InstanceType, "Verda instance type, for example 1L40S.20V")
 	cmd.Flags().StringVar(&opts.SourceOSVolumeID, "source-os-volume-id", opts.SourceOSVolumeID, "Packer-built Verda source OS volume ID used for location lock and cloning")
-	cmd.Flags().StringVar(&opts.SourceOSVolumeName, "source-os-volume-name", opts.SourceOSVolumeName, "Packer-built Verda source OS volume name; picks a matching volume in an available spot location")
+	cmd.Flags().StringVar(&opts.SourceOSVolumeName, "source-os-volume-name", opts.SourceOSVolumeName, "Packer-built Verda source OS volume name; picks a matching volume in an available market location")
 	cmd.Flags().StringVar(&opts.SourceOSVolumeName, "source-volume-name", opts.SourceOSVolumeName, "alias for --source-os-volume-name")
 	cmd.Flags().StringVar(&opts.ClonedOSVolumeID, "cloned-os-volume-id", opts.ClonedOSVolumeID, "existing cloned OS volume ID to use as the instance image instead of creating a new clone")
+	cmd.Flags().StringVar(&opts.Market, "market", opts.Market, "deployment market: spot or on-demand")
 	cmd.Flags().StringVar(&opts.Image, "image", opts.Image, "Verda image to boot when source OS volume flags are omitted")
 	cmd.Flags().StringVar(&opts.Hostname, "hostname", opts.Hostname, "instance hostname")
 	cmd.Flags().StringVar(&opts.Description, "description", opts.Description, "instance description")
 	cmd.Flags().StringArrayVar(&opts.SSHKeyIDs, "ssh-key-id", opts.SSHKeyIDs, "Verda SSH key ID to attach (repeatable)")
-	cmd.Flags().StringVar(&opts.LocationCode, "location-code", opts.LocationCode, "Verda location code; defaults to source OS volume location or spot placement")
+	cmd.Flags().StringVar(&opts.LocationCode, "location-code", opts.LocationCode, "Verda location code; defaults to source OS volume location or market placement")
 	cmd.Flags().StringVar(&opts.StartupScriptName, "startup-script-name", opts.StartupScriptName, "Verda startup script name")
 	cmd.Flags().StringVar(&opts.userDataFile, "user-data-file", opts.userDataFile, "read userdata from a file; defaults to the embedded script only without source OS volume flags")
 	cmd.Flags().StringVar(&opts.BaseURL, "base-url", opts.BaseURL, "Verda API base URL")
-	cmd.Flags().BoolVar(&opts.SkipAvailabilityCheck, "skip-availability-check", opts.SkipAvailabilityCheck, "skip spot availability check before creating the instance")
+	cmd.Flags().BoolVar(&opts.SkipAvailabilityCheck, "skip-availability-check", opts.SkipAvailabilityCheck, "skip market availability check before creating the instance")
 	cmd.Flags().BoolVar(&opts.KeepClonedOSVolumeOnFailure, "keep-cloned-os-volume-on-failure", opts.KeepClonedOSVolumeOnFailure, "keep a newly cloned OS volume when instance creation fails")
-	cmd.Flags().BoolVar(&opts.DryRun, "dry-run", opts.DryRun, "print the planned spot deployment without reading keychain credentials")
+	cmd.Flags().BoolVar(&opts.DryRun, "dry-run", opts.DryRun, "print the planned deployment without reading keychain credentials")
 	cmd.Flags().BoolVar(&opts.jsonOutput, "json", opts.jsonOutput, "print machine-readable JSON")
 	cmd.Flags().SortFlags = false
 	_ = cmd.MarkFlagRequired("instance-type")

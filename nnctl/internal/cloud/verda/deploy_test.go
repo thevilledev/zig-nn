@@ -30,6 +30,9 @@ func TestNormalizeDeployOptionsDefaultsToSpotFinlandPolicyInputs(t *testing.T) {
 	if opts.SourceOSVolumeID != "vol-golden" {
 		t.Fatalf("SourceOSVolumeID = %q, want vol-golden", opts.SourceOSVolumeID)
 	}
+	if opts.Market != PricingMarketSpot {
+		t.Fatalf("Market = %q, want spot", opts.Market)
+	}
 	if opts.Hostname != "nnctl-bench-1v100-6v-20260706123456" {
 		t.Fatalf("Hostname = %q", opts.Hostname)
 	}
@@ -38,6 +41,31 @@ func TestNormalizeDeployOptionsDefaultsToSpotFinlandPolicyInputs(t *testing.T) {
 	}
 	if opts.UserDataScript != "" {
 		t.Fatalf("UserDataScript should be empty when source volume is set")
+	}
+}
+
+func TestNormalizeDeployOptionsAcceptsOnDemandMarketAlias(t *testing.T) {
+	base := DefaultDeployOptions("1H200.141S.44V")
+	base.Market = "on_demand"
+	opts, err := base.normalized(time.Date(2026, 7, 6, 12, 34, 56, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if opts.Market != PricingMarketOnDemand {
+		t.Fatalf("Market = %q, want on-demand", opts.Market)
+	}
+}
+
+func TestNormalizeDeployOptionsRejectsInvalidMarket(t *testing.T) {
+	base := DefaultDeployOptions("1V100.6V")
+	base.Market = "reserved"
+	_, err := base.normalized(time.Date(2026, 7, 6, 12, 34, 56, 0, time.UTC))
+	if err == nil {
+		t.Fatal("expected invalid market error")
+	}
+	if !strings.Contains(err.Error(), "spot or on-demand") {
+		t.Fatalf("error did not mention deploy markets: %v", err)
 	}
 }
 
@@ -92,6 +120,30 @@ func TestDeployDryRunBuildsSpotAutoPlacementRequestWithoutClient(t *testing.T) {
 	}
 	if result.StartupScript != nil {
 		t.Fatalf("unexpected default startup script: %#v", result.StartupScript)
+	}
+}
+
+func TestDeployDryRunBuildsOnDemandRequestWithoutClient(t *testing.T) {
+	opts := DefaultDeployOptions("1H200.141S.44V")
+	opts.Market = PricingMarketOnDemand
+	opts.DryRun = true
+
+	result, err := Deploy(context.Background(), nil, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if result.Policy.Market != PricingMarketOnDemand || result.Policy.SpotOnly {
+		t.Fatalf("unexpected policy: %#v", result.Policy)
+	}
+	if result.Policy.LocationSelection != MarketPlacementLocation {
+		t.Fatalf("LocationSelection = %q, want %s", result.Policy.LocationSelection, MarketPlacementLocation)
+	}
+	if result.Request.IsSpot || result.Request.Contract != OnDemandContract {
+		t.Fatalf("request did not use on-demand contract: %#v", result.Request)
+	}
+	if result.Request.Image != DefaultDeployImage {
+		t.Fatalf("Image = %q, want %s", result.Request.Image, DefaultDeployImage)
 	}
 }
 
@@ -447,6 +499,48 @@ func TestDeployCreatesSpotInstanceFromDefaultImageWithUserData(t *testing.T) {
 	}
 }
 
+func TestDeployCreatesOnDemandInstanceFromDefaultImageWithUserData(t *testing.T) {
+	client := &fakeClient{
+		instanceType: InstanceType{InstanceType: "1H200.141S.44V", GPUCount: 1},
+		placements: []SpotPlacement{
+			{LocationCode: "FIN-02", Market: PricingMarketOnDemand, SpotPrice: 4, PriceKnown: true, Currency: "usd"},
+		},
+		script:   StartupScript{ID: "script-1", Name: "userdata"},
+		instance: Instance{ID: "inst-1", Hostname: "worker", Status: "new", InstanceType: "1H200.141S.44V", Location: "FIN-02"},
+	}
+	opts := DefaultDeployOptions("1H200.141S.44V")
+	opts.Market = PricingMarketOnDemand
+	opts.Hostname = "worker"
+	opts.LocationCode = "fin-02"
+
+	result, err := Deploy(context.Background(), client, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(client.gotInstanceTypeSpot) != 1 || client.gotInstanceTypeSpot[0] {
+		t.Fatalf("GetInstanceType spot args = %#v, want [false]", client.gotInstanceTypeSpot)
+	}
+	if len(client.gotPlacementSpot) != 1 || client.gotPlacementSpot[0] {
+		t.Fatalf("GetPlacementOptions spot args = %#v, want [false]", client.gotPlacementSpot)
+	}
+	if result.Policy.Market != PricingMarketOnDemand || result.Policy.SpotOnly {
+		t.Fatalf("unexpected policy: %#v", result.Policy)
+	}
+	if result.Placement == nil || result.Placement.LocationCode != "FIN-02" || result.Placement.SpotPrice != 4 {
+		t.Fatalf("unexpected placement: %#v", result.Placement)
+	}
+	if client.createRequest.IsSpot || client.createRequest.Contract != OnDemandContract {
+		t.Fatalf("request did not use on-demand contract: %#v", client.createRequest)
+	}
+	if client.createRequest.Image != DefaultDeployImage || client.createRequest.LocationCode != "FIN-02" {
+		t.Fatalf("unexpected create request: %#v", client.createRequest)
+	}
+	if client.createRequest.StartupScriptID != "script-1" {
+		t.Fatalf("StartupScriptID = %q", client.createRequest.StartupScriptID)
+	}
+}
+
 func TestDeployCreatesExplicitLocationSpotInstance(t *testing.T) {
 	client := &fakeClient{
 		sourceVolume: Volume{ID: "vol-golden", Name: "golden", Status: "detached", Location: FinlandLocationCode, IsOSVolume: true},
@@ -667,6 +761,8 @@ type fakeClient struct {
 	placementsListed     bool
 	volumesListed        bool
 	gotVolumeID          string
+	gotInstanceTypeSpot  []bool
+	gotPlacementSpot     []bool
 	createdScript        bool
 	createdScriptName    string
 	createdScriptContent string
@@ -690,12 +786,14 @@ func (c *fakeClient) ListVolumes(context.Context) ([]Volume, error) {
 	return append([]Volume(nil), c.sourceVolumes...), nil
 }
 
-func (c *fakeClient) GetInstanceType(context.Context, string, bool, string) (InstanceType, error) {
+func (c *fakeClient) GetInstanceType(_ context.Context, _ string, spot bool, _ string) (InstanceType, error) {
+	c.gotInstanceTypeSpot = append(c.gotInstanceTypeSpot, spot)
 	return c.instanceType, nil
 }
 
-func (c *fakeClient) GetSpotPlacementOptions(context.Context, string) ([]SpotPlacement, error) {
+func (c *fakeClient) GetPlacementOptions(_ context.Context, _ string, spot bool) ([]SpotPlacement, error) {
 	c.placementsListed = true
+	c.gotPlacementSpot = append(c.gotPlacementSpot, spot)
 	return append([]SpotPlacement(nil), c.placements...), nil
 }
 

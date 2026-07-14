@@ -13,17 +13,19 @@ import (
 )
 
 const (
-	ProviderName           = "verda"
-	FinlandLocationCode    = sdkverda.LocationFIN03
-	ExplicitLocation       = "explicit"
-	SourceOSVolumeLocation = "source_os_volume_location"
-	SpotPlacementLocation  = "spot_placement"
-	SpotContract           = "SPOT"
-	DefaultDescription     = "nnctl benchmark worker"
-	DefaultDeployImage     = "ubuntu-24.04"
-	MaxDeployGPUCount      = 1
-	VolumeReadyTimeout     = 20 * time.Minute
-	VolumeReadyPoll        = 5 * time.Second
+	ProviderName            = "verda"
+	FinlandLocationCode     = sdkverda.LocationFIN03
+	ExplicitLocation        = "explicit"
+	SourceOSVolumeLocation  = "source_os_volume_location"
+	SpotPlacementLocation   = "spot_placement"
+	MarketPlacementLocation = "market_placement"
+	SpotContract            = "SPOT"
+	OnDemandContract        = "PAY_AS_YOU_GO"
+	DefaultDescription      = "nnctl benchmark worker"
+	DefaultDeployImage      = "ubuntu-24.04"
+	MaxDeployGPUCount       = 1
+	VolumeReadyTimeout      = 20 * time.Minute
+	VolumeReadyPoll         = 5 * time.Second
 )
 
 type DeployOptions struct {
@@ -31,6 +33,7 @@ type DeployOptions struct {
 	SourceOSVolumeID            string
 	SourceOSVolumeName          string
 	ClonedOSVolumeID            string
+	Market                      string
 	Image                       string
 	Hostname                    string
 	Description                 string
@@ -84,6 +87,7 @@ type OSVolumeClone struct {
 
 type SpotPlacement struct {
 	LocationCode string  `json:"location_code"`
+	Market       string  `json:"market,omitempty"`
 	SpotPrice    float64 `json:"spot_price,omitempty"`
 	PriceKnown   bool    `json:"price_known"`
 	Currency     string  `json:"currency,omitempty"`
@@ -136,6 +140,7 @@ type DeployPolicy struct {
 	LocationCode                   string `json:"location_code,omitempty"`
 	LocationSelection              string `json:"location_selection"`
 	SourceOSVolumeLocked           bool   `json:"source_os_volume_locked"`
+	Market                         string `json:"market"`
 	SpotOnly                       bool   `json:"spot_only"`
 	SingleGPU                      bool   `json:"single_gpu"`
 	AllowsCPU                      bool   `json:"allows_cpu"`
@@ -147,7 +152,7 @@ type Client interface {
 	GetVolume(context.Context, string) (Volume, error)
 	ListVolumes(context.Context) ([]Volume, error)
 	GetInstanceType(context.Context, string, bool, string) (InstanceType, error)
-	GetSpotPlacementOptions(context.Context, string) ([]SpotPlacement, error)
+	GetPlacementOptions(context.Context, string, bool) ([]SpotPlacement, error)
 	CreateStartupScript(context.Context, string, string) (StartupScript, error)
 	CloneVolume(context.Context, CloneVolumeRequest) (Volume, error)
 	WaitVolumeReady(context.Context, string) (Volume, error)
@@ -160,6 +165,7 @@ func DefaultDeployOptions(instanceType string) DeployOptions {
 		InstanceType: instanceType,
 		Description:  DefaultDescription,
 		Image:        DefaultDeployImage,
+		Market:       PricingMarketSpot,
 	}
 }
 
@@ -174,6 +180,7 @@ func Deploy(ctx context.Context, client Client, opts DeployOptions) (*DeployResu
 	if sourceOSVolumeRequested {
 		image = ""
 	}
+	isSpot := normalized.Market == PricingMarketSpot
 	req := CreateInstanceRequest{
 		InstanceType: normalized.InstanceType,
 		Image:        image,
@@ -181,12 +188,15 @@ func Deploy(ctx context.Context, client Client, opts DeployOptions) (*DeployResu
 		Description:  normalized.Description,
 		SSHKeyIDs:    normalized.SSHKeyIDs,
 		LocationCode: normalized.LocationCode,
-		Contract:     SpotContract,
-		IsSpot:       true,
+		Contract:     deployContract(isSpot),
+		IsSpot:       isSpot,
 	}
 	locationSelection := ExplicitLocation
 	if normalized.LocationCode == "" {
 		locationSelection = SpotPlacementLocation
+		if !isSpot {
+			locationSelection = MarketPlacementLocation
+		}
 		if sourceOSVolumeRequested {
 			locationSelection = SourceOSVolumeLocation
 		}
@@ -199,7 +209,8 @@ func Deploy(ctx context.Context, client Client, opts DeployOptions) (*DeployResu
 			LocationCode:                   normalized.LocationCode,
 			LocationSelection:              locationSelection,
 			SourceOSVolumeLocked:           sourceOSVolumeRequested,
-			SpotOnly:                       true,
+			Market:                         normalized.Market,
+			SpotOnly:                       isSpot,
 			SingleGPU:                      true,
 			AllowsCPU:                      true,
 			MaxGPUCount:                    MaxDeployGPUCount,
@@ -244,7 +255,7 @@ func Deploy(ctx context.Context, client Client, opts DeployOptions) (*DeployResu
 			return nil, fmt.Errorf("source_os_volume_id %s is in %s, but --location-code requested %s", normalized.SourceOSVolumeID, sourceVolume.Location, normalized.LocationCode)
 		}
 	} else if normalized.SourceOSVolumeName != "" {
-		sourceVolume, placement, err := selectSourceOSVolumeByName(ctx, client, normalized.SourceOSVolumeName, normalized.InstanceType, normalized.LocationCode, normalized.SkipAvailabilityCheck)
+		sourceVolume, placement, err := selectSourceOSVolumeByName(ctx, client, normalized.SourceOSVolumeName, normalized.InstanceType, normalized.LocationCode, isSpot, normalized.SkipAvailabilityCheck)
 		if err != nil {
 			return nil, err
 		}
@@ -261,7 +272,7 @@ func Deploy(ctx context.Context, client Client, opts DeployOptions) (*DeployResu
 		result.Policy.LocationCode = sourceVolume.Location
 	}
 
-	instanceType, err := client.GetInstanceType(ctx, normalized.InstanceType, true, req.LocationCode)
+	instanceType, err := client.GetInstanceType(ctx, normalized.InstanceType, isSpot, req.LocationCode)
 	if err != nil {
 		return nil, fmt.Errorf("get Verda instance type %q: %w", normalized.InstanceType, err)
 	}
@@ -272,7 +283,7 @@ func Deploy(ctx context.Context, client Client, opts DeployOptions) (*DeployResu
 
 	if !normalized.SkipAvailabilityCheck {
 		if selectedPlacement == nil {
-			placement, err := requireSpotPlacement(ctx, client, normalized.InstanceType, req.LocationCode)
+			placement, err := requirePlacement(ctx, client, normalized.InstanceType, req.LocationCode, isSpot)
 			if err != nil {
 				return nil, err
 			}
@@ -327,6 +338,7 @@ func (o DeployOptions) normalized(now time.Time) (DeployOptions, error) {
 	o.SourceOSVolumeID = strings.TrimSpace(o.SourceOSVolumeID)
 	o.SourceOSVolumeName = strings.TrimSpace(o.SourceOSVolumeName)
 	o.ClonedOSVolumeID = strings.TrimSpace(o.ClonedOSVolumeID)
+	o.Market = normalizePricingMarketName(o.Market)
 	o.Image = strings.TrimSpace(o.Image)
 	o.Hostname = strings.TrimSpace(o.Hostname)
 	o.Description = strings.TrimSpace(o.Description)
@@ -337,6 +349,9 @@ func (o DeployOptions) normalized(now time.Time) (DeployOptions, error) {
 
 	if o.InstanceType == "" {
 		return DeployOptions{}, fmt.Errorf("instance type is required")
+	}
+	if o.Market != PricingMarketSpot && o.Market != PricingMarketOnDemand {
+		return DeployOptions{}, fmt.Errorf("deploy market must be spot or on-demand")
 	}
 	if o.SourceOSVolumeID != "" && o.SourceOSVolumeName != "" {
 		return DeployOptions{}, fmt.Errorf("source_os_volume_name cannot be combined with source_os_volume_id")
@@ -378,7 +393,7 @@ func getSourceOSVolume(ctx context.Context, client Client, sourceVolumeID string
 	return normalizeSourceOSVolume(volume, sourceVolumeID, fmt.Sprintf("source_os_volume_id %s", sourceVolumeID))
 }
 
-func selectSourceOSVolumeByName(ctx context.Context, client Client, sourceVolumeName, instanceType, locationCode string, skipAvailabilityCheck bool) (Volume, *SpotPlacement, error) {
+func selectSourceOSVolumeByName(ctx context.Context, client Client, sourceVolumeName, instanceType, locationCode string, spot bool, skipAvailabilityCheck bool) (Volume, *SpotPlacement, error) {
 	volumes, err := listSourceOSVolumesByName(ctx, client, sourceVolumeName)
 	if err != nil {
 		return Volume{}, nil, err
@@ -394,12 +409,12 @@ func selectSourceOSVolumeByName(ctx context.Context, client Client, sourceVolume
 		return volumes[0], nil, nil
 	}
 
-	placements, err := spotPlacementOptions(ctx, client, instanceType)
+	placements, err := placementOptions(ctx, client, instanceType, spot)
 	if err != nil {
 		return Volume{}, nil, err
 	}
 	if len(placements) == 0 {
-		return Volume{}, nil, fmt.Errorf("verda spot instance type %q is not currently available in any location", instanceType)
+		return Volume{}, nil, fmt.Errorf("verda %s instance type %q is not currently available in any location", deployMarketName(spot), instanceType)
 	}
 	for _, placement := range placements {
 		candidates := volumesInLocation(volumes, placement.LocationCode)
@@ -412,7 +427,7 @@ func selectSourceOSVolumeByName(ctx context.Context, client Client, sourceVolume
 		selectedPlacement := placement
 		return candidates[0], &selectedPlacement, nil
 	}
-	return Volume{}, nil, fmt.Errorf("source_os_volume_name %q matched OS volumes in %s, but spot instance type %q is not currently available in those locations", sourceVolumeName, volumeLocations(volumes), instanceType)
+	return Volume{}, nil, fmt.Errorf("source_os_volume_name %q matched OS volumes in %s, but %s instance type %q is not currently available in those locations", sourceVolumeName, volumeLocations(volumes), deployMarketName(spot), instanceType)
 }
 
 func listSourceOSVolumesByName(ctx context.Context, client Client, sourceVolumeName string) ([]Volume, error) {
@@ -614,8 +629,8 @@ func deleteClonedOSVolume(ctx context.Context, client Client, sourceVolumeID, cl
 	return client.DeleteVolume(ctx, cloneVolumeID, true)
 }
 
-func requireSpotPlacement(ctx context.Context, client Client, instanceType, locationCode string) (SpotPlacement, error) {
-	options, err := spotPlacementOptions(ctx, client, instanceType)
+func requirePlacement(ctx context.Context, client Client, instanceType, locationCode string, spot bool) (SpotPlacement, error) {
+	options, err := placementOptions(ctx, client, instanceType, spot)
 	if err != nil {
 		return SpotPlacement{}, err
 	}
@@ -623,23 +638,37 @@ func requireSpotPlacement(ctx context.Context, client Client, instanceType, loca
 		return options[0], nil
 	}
 	if locationCode == "" {
-		return SpotPlacement{}, fmt.Errorf("verda spot instance type %q is not currently available in any location", instanceType)
+		return SpotPlacement{}, fmt.Errorf("verda %s instance type %q is not currently available in any location", deployMarketName(spot), instanceType)
 	}
 	for _, option := range options {
 		if strings.EqualFold(option.LocationCode, locationCode) {
 			return option, nil
 		}
 	}
-	return SpotPlacement{}, fmt.Errorf("verda spot instance type %q is not currently available in %s", instanceType, locationCode)
+	return SpotPlacement{}, fmt.Errorf("verda %s instance type %q is not currently available in %s", deployMarketName(spot), instanceType, locationCode)
 }
 
-func spotPlacementOptions(ctx context.Context, client Client, instanceType string) ([]SpotPlacement, error) {
-	options, err := client.GetSpotPlacementOptions(ctx, instanceType)
+func placementOptions(ctx context.Context, client Client, instanceType string, spot bool) ([]SpotPlacement, error) {
+	options, err := client.GetPlacementOptions(ctx, instanceType, spot)
 	if err != nil {
-		return nil, fmt.Errorf("list Verda spot placement options for %q: %w", instanceType, err)
+		return nil, fmt.Errorf("list Verda %s placement options for %q: %w", deployMarketName(spot), instanceType, err)
 	}
 	sortSpotPlacements(options)
 	return options, nil
+}
+
+func deployContract(spot bool) string {
+	if spot {
+		return SpotContract
+	}
+	return OnDemandContract
+}
+
+func deployMarketName(spot bool) string {
+	if spot {
+		return PricingMarketSpot
+	}
+	return PricingMarketOnDemand
 }
 
 func sortSpotPlacements(options []SpotPlacement) {

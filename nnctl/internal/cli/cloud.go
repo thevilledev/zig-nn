@@ -318,7 +318,7 @@ func (a *App) printCloudDeployResult(result *verdacloud.DeployResult, jsonOutput
 		if location == "" {
 			location = result.Policy.LocationSelection
 		}
-		fmt.Fprintf(a.stdout(), "dry run: would deploy %s as a spot instance in %s\n", result.Request.InstanceType, location)
+		fmt.Fprintf(a.stdout(), "dry run: would deploy %s as a %s instance in %s\n", result.Request.InstanceType, result.Policy.Market, location)
 		fmt.Fprintf(a.stdout(), "hostname: %s\n", result.Request.Hostname)
 		if result.Request.Image != "" {
 			fmt.Fprintf(a.stdout(), "image: %s\n", result.Request.Image)
@@ -360,6 +360,7 @@ func (a *App) printCloudDeployResult(result *verdacloud.DeployResult, jsonOutput
 	fmt.Fprintf(a.stdout(), "status: %s\n", instance.Status)
 	fmt.Fprintf(a.stdout(), "instance type: %s\n", instance.InstanceType)
 	fmt.Fprintf(a.stdout(), "location: %s\n", result.Policy.LocationCode)
+	fmt.Fprintf(a.stdout(), "market: %s\n", result.Policy.Market)
 	if result.Policy.SourceOSVolumeLocked {
 		fmt.Fprintf(a.stdout(), "location locked by source os volume: %s\n", result.Policy.LocationCode)
 	}
@@ -368,7 +369,7 @@ func (a *App) printCloudDeployResult(result *verdacloud.DeployResult, jsonOutput
 		if currency == "" {
 			currency = "unknown currency"
 		}
-		fmt.Fprintf(a.stdout(), "spot price: %.4f %s/hour\n", result.Placement.SpotPrice, currency)
+		fmt.Fprintf(a.stdout(), "price: %.4f %s/hour\n", result.Placement.SpotPrice, currency)
 	}
 	fmt.Fprintf(a.stdout(), "spot: %t\n", instance.IsSpot)
 	if instance.IP != nil && *instance.IP != "" {

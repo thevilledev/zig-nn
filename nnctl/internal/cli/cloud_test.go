@@ -27,6 +27,7 @@ func TestCloudDeployDryRunJSON(t *testing.T) {
 			LocationCode         string `json:"location_code"`
 			LocationSelection    string `json:"location_selection"`
 			SourceOSVolumeLocked bool   `json:"source_os_volume_locked"`
+			Market               string `json:"market"`
 			SpotOnly             bool   `json:"spot_only"`
 			AllowsCPU            bool   `json:"allows_cpu"`
 			MaxGPUCount          int    `json:"max_gpu_count"`
@@ -57,11 +58,46 @@ func TestCloudDeployDryRunJSON(t *testing.T) {
 	if result.SourceOSVolumeID != "vol-golden" {
 		t.Fatalf("SourceOSVolumeID = %q", result.SourceOSVolumeID)
 	}
-	if result.Policy.LocationCode != "" || result.Policy.LocationSelection != "source_os_volume_location" || !result.Policy.SourceOSVolumeLocked || !result.Policy.SpotOnly || !result.Policy.AllowsCPU || result.Policy.MaxGPUCount != 1 {
+	if result.Policy.LocationCode != "" || result.Policy.LocationSelection != "source_os_volume_location" || result.Policy.Market != "spot" || !result.Policy.SourceOSVolumeLocked || !result.Policy.SpotOnly || !result.Policy.AllowsCPU || result.Policy.MaxGPUCount != 1 {
 		t.Fatalf("policy was not encoded: %#v", result.Policy)
 	}
 	if result.StartupScript != nil {
 		t.Fatalf("unexpected default startup script: %#v", result.StartupScript)
+	}
+}
+
+func TestCloudDeployDryRunJSONOnDemand(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	app := &App{Stdout: &stdout, Stderr: &stderr}
+
+	err := app.Run(context.Background(), []string{"cloud", "deploy", "--instance-type", "1H200.141S.44V", "--market", "on-demand", "--location-code", "FIN-02", "--dry-run", "--json"})
+	if err != nil {
+		t.Fatalf("Run() error = %v\nstderr:\n%s", err, stderr.String())
+	}
+
+	var result struct {
+		Policy struct {
+			LocationSelection string `json:"location_selection"`
+			Market            string `json:"market"`
+			SpotOnly          bool   `json:"spot_only"`
+		} `json:"policy"`
+		Request struct {
+			Contract string `json:"contract"`
+			IsSpot   bool   `json:"is_spot"`
+		} `json:"request"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("invalid JSON output: %v\n%s", err, stdout.String())
+	}
+
+	if result.Policy.Market != "on-demand" || result.Policy.SpotOnly {
+		t.Fatalf("unexpected policy: %#v", result.Policy)
+	}
+	if result.Policy.LocationSelection != "explicit" {
+		t.Fatalf("LocationSelection = %q, want explicit", result.Policy.LocationSelection)
+	}
+	if result.Request.IsSpot || result.Request.Contract != "PAY_AS_YOU_GO" {
+		t.Fatalf("request did not use on-demand market: %#v", result.Request)
 	}
 }
 

@@ -53,14 +53,14 @@ func (c *SDKClient) GetInstanceType(ctx context.Context, instanceType string, sp
 
 	for _, info := range instanceTypes {
 		if strings.EqualFold(info.InstanceType, instanceType) {
-			return instanceTypeFromSDK(info), nil
+			return instanceTypeFromSDK(info, spot), nil
 		}
 	}
 	return InstanceType{}, fmt.Errorf("verda instance type %q was not returned by /instance-types", instanceType)
 }
 
-func (c *SDKClient) GetSpotPlacementOptions(ctx context.Context, instanceType string) ([]SpotPlacement, error) {
-	availabilities, err := c.client.InstanceAvailability.GetAllAvailabilities(ctx, true, "")
+func (c *SDKClient) GetPlacementOptions(ctx context.Context, instanceType string, spot bool) ([]SpotPlacement, error) {
+	availabilities, err := c.client.InstanceAvailability.GetAllAvailabilities(ctx, spot, "")
 	if err != nil {
 		return nil, err
 	}
@@ -69,8 +69,11 @@ func (c *SDKClient) GetSpotPlacementOptions(ctx context.Context, instanceType st
 	for _, availability := range availabilities {
 		for _, availableType := range availability.Availabilities {
 			if strings.EqualFold(availableType, instanceType) {
-				option := SpotPlacement{LocationCode: availability.LocationCode}
-				instanceTypeInfo, err := c.GetInstanceType(ctx, instanceType, true, availability.LocationCode)
+				option := SpotPlacement{
+					LocationCode: availability.LocationCode,
+					Market:       deployMarketName(spot),
+				}
+				instanceTypeInfo, err := c.GetInstanceType(ctx, instanceType, spot, availability.LocationCode)
 				if err == nil {
 					option.SpotPrice = instanceTypeInfo.SpotPrice
 					option.PriceKnown = instanceTypeInfo.PriceKnown
@@ -204,8 +207,8 @@ func (c *SDKClient) getInstanceTypes(ctx context.Context, spot bool, locationCod
 	return instanceTypes, nil
 }
 
-func instanceTypeFromSDK(info sdkverda.InstanceTypeInfo) InstanceType {
-	price, known := spotPriceFromSDK(info)
+func instanceTypeFromSDK(info sdkverda.InstanceTypeInfo, spot bool) InstanceType {
+	price, known := instancePriceFromSDK(info, spot)
 	return InstanceType{
 		InstanceType: info.InstanceType,
 		DisplayName:  info.DisplayName,
