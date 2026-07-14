@@ -276,11 +276,12 @@ Old B300, H200, RTX PRO 6000, and MI300X rows were removed because they were
 captured against older commits, different toolchains, or manual hosts. Add
 older GPU models back only after rerunning the workflows above.
 
-| GPU | Instance type | Location | Memory | Capability | Driver | Spot/h | Result |
+| GPU | Instance type | Location | Memory | Capability | Driver | Price/h | Result |
 | --- | --- | --- | ---: | ---: | --- | ---: | --- |
 | NVIDIA RTX A6000 | 1A6000.10V | FIN-01 | 49140 MiB | 8.6 | 610.43.02 | 0.2135 usd | ok |
 | NVIDIA A100-SXM4-40GB | 1A100.40S.22V | FIN-01 | 39936 MiB | 8.0 | 610.43.02 | 0.4515 usd | ok |
 | NVIDIA A100-SXM4-80GB | 1A100.22V | FIN-03 | 81920 MiB | 8.0 | 610.43.02 | 0.6265 usd | ok |
+| NVIDIA H200 | 1H200.141S.44V | FIN-02 | 143771 MiB | 9.0 | 610.43.02 | 3.4855 usd | ok: `gpu_peak` only |
 | AMD Radeon 890M Graphics | manual ROCm host | local | 4096 MiB | gfx1150 | ROCm 7.2.53211-9999 | n/a | ok |
 | Tesla V100-SXM2-16GB | 1V100.6V | FIN-01 | 16384 MiB | 7.0 | 580.173.02 | 0.0595 usd | no result: CUDA 13 NVRTC rejected the architecture flag |
 | NVIDIA RTX PRO 6000 CC | 1RTXPRO6000.30V.CC | FIN-03 | n/a | n/a | 610.43.02 | 0.6747 usd | no result: driver installed, but `nvidia-smi` found no device and reboot left the worker offline |
@@ -291,21 +292,24 @@ The `gpu_peak` rows are intentionally much larger than the default comparison
 rows and are meant to separate integrated GPUs from high-end accelerator-class
 GPUs.
 
-The Radeon 890M ROCm baseline was captured on the Manjaro ROCm host described
-above. Values are backend `avg_ns` converted to milliseconds. Lower is better.
+The H200 CUDA result was captured from a FIN-02 on-demand worker. The Radeon
+890M ROCm baseline was captured on the Manjaro ROCm host described above.
+Values are backend `avg_ns` converted to milliseconds. Lower is better.
 
-| suite | case | Radeon 890M ROCm |
-| --- | --- | ---: |
-| gpu_peak | matmul_8192x8192x8192 | 3798.242 ms |
-| gpu_peak | matmul_12288x12288x12288 | 11371.647 ms |
-| gpu_peak | matmul_16384x8192x16384 | 6392.198 ms |
-| gpu_peak | matmul_24576x4096x24576 | 5947.610 ms |
+| suite | case | H200 CUDA | Radeon 890M ROCm |
+| --- | --- | ---: | ---: |
+| gpu_peak | matmul_8192x8192x8192 | **175.899 ms** | 3798.242 ms |
+| gpu_peak | matmul_12288x12288x12288 | **416.596 ms** | 11371.647 ms |
+| gpu_peak | matmul_16384x8192x16384 | **698.731 ms** | 6392.198 ms |
+| gpu_peak | matmul_24576x4096x24576 | **1477.606 ms** | 5947.610 ms |
 
 Verda spot coverage for `gpu_peak` was attempted on 2026-07-13, but no CUDA
-timings were captured from the spot inventory available at that time.
+timings were captured from the spot inventory available at that time. H200 was
+then captured from on-demand capacity on 2026-07-14.
 
 | GPU | Instance type | Location | Source | Result |
 | --- | --- | --- | --- | --- |
+| NVIDIA H200 | 1H200.141S.44V | FIN-02 | fresh Ubuntu image, on-demand | ok: installed `cuda-drivers`, verified CUDA toolkit 13.0 and NVIDIA driver 610.43.02, captured `gpu_peak` |
 | NVIDIA A100-SXM4-80GB | 1A100.22V | FIN-01 | fresh Ubuntu image | no result: cloud-init installed Zig and CUDA headers, but no `nvidia-smi`; installing `cuda-drivers` dropped SSH and the worker disappeared from `nnctl cloud list --all` before a benchmark ran |
 | NVIDIA RTX PRO 6000 Blackwell Server Edition | 1RTXPRO6000.30V.CC | FIN-03 | fresh Ubuntu image | no result: the provided FIN-03 source volume was deleted, proprietary 610.43.02 failed `RmInitAdapter`, open 610.43.02 could not keep CUDA enumeration stable, `gpu_peak --quick` reported `CUDA_ERROR_INVALID_DEVICE`, and reboot left the worker offline |
 
