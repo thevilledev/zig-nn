@@ -242,12 +242,51 @@ func (a *App) newCloudCommand() *cobra.Command {
 	}
 	cmd.AddCommand(
 		a.newCloudDeployCommand(),
+		a.newCloudVolumeCommand(),
 		a.newCloudDestroyCommand(),
 		a.newCloudPackerTemplateCommand(),
 		a.newCloudListCommand(),
 		a.newCloudPricingCommand(),
 		a.newCloudSSHKeysCommand(),
 	)
+	return cmd
+}
+
+func (a *App) newCloudVolumeCommand() *cobra.Command {
+	opts := cloudVolumesOptions{}
+	cmd := &cobra.Command{
+		Use:     "volume [VOLUME_ID...]",
+		Aliases: []string{"volumes"},
+		Short:   "List or purge Verda volumes",
+		Long:    "Lists active Verda volumes by default. Use --include-deleted to include deleted volumes that are still in trash, or --purge with volume IDs to permanently delete already-deleted volumes.",
+		Example: `  nnctl cloud volume
+  nnctl cloud volume --include-deleted
+  nnctl cloud volume --json
+  nnctl cloud volume volume_id --purge --dry-run
+  nnctl cloud volume volume_id --purge --json`,
+		Args: func(cmd *cobra.Command, args []string) error {
+			if opts.purge {
+				return cobra.MinimumNArgs(1)(cmd, args)
+			}
+			if opts.DryRun {
+				return fmt.Errorf("--dry-run requires --purge")
+			}
+			if len(args) > 0 {
+				return fmt.Errorf("volume IDs require --purge")
+			}
+			return nil
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			opts.VolumeIDs = args
+			return a.runCloudVolumes(cmd.Context(), opts)
+		},
+	}
+	cmd.Flags().StringVar(&opts.BaseURL, "base-url", opts.BaseURL, "Verda API base URL")
+	cmd.Flags().BoolVar(&opts.includeDeleted, "include-deleted", opts.includeDeleted, "include deleted volumes that have not been permanently deleted")
+	cmd.Flags().BoolVar(&opts.purge, "purge", opts.purge, "permanently delete already-deleted volume IDs instead of listing volumes")
+	cmd.Flags().BoolVar(&opts.DryRun, "dry-run", opts.DryRun, "print the planned purge request without reading keychain credentials")
+	cmd.Flags().BoolVar(&opts.jsonOutput, "json", opts.jsonOutput, "print machine-readable JSON")
+	cmd.Flags().SortFlags = false
 	return cmd
 }
 

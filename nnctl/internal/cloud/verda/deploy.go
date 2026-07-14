@@ -69,11 +69,16 @@ type CloneVolumeRequest struct {
 }
 
 type Volume struct {
-	ID         string `json:"id"`
-	Name       string `json:"name,omitempty"`
-	Status     string `json:"status,omitempty"`
-	Location   string `json:"location,omitempty"`
-	IsOSVolume bool   `json:"is_os_volume,omitempty"`
+	ID                   string `json:"id"`
+	Name                 string `json:"name,omitempty"`
+	Status               string `json:"status,omitempty"`
+	Type                 string `json:"type,omitempty"`
+	Size                 int    `json:"size,omitempty"`
+	Location             string `json:"location,omitempty"`
+	IsOSVolume           bool   `json:"is_os_volume,omitempty"`
+	CreatedAt            string `json:"created_at,omitempty"`
+	DeletedAt            string `json:"deleted_at,omitempty"`
+	IsPermanentlyDeleted bool   `json:"is_permanently_deleted,omitempty"`
 }
 
 type OSVolumeClone struct {

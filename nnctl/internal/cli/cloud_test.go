@@ -322,6 +322,89 @@ func TestCloudDestroyDefaultsToPermanentDryRun(t *testing.T) {
 	}
 }
 
+func TestCloudVolumePurgeDryRunJSON(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	app := &App{Stdout: &stdout, Stderr: &stderr}
+
+	err := app.Run(context.Background(), []string{"cloud", "volume", "vol-1", "vol-2", "--purge", "--dry-run", "--json"})
+	if err != nil {
+		t.Fatalf("Run() error = %v\nstderr:\n%s", err, stderr.String())
+	}
+
+	var result verdacloud.PurgeVolumesResult
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("invalid JSON output: %v\n%s", err, stdout.String())
+	}
+	if result.Provider != "verda" || !result.DryRun {
+		t.Fatalf("unexpected result header: %#v", result)
+	}
+	if len(result.Request.VolumeIDs) != 2 || result.Request.VolumeIDs[0] != "vol-1" || result.Request.VolumeIDs[1] != "vol-2" {
+		t.Fatalf("unexpected volume ids: %#v", result.Request.VolumeIDs)
+	}
+}
+
+func TestCloudVolumeRejectsArgsWithoutPurge(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	app := &App{Stdout: &stdout, Stderr: &stderr}
+
+	err := app.Run(context.Background(), []string{"cloud", "volume", "vol-1"})
+	if err == nil {
+		t.Fatal("expected volume ID without purge error")
+	}
+	if !strings.Contains(err.Error(), "volume IDs require --purge") {
+		t.Fatalf("error did not explain list mode args: %v", err)
+	}
+}
+
+func TestCloudVolumeDryRunRequiresPurge(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	app := &App{Stdout: &stdout, Stderr: &stderr}
+
+	err := app.Run(context.Background(), []string{"cloud", "volume", "--dry-run"})
+	if err == nil {
+		t.Fatal("expected dry-run without purge error")
+	}
+	if !strings.Contains(err.Error(), "--dry-run requires --purge") {
+		t.Fatalf("error did not explain dry-run requirement: %v", err)
+	}
+}
+
+func TestPrintCloudVolumesPlainText(t *testing.T) {
+	var stdout bytes.Buffer
+	app := &App{Stdout: &stdout}
+
+	err := app.printCloudVolumes([]verdacloud.Volume{
+		{
+			ID:         "vol-active",
+			Name:       "worker-os",
+			Status:     "detached",
+			Type:       "NVMe",
+			Size:       100,
+			Location:   "FIN-03",
+			IsOSVolume: true,
+		},
+		{
+			ID:        "vol-deleted",
+			Name:      "old-worker",
+			Status:    "deleted",
+			Type:      "NVMe",
+			Size:      50,
+			Location:  "FIN-03",
+			DeletedAt: "2026-07-14T10:00:00Z",
+		},
+	}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	out := stdout.String()
+	for _, want := range []string{"ID", "DELETED AT", "vol-active", "worker-os", "vol-deleted", "2026-07-14T10:00:00Z"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("volume table missing %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestCloudPackerTemplateWritesEmbeddedFiles(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	app := &App{Stdout: &stdout, Stderr: &stderr}

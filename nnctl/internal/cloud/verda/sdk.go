@@ -384,6 +384,19 @@ func (c *SDKClient) ListVolumes(ctx context.Context) ([]Volume, error) {
 	return result, nil
 }
 
+func (c *SDKClient) ListDeletedVolumes(ctx context.Context) ([]Volume, error) {
+	volumes, err := c.client.Volumes.GetVolumesInTrash(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]Volume, 0, len(volumes))
+	for _, volume := range volumes {
+		result = append(result, volumeFromTrashSDK(volume))
+	}
+	return result, nil
+}
+
 func (c *SDKClient) DeleteVolume(ctx context.Context, volumeID string, force bool) error {
 	return c.client.Volumes.DeleteVolume(ctx, volumeID, force)
 }
@@ -435,12 +448,37 @@ func (c *SDKClient) DestroyInstances(ctx context.Context, req DestroyInstanceReq
 
 func volumeFromSDK(volume sdkverda.Volume) Volume {
 	return Volume{
-		ID:         volume.ID,
-		Name:       volume.Name,
-		Status:     volume.Status,
-		Location:   volume.Location,
+		ID:         strings.TrimSpace(volume.ID),
+		Name:       strings.TrimSpace(volume.Name),
+		Status:     strings.TrimSpace(volume.Status),
+		Type:       strings.TrimSpace(volume.Type),
+		Size:       volume.Size,
+		Location:   strings.ToUpper(strings.TrimSpace(volume.Location)),
 		IsOSVolume: volume.IsOSVolume,
+		CreatedAt:  formatSDKTime(volume.CreatedAt),
 	}
+}
+
+func volumeFromTrashSDK(volume sdkverda.VolumeInTrash) Volume {
+	return Volume{
+		ID:                   strings.TrimSpace(volume.ID),
+		Name:                 strings.TrimSpace(volume.Name),
+		Status:               strings.TrimSpace(volume.Status),
+		Type:                 strings.TrimSpace(volume.Type),
+		Size:                 volume.Size,
+		Location:             strings.ToUpper(strings.TrimSpace(volume.Location)),
+		IsOSVolume:           volume.IsOSVolume,
+		CreatedAt:            formatSDKTime(volume.CreatedAt),
+		DeletedAt:            formatSDKTime(volume.DeletedAt),
+		IsPermanentlyDeleted: volume.IsPermanentlyDeleted,
+	}
+}
+
+func formatSDKTime(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.Format("2006-01-02T15:04:05Z07:00")
 }
 
 func volumeReadyStatus(status string) bool {
@@ -462,10 +500,6 @@ func volumeFailedStatus(status string) bool {
 }
 
 func instanceFromSDK(instance sdkverda.Instance) Instance {
-	createdAt := ""
-	if !instance.CreatedAt.IsZero() {
-		createdAt = instance.CreatedAt.Format("2006-01-02T15:04:05Z07:00")
-	}
 	return Instance{
 		ID:              instance.ID,
 		Hostname:        instance.Hostname,
@@ -476,7 +510,7 @@ func instanceFromSDK(instance sdkverda.Instance) Instance {
 		Location:        instance.Location,
 		IsSpot:          instance.IsSpot,
 		StartupScriptID: instance.StartupScriptID,
-		CreatedAt:       createdAt,
+		CreatedAt:       formatSDKTime(instance.CreatedAt),
 		PricePerHour:    instance.PricePerHour.Float64(),
 	}
 }

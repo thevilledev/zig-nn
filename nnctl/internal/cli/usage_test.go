@@ -17,6 +17,8 @@ func TestDirectHelpAvailableForEveryCommand(t *testing.T) {
 		{"deploy", "--help"},
 		{"cloud", "--help"},
 		{"cloud", "deploy", "--help"},
+		{"cloud", "volume", "--help"},
+		{"cloud", "volumes", "--help"},
 		{"cloud", "destroy", "--help"},
 		{"cloud", "packer-template", "--help"},
 		{"cloud", "list", "--help"},

@@ -24,6 +24,13 @@ type cloudSSHKeysOptions struct {
 	jsonOutput bool
 }
 
+type cloudVolumesOptions struct {
+	verdacloud.PurgeVolumesOptions
+	includeDeleted bool
+	purge          bool
+	jsonOutput     bool
+}
+
 type cloudDestroyOptions struct {
 	verdacloud.DestroyOptions
 	jsonOutput bool
@@ -102,6 +109,37 @@ func (a *App) runCloudSSHKeys(ctx context.Context, opts cloudSSHKeysOptions) err
 		return fmt.Errorf("list Verda SSH keys: %w", err)
 	}
 	return a.printCloudSSHKeys(keys, opts.jsonOutput)
+}
+
+func (a *App) runCloudVolumes(ctx context.Context, opts cloudVolumesOptions) error {
+	if opts.purge {
+		var client verdacloud.VolumePurgeClient
+		if !opts.DryRun {
+			sdkClient, err := a.newVerdaSDKClient(ctx, opts.BaseURL)
+			if err != nil {
+				return err
+			}
+			client = sdkClient
+		}
+
+		result, err := verdacloud.PurgeVolumes(ctx, client, opts.PurgeVolumesOptions)
+		if err != nil {
+			return err
+		}
+		return a.printCloudPurgeResult(result, opts.jsonOutput)
+	}
+
+	client, err := a.newVerdaSDKClient(ctx, opts.BaseURL)
+	if err != nil {
+		return err
+	}
+	volumes, err := verdacloud.ListVolumes(ctx, client, verdacloud.ListVolumesOptions{
+		IncludeDeleted: opts.includeDeleted,
+	})
+	if err != nil {
+		return err
+	}
+	return a.printCloudVolumes(volumes, opts.jsonOutput)
 }
 
 func (a *App) runCloudDestroy(ctx context.Context, opts cloudDestroyOptions) error {
@@ -219,6 +257,53 @@ func (a *App) printCloudSSHKeys(keys []verdacloud.SSHKey, jsonOutput bool) error
 		fmt.Fprintf(w, "%s\t%s\t%s\n", key.ID, key.Name, key.Fingerprint)
 	}
 	return w.Flush()
+}
+
+func (a *App) printCloudVolumes(volumes []verdacloud.Volume, jsonOutput bool) error {
+	if jsonOutput {
+		enc := json.NewEncoder(a.stdout())
+		enc.SetIndent("", "  ")
+		return enc.Encode(volumes)
+	}
+	if len(volumes) == 0 {
+		fmt.Fprintln(a.stdout(), "no Verda volumes found")
+		return nil
+	}
+
+	w := tabwriter.NewWriter(a.stdout(), 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "ID\tNAME\tSTATUS\tTYPE\tSIZE\tLOCATION\tOS\tDELETED AT")
+	for _, volume := range volumes {
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%t\t%s\n",
+			volume.ID,
+			firstNonEmpty(volume.Name),
+			firstNonEmpty(volume.Status),
+			firstNonEmpty(volume.Type),
+			formatCloudVolumeSize(volume.Size),
+			firstNonEmpty(volume.Location),
+			volume.IsOSVolume,
+			firstNonEmpty(volume.DeletedAt),
+		)
+	}
+	return w.Flush()
+}
+
+func (a *App) printCloudPurgeResult(result *verdacloud.PurgeVolumesResult, jsonOutput bool) error {
+	if jsonOutput {
+		enc := json.NewEncoder(a.stdout())
+		enc.SetIndent("", "  ")
+		return enc.Encode(result)
+	}
+
+	ids := strings.Join(result.Request.VolumeIDs, ", ")
+	if result.DryRun {
+		fmt.Fprintf(a.stdout(), "dry run: would purge Verda volume%s %s\n", pluralSuffix(result.Request.VolumeIDs), ids)
+		return nil
+	}
+	fmt.Fprintf(a.stdout(), "purged Verda volume%s %s\n", pluralSuffix(result.Request.VolumeIDs), ids)
+	for _, actionResult := range result.Results {
+		fmt.Fprintf(a.stdout(), "%s: %s\n", actionResult.VolumeID, firstNonEmpty(actionResult.Status, "purged"))
+	}
+	return nil
 }
 
 func (a *App) printCloudDestroyResult(result *verdacloud.DestroyResult, jsonOutput bool) error {
@@ -487,4 +572,11 @@ func formatCloudPrice(price verdacloud.InstancePrice) string {
 		return "-"
 	}
 	return fmt.Sprintf("%.4f", price.PricePerHour)
+}
+
+func formatCloudVolumeSize(size int) string {
+	if size == 0 {
+		return "-"
+	}
+	return fmt.Sprintf("%d", size)
 }
