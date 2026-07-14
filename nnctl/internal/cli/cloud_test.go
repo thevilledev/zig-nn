@@ -337,6 +337,10 @@ func TestCloudPackerTemplateWritesEmbeddedFiles(t *testing.T) {
 		want string
 	}{
 		{name: "ubuntu.pkr.hcl", want: `source "verda-instance" "ubuntu"`},
+		{name: "ubuntu.pkr.hcl", want: `variable "authorized_keys_file"`},
+		{name: "ubuntu.pkr.hcl", want: `ssh_clear_authorized_keys = true`},
+		{name: "ubuntu.pkr.hcl", want: `/tmp/verda_authorized_keys`},
+		{name: "ubuntu.pkr.hcl", want: `post-processor "manifest"`},
 		{name: "bootstrap.sh", want: "cuda-toolkit-13-0"},
 	} {
 		content, err := os.ReadFile(dir + "/" + file.name)
