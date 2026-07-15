@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -135,6 +136,32 @@ func TestRemoteBenchmarkCommandQuotesRemoteInputs(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("remote command missing %q:\n%s", want, got)
 		}
+	}
+}
+
+func TestCaptureCloudBenchmarkSSHIncludesStderr(t *testing.T) {
+	ssh := filepath.Join(t.TempDir(), "fake-ssh")
+	script := `#!/bin/sh
+printf '%s\n' '# zig-nn benchmark suite' >&2
+printf '%s\n' 'suite,case,backend,mode,warmups,iterations,avg_ns,min_ns,max_ns,checksum,sample_error,status' >&2
+printf '%s\n' 'matmul,64x64x64,cuda,ReleaseFast,1,8,41879,35256,80710,-0.036506616,0.000000030,ok' >&2
+`
+	if err := os.WriteFile(ssh, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	var stderr strings.Builder
+	app := &App{Stderr: &stderr}
+	output, err := app.captureCloudBenchmarkSSH(context.Background(), ssh, nil, "root@example", "benchmark")
+	if err != nil {
+		t.Fatalf("captureCloudBenchmarkSSH() error = %v", err)
+	}
+	rows, err := parseBenchmarkCSV(output)
+	if err != nil {
+		t.Fatalf("parseBenchmarkCSV() error = %v\noutput:\n%s", err, output)
+	}
+	if len(rows) != 1 || rows[0].Backend != "cuda" || rows[0].AverageNS != 41879 {
+		t.Fatalf("rows = %#v", rows)
 	}
 }
 

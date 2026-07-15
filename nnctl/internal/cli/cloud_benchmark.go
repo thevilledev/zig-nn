@@ -719,11 +719,18 @@ func (a *App) runCloudBenchmarkSSH(ctx context.Context, ssh string, baseArgs []s
 }
 
 func (a *App) captureCloudBenchmarkSSH(ctx context.Context, ssh string, baseArgs []string, host, remoteCommand string) ([]byte, error) {
-	var output bytes.Buffer
-	if err := a.runCloudBenchmarkSSH(ctx, ssh, baseArgs, host, remoteCommand, &output); err != nil {
-		return nil, err
+	args := append(append([]string{}, baseArgs...), host, remoteCommand)
+	fmt.Fprintf(a.stderr(), "==> %s\n", zig.CommandString(ssh, args))
+	cmd := exec.CommandContext(ctx, ssh, args...)
+	cmd.Stdin = a.stdin()
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		if len(output) > 0 {
+			fmt.Fprint(a.stderr(), string(output))
+		}
+		return nil, fmt.Errorf("%s failed: %w", ssh, err)
 	}
-	return output.Bytes(), nil
+	return output, nil
 }
 
 func (a *App) runCloudBenchmarkCommand(ctx context.Context, dir string, env []string, name string, args ...string) error {
