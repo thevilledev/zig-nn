@@ -1,3 +1,4 @@
+// Package repo locates and validates zig-nn repository roots.
 package repo
 
 import (
@@ -38,6 +39,6 @@ func IsRoot(dir string) bool {
 }
 
 func FileExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
 }
