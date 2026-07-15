@@ -206,6 +206,7 @@ pub fn build(b: *std.Build) void {
     prev_step = addTestStep(b, test_step, "training", "src/training.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
     prev_step = addTestStep(b, test_step, "spatial", "src/spatial.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
     prev_step = addTestStep(b, test_step, "recurrent", "src/recurrent.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
+    prev_step = addTestStep(b, test_step, "reinforcement", "src/reinforcement.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
     prev_step = addTestStep(b, test_step, "transformer", "src/transformer.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
     prev_step = addTestStep(b, test_step, "layer", "src/layer.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
     prev_step = addTestStep(b, test_step, "layer_norm", "src/layer_norm.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
