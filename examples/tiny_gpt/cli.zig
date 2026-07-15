@@ -24,6 +24,7 @@ pub const CliOptions = struct {
     tokens: usize = 80,
     temperature: f64 = 1.0,
     top_k: usize = 8,
+    top_p: f64 = 1.0,
     seed: u64 = 42,
     preset: TrainingPreset = .none,
     model_config: Config = .{},
@@ -289,6 +290,11 @@ pub fn parseArgs(args: []const [:0]const u8) !CliOptions {
             i += 1;
             if (i >= args.len) return error.MissingArgument;
             options.top_k = try std.fmt.parseInt(usize, args[i], 10);
+        } else if (std.mem.eql(u8, arg, "--top-p")) {
+            i += 1;
+            if (i >= args.len) return error.MissingArgument;
+            options.top_p = try std.fmt.parseFloat(f64, args[i]);
+            if (!std.math.isFinite(options.top_p) or options.top_p <= 0 or options.top_p > 1) return error.InvalidTopP;
         } else if (std.mem.eql(u8, arg, "--seed")) {
             i += 1;
             if (i >= args.len) return error.MissingArgument;
@@ -482,6 +488,7 @@ fn printUsage(writer: anytype) !void {
         \\  --tokens <n>             Number of new tokens to sample (default: 80)
         \\  --temperature <float>    Sampling temperature (default: 1.0)
         \\  --top-k <n>              Restrict sampling to top k tokens (default: 8)
+        \\  --top-p <float>          Nucleus probability mass (default: 1.0)
         \\  --seed <n>               Deterministic seed (default: 42)
         \\  --block-size <n>         Context length for new models (default: 16)
         \\  --layers <n>             Transformer block count for new models (default: 2)
@@ -702,6 +709,7 @@ fn runSummaryJson(
     try writer.print(",\n    \"tokens\": {},\n", .{options.tokens});
     try writer.print("    \"temperature\": {d:.6},\n", .{options.temperature});
     try writer.print("    \"top_k\": {},\n", .{options.top_k});
+    try writer.print("    \"top_p\": {d:.6},\n", .{options.top_p});
     try writer.writeAll("    \"text\": ");
     try writeJsonString(writer, generated_text);
     try writer.writeAll("\n  }\n");
@@ -808,6 +816,7 @@ pub fn main(init: std.process.Init) !void {
             options.tokens,
             options.temperature,
             options.top_k,
+            options.top_p,
             options.device_preference.?,
         )
     else if (options.corpus_prior)
@@ -817,6 +826,7 @@ pub fn main(init: std.process.Init) !void {
             options.tokens,
             options.temperature,
             options.top_k,
+            options.top_p,
             prior_corpus,
         )
     else
@@ -826,6 +836,7 @@ pub fn main(init: std.process.Init) !void {
             options.tokens,
             options.temperature,
             options.top_k,
+            options.top_p,
         );
     defer allocator.free(generated_tokens);
 

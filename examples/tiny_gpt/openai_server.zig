@@ -16,6 +16,7 @@ const ServerOptions = struct {
     max_tokens: usize = 80,
     temperature: f64 = 1.0,
     top_k: usize = 8,
+    top_p: f64 = 1.0,
     allow_untrained: bool = false,
 };
 
@@ -31,6 +32,7 @@ const RequestSettings = struct {
     max_tokens: usize,
     temperature: f64,
     top_k: usize,
+    top_p: f64,
     stop_sequences: []const []const u8 = &.{},
     owns_stop_sequences: bool = false,
 
@@ -361,6 +363,17 @@ fn parseRequestSettings(
     const max_tokens = usizeField(object, "max_tokens") orelse options.max_tokens;
     const temperature = floatField(object, "temperature") orelse options.temperature;
     const top_k = usizeField(object, "top_k") orelse options.top_k;
+    const top_p = floatField(object, "top_p") orelse options.top_p;
+    if (object.get("top_p") != null and floatField(object, "top_p") == null) return requestFail(api_error, .{
+        .code = "invalid_type",
+        .message = "top_p must be a number.",
+        .param = "top_p",
+    });
+    if (!std.math.isFinite(top_p) or top_p <= 0 or top_p > 1) return requestFail(api_error, .{
+        .code = "invalid_value",
+        .message = "top_p must be greater than 0 and at most 1.",
+        .param = "top_p",
+    });
     const response_model = stringField(object, "model") orelse options.model_name;
 
     const stop_sequences = try parseStopSequences(allocator, object, api_error);
@@ -369,6 +382,7 @@ fn parseRequestSettings(
         .max_tokens = max_tokens,
         .temperature = temperature,
         .top_k = top_k,
+        .top_p = top_p,
         .stop_sequences = stop_sequences,
         .owns_stop_sequences = true,
     };
@@ -386,14 +400,6 @@ fn rejectUnsupportedSettings(object: json.ObjectMap, api_error: *?ApiError) !voi
             .code = "invalid_type",
             .message = "stream must be a boolean.",
             .param = "stream",
-        });
-    }
-
-    if (object.get("top_p")) |_| {
-        return requestFail(api_error, .{
-            .code = "unsupported_parameter",
-            .message = "top_p sampling is not supported; use top_k instead.",
-            .param = "top_p",
         });
     }
 
@@ -531,6 +537,7 @@ fn generateCompletion(
         settings.max_tokens,
         settings.temperature,
         settings.top_k,
+        settings.top_p,
     );
     defer allocator.free(generated_tokens);
 
@@ -782,6 +789,11 @@ fn parseArgs(args: []const [:0]const u8) !ServerOptions {
             i += 1;
             if (i >= args.len) return error.MissingArgument;
             options.top_k = try std.fmt.parseInt(usize, args[i], 10);
+        } else if (std.mem.eql(u8, arg, "--top-p")) {
+            i += 1;
+            if (i >= args.len) return error.MissingArgument;
+            options.top_p = try std.fmt.parseFloat(f64, args[i]);
+            if (!std.math.isFinite(options.top_p) or options.top_p <= 0 or options.top_p > 1) return error.InvalidTopP;
         } else if (std.mem.eql(u8, arg, "--allow-untrained")) {
             options.allow_untrained = true;
         } else if (std.mem.eql(u8, arg, "--help")) {
@@ -805,6 +817,7 @@ fn printUsage(writer: anytype) !void {
         \\  --max-tokens <n>     Default completion length (default: 80)
         \\  --temperature <f>    Default sampling temperature (default: 1.0)
         \\  --top-k <n>          Default top-k sampler cutoff (default: 8)
+        \\  --top-p <f>          Default nucleus probability mass (default: 1.0)
         \\  --allow-untrained    Serve a seeded untrained model when --model is omitted
         \\
         \\Endpoints:
@@ -885,7 +898,6 @@ test "request settings reject unsupported compatibility fields" {
         param: []const u8,
     }{
         .{ .body = "{\"stream\":true}", .param = "stream" },
-        .{ .body = "{\"top_p\":0.9}", .param = "top_p" },
         .{ .body = "{\"n\":2}", .param = "n" },
     };
 
@@ -900,6 +912,30 @@ test "request settings reject unsupported compatibility fields" {
         );
         try std.testing.expectEqualStrings(case.param, api_error.?.param.?);
     }
+}
+
+test "request settings accept nucleus sampling" {
+    const allocator = std.testing.allocator;
+    const parsed = try json.parseFromSlice(json.Value, allocator, "{\"top_p\":0.85}", .{});
+    defer parsed.deinit();
+
+    var api_error: ?ApiError = null;
+    var settings = try parseRequestSettings(allocator, parsed.value.object, .{}, &api_error);
+    defer settings.deinit(allocator);
+    try std.testing.expectApproxEqAbs(@as(f64, 0.85), settings.top_p, 1e-12);
+}
+
+test "request settings reject invalid nucleus mass" {
+    const allocator = std.testing.allocator;
+    const parsed = try json.parseFromSlice(json.Value, allocator, "{\"top_p\":1.2}", .{});
+    defer parsed.deinit();
+
+    var api_error: ?ApiError = null;
+    try std.testing.expectError(
+        error.OpenAIRequestError,
+        parseRequestSettings(allocator, parsed.value.object, .{}, &api_error),
+    );
+    try std.testing.expectEqualStrings("top_p", api_error.?.param.?);
 }
 
 test "stop sequences choose earliest match" {

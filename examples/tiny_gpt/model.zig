@@ -349,6 +349,7 @@ pub const TinyGPT = struct {
         max_new_tokens: usize,
         temperature: f64,
         top_k: usize,
+        top_p: f64,
     ) ![]usize {
         const prompt_len = if (prompt.len == 0) 1 else prompt.len;
         var tokens = try allocator.alloc(usize, prompt_len + max_new_tokens);
@@ -371,7 +372,7 @@ pub const TinyGPT = struct {
             var logits = try self.forward(tokens[context_start..token_count]);
             defer logits.deinit();
 
-            tokens[token_count] = try self.sampleNextToken(logits, temperature, top_k);
+            tokens[token_count] = try self.sampleNextToken(logits, temperature, top_k, top_p);
             token_count += 1;
         }
 
@@ -385,6 +386,7 @@ pub const TinyGPT = struct {
         max_new_tokens: usize,
         temperature: f64,
         top_k: usize,
+        top_p: f64,
         preference: nn.DevicePreference,
     ) ![]usize {
         const prompt_len = if (prompt.len == 0) 1 else prompt.len;
@@ -417,7 +419,7 @@ pub const TinyGPT = struct {
             try execution.readback(logits, logit_values);
             const safe_temperature = if (temperature <= 0) 1.0 else temperature;
             for (logit_values, scores) |logit, *score| score.* = @as(f64, logit) / safe_temperature;
-            tokens[token_count] = try self.sampleFromScores(scores, top_k);
+            tokens[token_count] = try self.sampleFromScores(scores, top_k, top_p);
             token_count += 1;
             if (generated + 1 == max_new_tokens) break;
 
@@ -438,6 +440,7 @@ pub const TinyGPT = struct {
         max_new_tokens: usize,
         temperature: f64,
         top_k: usize,
+        top_p: f64,
         corpus: []const u8,
     ) ![]usize {
         const corpus_tokens = try Tokenizer.encode(allocator, corpus);
@@ -470,6 +473,7 @@ pub const TinyGPT = struct {
                 corpus_tokens,
                 temperature,
                 top_k,
+                top_p,
             );
             token_count += 1;
         }
@@ -653,7 +657,7 @@ pub const TinyGPT = struct {
         return self.lm_head.forward(activations, self.allocator);
     }
 
-    fn sampleNextToken(self: *TinyGPT, logits: Matrix, temperature: f64, top_k: usize) !usize {
+    fn sampleNextToken(self: *TinyGPT, logits: Matrix, temperature: f64, top_k: usize, top_p: f64) !usize {
         const row = logits.rows - 1;
         const vocab_size = logits.cols;
         const safe_temperature = if (temperature <= 0.0) 1.0 else temperature;
@@ -664,7 +668,7 @@ pub const TinyGPT = struct {
             scores[token] = (try logits.get(row, token)) / safe_temperature;
         }
 
-        return self.sampleFromScores(scores, top_k);
+        return self.sampleFromScores(scores, top_k, top_p);
     }
 
     fn sampleNextTokenWithCorpusPrior(
@@ -674,6 +678,7 @@ pub const TinyGPT = struct {
         corpus_tokens: []const usize,
         temperature: f64,
         top_k: usize,
+        top_p: f64,
     ) !usize {
         const row = logits.rows - 1;
         const vocab_size = logits.cols;
@@ -692,38 +697,17 @@ pub const TinyGPT = struct {
             }
         }
 
-        return self.sampleFromScores(scores, top_k);
+        return self.sampleFromScores(scores, top_k, top_p);
     }
 
-    fn sampleFromScores(self: *TinyGPT, scores: []const f64, top_k: usize) !usize {
-        const vocab_size = scores.len;
-        const allowed = try self.allocator.alloc(bool, vocab_size);
-        defer self.allocator.free(allowed);
-        try chooseTopK(scores, top_k, allowed);
-
-        var max_score = -math.inf(f64);
-        for (scores, 0..) |score, token| {
-            if (allowed[token]) max_score = @max(max_score, score);
-        }
-
-        var sum: f64 = 0.0;
-        for (scores, 0..) |score, token| {
-            if (allowed[token]) {
-                sum += math.exp(score - max_score);
-            }
-        }
-
-        if (sum == 0.0) return error.InvalidProbabilityDistribution;
-
-        const draw = self.prng.random().float(f64) * sum;
-        var cumulative: f64 = 0.0;
-        for (scores, 0..) |score, token| {
-            if (!allowed[token]) continue;
-            cumulative += math.exp(score - max_score);
-            if (draw <= cumulative) return token;
-        }
-
-        return vocab_size - 1;
+    fn sampleFromScores(self: *TinyGPT, scores: []const f64, top_k: usize, top_p: f64) !usize {
+        return nn.Decoding.sample(
+            self.allocator,
+            self.prng.random(),
+            scores,
+            &.{},
+            .{ .temperature = 1, .top_k = top_k, .top_p = top_p },
+        );
     }
 };
 
@@ -951,29 +935,4 @@ fn addCorpusPrior(
     }
 
     return false;
-}
-
-fn chooseTopK(scores: []const f64, top_k: usize, allowed: []bool) !void {
-    if (scores.len != allowed.len) return error.DimensionMismatch;
-
-    if (top_k == 0 or top_k >= scores.len) {
-        @memset(allowed, true);
-        return;
-    }
-
-    @memset(allowed, false);
-    for (0..top_k) |_| {
-        var best_index: ?usize = null;
-        var best_score = -math.inf(f64);
-        for (scores, 0..) |score, i| {
-            if (!allowed[i] and score > best_score) {
-                best_score = score;
-                best_index = i;
-            }
-        }
-
-        if (best_index) |i| {
-            allowed[i] = true;
-        }
-    }
 }

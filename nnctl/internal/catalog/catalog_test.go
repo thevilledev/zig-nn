@@ -85,6 +85,16 @@ func TestResolveSequenceTaggingExample(t *testing.T) {
 	}
 }
 
+func TestResolveDecodingLabExample(t *testing.T) {
+	example, ok := ResolveExample("decoding_lab")
+	if !ok {
+		t.Fatal("expected decoding_lab to resolve")
+	}
+	if example.Step != "run_decoding_lab" || !example.Quick {
+		t.Fatalf("unexpected decoding lab example: %+v", example)
+	}
+}
+
 func TestResolveCNNExample(t *testing.T) {
 	example, ok := ResolveExample("cnn")
 	if !ok {

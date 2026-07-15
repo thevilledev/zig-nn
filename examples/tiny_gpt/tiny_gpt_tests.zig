@@ -77,7 +77,7 @@ test "generation stays in vocabulary and appends requested tokens" {
 
     const prompt = "to";
     const new_tokens = 12;
-    const generated = try model.generateTokens(allocator, prompt, new_tokens, 1.0, 4);
+    const generated = try model.generateTokens(allocator, prompt, new_tokens, 1.0, 4, 0.9);
     defer allocator.free(generated);
 
     try testing.expectEqual(prompt.len + new_tokens, generated.len);
@@ -237,12 +237,14 @@ test "explicit args override coherent small preset regardless of order" {
         "--block-size",   "8",
         "--preset",       "coherent-small",
         "--top-k",        "4",
+        "--top-p",        "0.85",
         "--corpus-prior",
     });
 
     try testing.expectEqual(cli.CorpusPreset.toy, options.corpus);
     try testing.expectEqual(@as(usize, 8), options.model_config.block_size);
     try testing.expectEqual(@as(usize, 4), options.top_k);
+    try testing.expectApproxEqAbs(@as(f64, 0.85), options.top_p, 1e-12);
     try testing.expect(options.corpus_prior);
     try testing.expect(options.train_full);
 }
@@ -379,9 +381,9 @@ test "device KV generation matches greedy legacy generation" {
     defer legacy.deinit();
     var device_model = try TinyGPT.init(allocator, config, 44);
     defer device_model.deinit();
-    const expected = try legacy.generateTokens(allocator, "ab", 6, 1.0, 1);
+    const expected = try legacy.generateTokens(allocator, "ab", 6, 1.0, 1, 1.0);
     defer allocator.free(expected);
-    const actual = try device_model.generateTokensDevice(allocator, "ab", 6, 1.0, 1, .cpu);
+    const actual = try device_model.generateTokensDevice(allocator, "ab", 6, 1.0, 1, 1.0, .cpu);
     defer allocator.free(actual);
     try testing.expectEqualSlices(usize, expected, actual);
 }

@@ -31,9 +31,11 @@ The examples are intentionally small enough to read beside the reusable code:
    attention, pooling, and sparse cross-entropy.
 7. Use Sequence Tagging to compare independent token decisions with globally
    normalized CRF and Viterbi decoding.
-8. Compare GRU Sequence with Transformer Encoder. The GRU carries state through
+8. Run Decoding Lab to contrast greedy choice, fixed top-k truncation, adaptive
+   nucleus top-p truncation, and repetition penalties.
+9. Compare GRU Sequence with Transformer Encoder. The GRU carries state through
    time; the encoder uses unmasked attention to retrieve context from any token.
-9. Finish with DQN to see how an MLP, replay memory, exploration, Bellman
+10. Finish with DQN to see how an MLP, replay memory, exploration, Bellman
    targets, and a target network fit into an agent-environment loop.
 
 The CNN uses the inspectable CPU-first spatial reference. The optimizer,
@@ -59,6 +61,7 @@ discrete action choice, and Bellman-target construction.
 | Word2Vec | `zig build run_word2vec -Dgpu=auto` | `nnctl run word2vec` | Skip-gram pairs, unigram negative sampling, and learned embedding neighborhoods |
 | Text classifier | `zig build run_text_classifier -Dgpu=auto` | `nnctl run text-classifier` | Padding-aware multi-head encoder trained on contextual sentiment phrases |
 | Sequence tagging | `zig build run_sequence_tagging` | `nnctl run sequence-tagging` | Forward-backward CRF training and Viterbi decoding for BIO tags |
+| Decoding lab | `zig build run_decoding_lab` | `nnctl run decoding-lab` | Greedy, top-k, nucleus top-p, repetition penalties, and seeded sampling |
 | CNN | `zig build run_cnn` | `nnctl run cnn` | Convolution, ReLU, max-pool, and softmax on synthetic image patterns |
 | Autoencoder | `zig build run_autoencoder -Dgpu=auto` | `nnctl run autoencoder` | Denoising and two-dimensional latent representations of tiny images |
 | GRU sequence | `zig build run_gru_sequence -Dgpu=auto` | `nnctl run gru-sequence` | Backpropagation through time on a selective-memory task |

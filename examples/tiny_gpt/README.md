@@ -51,7 +51,7 @@ Reload a checkpoint for generation:
 
 ```bash
 nnctl run tiny-gpt -- --load-checkpoint tiny-gpt.bin --no-train \
-  --prompt "to be" --tokens 120 --no-corpus-prior
+  --prompt "to be" --tokens 120 --top-k 16 --top-p 0.9 --no-corpus-prior
 ```
 
 Run full-model SGD training and KV-cached generation on the selected tensor
@@ -138,7 +138,7 @@ Implemented pieces:
 - trainable output projection head
 - manual next-token backpropagation for the full tiny Transformer
 - binary checkpoints for trained model weights and run metadata
-- temperature and top-k autoregressive sampling
+- temperature, top-k, and nucleus top-p autoregressive sampling
 - backend-selectable full-model SGD training with checkpoint-compatible QKV
   split/merge
 - native per-layer KV caching for backend-selected generation
