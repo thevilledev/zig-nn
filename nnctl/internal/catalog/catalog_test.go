@@ -75,6 +75,16 @@ func TestResolveTextClassifierExample(t *testing.T) {
 	}
 }
 
+func TestResolveSequenceTaggingExample(t *testing.T) {
+	example, ok := ResolveExample("sequence_tagging")
+	if !ok {
+		t.Fatal("expected sequence_tagging to resolve")
+	}
+	if example.Step != "run_sequence_tagging" || !example.Quick {
+		t.Fatalf("unexpected sequence tagging example: %+v", example)
+	}
+}
+
 func TestResolveCNNExample(t *testing.T) {
 	example, ok := ResolveExample("cnn")
 	if !ok {

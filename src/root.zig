@@ -28,6 +28,7 @@ const recurrent_mod = @import("recurrent.zig");
 const reinforcement_mod = @import("reinforcement.zig");
 const transformer_mod = @import("transformer.zig");
 const embeddings_mod = @import("embeddings.zig");
+const structured_mod = @import("structured.zig");
 
 /// Library usage example:
 ///
@@ -88,6 +89,7 @@ pub const Recurrent = recurrent_mod;
 pub const Reinforcement = reinforcement_mod;
 pub const Transformer = transformer_mod;
 pub const Embeddings = embeddings_mod;
+pub const Structured = structured_mod;
 
 // Export backend interface types
 pub const BackendMatrix = backend_mod.Matrix;
