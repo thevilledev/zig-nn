@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 )
 
 const (
@@ -20,6 +21,7 @@ type app struct {
 	stdoutWriter io.Writer
 	stderrWriter io.Writer
 	httpClient   httpDoer
+	now          func() time.Time
 
 	repoRoot string
 	zig      string
@@ -55,6 +57,7 @@ func newApp(stdin io.Reader, stdout, stderr io.Writer) *app {
 		stdoutWriter: stdout,
 		stderrWriter: stderr,
 		httpClient:   http.DefaultClient,
+		now:          time.Now,
 	}
 }
 
@@ -100,6 +103,13 @@ func (a *app) http() httpDoer {
 		return http.DefaultClient
 	}
 	return a.httpClient
+}
+
+func (a *app) currentTime() time.Time {
+	if a.now == nil {
+		return time.Now()
+	}
+	return a.now()
 }
 
 func getenvDefault(key, fallback string) string {
