@@ -1,6 +1,6 @@
 # Speech Commands
 
-This example trains a small model from scratch to recognize eight closed-set
+This experiment trains a small model from scratch to recognize eight closed-set
 commands: `down`, `go`, `left`, `no`, `right`, `stop`, `up`, and `yes`. It does
 not use pretrained weights or a TensorFlow runtime.
 

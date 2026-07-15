@@ -37,7 +37,7 @@ func (a *App) runAll(ctx context.Context, opts buildOptions) error {
 	if err := a.runZig(ctx, zig.Args("test-acceptance", zig.Options{GPU: opts.gpu})...); err != nil {
 		return err
 	}
-	return a.runZig(ctx, zig.Args("examples", zig.Options{Optimize: opts.mode, GPU: opts.gpu})...)
+	return a.runZig(ctx, zig.Args("experiments", zig.Options{Optimize: opts.mode, GPU: opts.gpu})...)
 }
 
 func (a *App) runBuild(ctx context.Context, opts buildOptions) error {
@@ -66,38 +66,38 @@ func (a *App) runTest(ctx context.Context, opts testOptions) error {
 	return a.runZig(ctx, zig.Args("test-acceptance", zigOpts)...)
 }
 
-func (a *App) runExamples(ctx context.Context, opts buildOptions) error {
-	return a.runZig(ctx, zig.Args("examples", zig.Options{Optimize: opts.mode, GPU: opts.gpu})...)
+func (a *App) runExperiments(ctx context.Context, opts buildOptions) error {
+	return a.runZig(ctx, zig.Args("experiments", zig.Options{Optimize: opts.mode, GPU: opts.gpu})...)
 }
 
-func (a *App) runExample(ctx context.Context, name string, passthrough []string, mode, gpu string) error {
+func (a *App) runExperiment(ctx context.Context, name string, passthrough []string, mode, gpu string) error {
 	if catalog.NormalizeName(name) == "quick" {
-		for _, example := range catalog.Examples() {
-			if !example.Quick {
+		for _, experiment := range catalog.Experiments() {
+			if !experiment.Quick {
 				continue
 			}
-			opts := exampleRunOptions(example, mode, gpu)
-			if err := a.runZig(ctx, zig.RunArgs(example.Step, opts, nil)...); err != nil {
+			opts := experimentRunOptions(experiment, mode, gpu)
+			if err := a.runZig(ctx, zig.RunArgs(experiment.Step, opts, nil)...); err != nil {
 				return err
 			}
 		}
 		return nil
 	}
 
-	example, ok := catalog.ResolveExample(name)
+	experiment, ok := catalog.ResolveExperiment(name)
 	if !ok {
-		return fmt.Errorf("unknown example %q; run nnctl list examples", name)
+		return fmt.Errorf("unknown experiment %q; run nnctl list experiments", name)
 	}
-	opts := exampleRunOptions(example, mode, gpu)
-	return a.runZig(ctx, zig.RunArgs(example.Step, opts, passthrough)...)
+	opts := experimentRunOptions(experiment, mode, gpu)
+	return a.runZig(ctx, zig.RunArgs(experiment.Step, opts, passthrough)...)
 }
 
-func (a *App) listExamples() {
-	for _, example := range catalog.SortedExamples() {
-		if example.Hidden {
+func (a *App) listExperiments() {
+	for _, experiment := range catalog.SortedExperiments() {
+		if experiment.Hidden {
 			continue
 		}
-		fmt.Fprintf(a.stdout(), "%-24s %s\n", example.Name, example.Description)
+		fmt.Fprintf(a.stdout(), "%-24s %s\n", experiment.Name, experiment.Description)
 	}
 }
 
@@ -216,15 +216,15 @@ func (a *App) run(ctx context.Context, dir, name string, args ...string) error {
 	return nil
 }
 
-func exampleRunOptions(example catalog.Example, mode, gpu string) zig.Options {
+func experimentRunOptions(experiment catalog.Experiment, mode, gpu string) zig.Options {
 	if mode == "" {
-		mode = example.DefaultOptimize
+		mode = experiment.DefaultOptimize
 	}
 	if mode == "" {
 		mode = getenvDefault("NNCTL_OPTIMIZE", getenvDefault("BUILD_MODE", defaultBuildMode))
 	}
 	if gpu == "" {
-		gpu = example.DefaultGPU
+		gpu = experiment.DefaultGPU
 	}
 	return zig.Options{Optimize: mode, GPU: gpu}
 }

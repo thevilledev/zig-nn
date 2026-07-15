@@ -81,7 +81,7 @@
         "src",
         "LICENSE",
         "docs",
-        "examples",
+        "experiments",
         "README.md",
     },
 }

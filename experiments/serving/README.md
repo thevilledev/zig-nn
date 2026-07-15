@@ -1,13 +1,15 @@
-# Neural Network Serving Example
+# Neural Network Serving Experiment
 
-This directory contains an example implementation of an HTTP server that serves predictions from a trained neural network model.
+This experiment wraps a trained neural network in a small HTTP prediction
+server so request validation, model loading, and response behavior remain easy
+to inspect.
 
 ## Prerequisites
 
 1. A trained model saved in binary format (e.g., `xor_model.bin`)
 2. The model file should be in the same directory as the server executable
 
-You can train a simple model [in the XOR training example](../xor_training).
+You can train a simple model [in the XOR training experiment](../xor_training).
 
 Run the following in the repository root:
 

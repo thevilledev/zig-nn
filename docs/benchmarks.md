@@ -291,7 +291,7 @@ driver, and cleanup support.
   comparisons are omitted, and quick mode skips the suite.
 - `training`: CPU `Network.trainBatch` loops plus `Network.trainBatchBackend`
   rows for Metal, CUDA, and ROCm when those backends are available.
-- `tiny_gpt`: legacy CPU TinyGPT forward passes through the example model, with
+- `tiny_gpt`: legacy CPU TinyGPT forward passes through the experiment model, with
   a larger four-layer decoder row in the default suite. The device decoder is
   covered by transfer/kernel/synchronization assertions and deterministic
   parity tests; add dedicated training and cached-generation timing rows before

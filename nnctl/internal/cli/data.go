@@ -48,7 +48,7 @@ func (a *App) runDataMNIST(ctx context.Context, dir string, force bool) error {
 }
 
 func (a *App) runDataTinyGPT(ctx context.Context) error {
-	script := filepath.Join(a.repoRoot, "examples", "tiny_gpt", "scripts", "prepare_data.sh")
+	script := filepath.Join(a.repoRoot, "experiments", "tiny_gpt", "scripts", "prepare_data.sh")
 	if !repo.FileExists(script) {
 		return fmt.Errorf("missing Tiny GPT data script at %s", script)
 	}

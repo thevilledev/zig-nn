@@ -1,6 +1,8 @@
 # Neural Network Architecture
 
-This document outlines the architectural design of our neural network implementation in Zig.
+This document maps the reusable implementation to the experiments that make
+each subsystem observable. Start with the [experiment guide](../experiments/README.md)
+when you prefer to learn by running code.
 
 ## Core Design Principles
 
@@ -11,13 +13,16 @@ This document outlines the architectural design of our neural network implementa
 
 ## Component Overview
 
-### Matrix Operations (`matrix.zig`)
+### [Matrix Operations](../src/matrix.zig)
 - Core mathematical operations
 - Memory-efficient implementation
 - Support for batch operations
 - Optimized for neural network computations
 
-### Layers (`layer.zig`)
+Try it in [Simple XOR](../experiments/simple_xor/simple_xor.zig) and
+[XOR Training](../experiments/xor_training/xor_training.zig).
+
+### [Layers](../src/layer.zig)
 Two main layer types:
 1. **Standard Layer**
    - Traditional fully connected layer
@@ -29,7 +34,10 @@ Two main layer types:
    - Dual weight matrices
    - Optimized gating operations
 
-### Network (`network.zig`)
+Try the standard path in [Binary Classification](../experiments/binary_classification/binary_classification.zig)
+and the gated path in [Gated Network](../experiments/gated_network/gated_network.zig).
+
+### [Network](../src/network.zig)
 - Flexible layer composition
 - Dynamic architecture building
 - Support for different loss functions:
@@ -38,7 +46,10 @@ Two main layer types:
   - Binary Cross Entropy
 - Mini-batch training capabilities
 
-### Tensor Runtime And Modules (`tensor.zig`, `modules.zig`, `training.zig`)
+Try it in [Regression](../experiments/regression/regression.zig) or
+[MNIST](../experiments/mnist/mnist.zig).
+
+### [Tensor Runtime](../src/tensor.zig), [Modules](../src/modules.zig), And [Training](../src/training.zig)
 
 - Rank-aware f32 tensors backed by the selected CPU, Metal, CUDA, or ROCm
   backend
@@ -49,7 +60,16 @@ Two main layer types:
 - Gradient accumulation, global-norm clipping, weight decay, and fused backend
   parameter updates
 
-### Backends (`backend.zig`, `cpu_backend.zig`, `metal_backend.zig`, `cuda_backend.zig`, `rocm_backend.zig`)
+Try them in [Optimizer Lab](../experiments/optimizer_lab/optimizer_lab.zig),
+[Padding Masks](../experiments/padding_masks/padding_masks.zig), and
+[Autoencoder](../experiments/autoencoder/autoencoder.zig).
+
+### Backends
+
+Implementations: [abstraction](../src/backend.zig), [CPU](../src/cpu_backend.zig),
+[Metal](../src/metal_backend.zig), [CUDA](../src/cuda_backend.zig), and
+[ROCm](../src/rocm_backend.zig).
+
 - `BackendMatrix` provides a separate backend-aware matrix API
 - CPU backend implements all backend matrix operations
 - Metal backend accelerates backend matrix operations on macOS
@@ -71,23 +91,41 @@ training works through explicit backend methods. Persistent backend training is
 available for standard and gated networks through `BackendTrainer`; the
 CPU-owned `Network.trainBatchBackend` and `Network.trainBackend` methods remain
 available for direct backend-aware training calls. GPU support should be
-verified through backend tests, GPU examples, backend training examples,
+verified through backend tests, GPU experiments, backend training experiments,
 snapshot inference checks, and benchmark rows for the target machine.
 
-### Quantization (`quantization.zig`)
+Try the abstraction in [Backend Demo](../experiments/backend_demo/backend_demo.zig)
+and [Backend Training](../experiments/backend_training/backend_training.zig),
+then verify device selection with [GPU Demo](../experiments/gpu/gpu.zig).
+
+### [Quantization](../src/quantization.zig)
 - Uniform scalar quantization baseline
 - TurboQuant-inspired rotated scalar quantization experiment
 - Vector metrics for MSE, max error, cosine similarity, inner-product error,
   and compression ratio
 - Intended for reproducible small experiments
 
-### Spatial Layers (`spatial.zig`)
+Try it in the [TurboQuant experiment](../experiments/quantization/README.md).
+
+### [Spatial Layers](../src/spatial.zig)
 
 - CPU-first `Conv2d` reference over flattened NHWC image batches
 - Explicit input, weight, and bias gradients for studying backpropagation
 - Max-pool forward and backward operations with inspectable gradient routing
 
-### Sequence Models (`recurrent.zig`, `transformer.zig`)
+Try them in [CNN](../experiments/cnn/cnn.zig).
+
+### [Audio Features](../src/audio.zig)
+
+- PCM16 WAV decoding and mono conversion
+- Linear resampling, FFT power spectra, mel filterbanks, and pooled log-mel
+  features
+- Host-side preprocessing with explicit normalization before tensor upload
+
+Try the complete pipeline in
+[Speech Commands](../experiments/speech_commands/README.md).
+
+### [Recurrent](../src/recurrent.zig) And [Transformer](../src/transformer.zig) Models
 
 - Device-backed GRU cell with input, recurrent, and parameter gradients for
   explicit backpropagation through time
@@ -100,7 +138,11 @@ snapshot inference checks, and benchmark rows for the target machine.
 - Pre-normalized encoder and decoder blocks with residual connections and GELU
   feed-forward networks
 
-### Text, Embeddings, And Structured Prediction (`text.zig`, `embeddings.zig`, `structured.zig`)
+Compare [GRU Sequence](../experiments/gru_sequence/gru_sequence.zig) with
+[Transformer Encoder](../experiments/transformer_encoder/transformer_encoder.zig),
+then inspect cross-attention in [Seq2Seq](../experiments/seq2seq/seq2seq.zig).
+
+### [Text](../src/text.zig), [Embeddings](../src/embeddings.zig), And [Structured Prediction](../src/structured.zig)
 
 - Byte-level tokenization and learned byte-pair merges with exact byte fallback
 - Skip-gram pair generation, unigram negative sampling, device-backed embedding
@@ -108,20 +150,29 @@ snapshot inference checks, and benchmark rows for the target machine.
 - Linear-chain CRF partition functions, marginal-based gradients, and Viterbi
   decoding for structured sequence labels
 
-### Decoding And Retrieval (`decoding.zig`, `retrieval.zig`)
+Try them in [Tokenizer Lab](../experiments/tokenizer_lab/tokenizer_lab.zig),
+[Word2Vec](../experiments/word2vec/word2vec.zig), and
+[Sequence Tagging](../experiments/sequence_tagging/sequence_tagging.zig).
+
+### [Decoding](../src/decoding.zig) And [Retrieval](../src/retrieval.zig)
 
 - Deterministic greedy decoding plus temperature, top-k, nucleus top-p, and
   repetition-penalty sampling
 - Device-resident symmetric InfoNCE over paired embedding batches
 - Exact host-side cosine top-k with deterministic tie-breaking
 
-### Reinforcement Learning (`reinforcement.zig`)
+Try them in [Decoding Lab](../experiments/decoding_lab/decoding_lab.zig) and
+[Semantic Search](../experiments/semantic_search/semantic_search.zig).
+
+### [Reinforcement Learning](../src/reinforcement.zig)
 
 - Fixed-capacity transition replay with seeded minibatch sampling
 - Linear epsilon-greedy exploration schedule
 - Terminal-aware one-step Bellman targets
-- Environment-specific interaction remains in examples rather than the core
+- Environment-specific interaction remains in experiments rather than the core
   library
+
+Try it in [DQN](../experiments/dqn/dqn.zig).
 
 ## Memory Management
 

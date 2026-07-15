@@ -5,7 +5,7 @@ const Matrix = nn.Matrix;
 const Activation = nn.Activation;
 const LossFunction = nn.LossFunction;
 
-/// This example demonstrates training a neural network on the XOR problem
+/// This experiment demonstrates training a neural network on the XOR problem
 /// XOR truth table:
 /// 0 XOR 0 = 0
 /// 0 XOR 1 = 1
@@ -34,7 +34,7 @@ pub fn main(init: std.process.Init) !void {
     const writer = &stdout_writer.interface;
     defer writer.flush() catch {};
 
-    try writer.print("\n=== XOR Neural Network Training Example ===\n\n", .{});
+    try writer.print("\n=== XOR Neural Network Training Experiment ===\n\n", .{});
 
     // Create a network with two hidden layers and Mean Squared Error loss
     // Use a higher learning rate for faster convergence

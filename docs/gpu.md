@@ -7,7 +7,7 @@ operations backend-neutral; it does not by itself prove that a GPU was selected.
 
 ## Current Backend Boundary
 
-- `src/matrix.zig` powers the high-level `Network`, `Layer`, training examples,
+- `src/matrix.zig` powers the high-level `Network`, `Layer`, training experiments,
   and default inference helpers.
 - `src/backend.zig`, `src/cpu_backend.zig`, `src/metal_backend.zig`,
   `src/cuda_backend.zig`, and `src/rocm_backend.zig` power the backend-aware
@@ -39,7 +39,7 @@ operations backend-neutral; it does not by itself prove that a GPU was selected.
   the selected backend.
 - The optimizer, padding-mask, Word2Vec, text-classifier, autoencoder, GRU,
   Transformer encoder, Seq2Seq, semantic-search, and DQN lessons use that device
-  path. Their examples report training-time readbacks so unintended host
+  path. Their experiments report training-time readbacks so unintended host
   boundaries remain visible.
 - Batched matmul, masked softmax and its backward pass, split/merge-head
   transforms, embedding gradients, cross-attention, and symmetric InfoNCE are
@@ -53,7 +53,7 @@ operations backend-neutral; it does not by itself prove that a GPU was selected.
   gradients over accelerator kernels.
 - DQN runs its MLP updates on the selected backend but intentionally reads Q
   values to the host for environment actions and Bellman-target construction.
-  The example reports this boundary instead of presenting it as device-resident.
+  The experiment reports this boundary instead of presenting it as device-resident.
 - `Transformer.Decoder` keeps embeddings, decoder blocks, optimizer updates,
   and KV caches on one backend. Linear/GELU/layer-normalization, causal
   attention, their backward passes, and embedding gradients have native Metal,

@@ -17,7 +17,7 @@ If a tool is missing, run `mise install` from the repository root. Do not run `c
 Run the smallest check set that covers the files you changed:
 
 - Go changes under `nnctl/`: `mise run go:lint` and `mise run go:test`
-- Zig source, examples, benchmarks, or build files: `mise run zig:test`
+- Zig source, experiments, benchmarks, or build files: `mise run zig:test`
 - Zig acceptance behavior: `mise run zig:test-acceptance`
 - GitHub Actions workflow changes: `mise run actions:lint`
 - Hook, formatting, or repository hygiene changes: `mise run hooks:check`

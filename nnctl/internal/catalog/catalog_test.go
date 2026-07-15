@@ -2,165 +2,167 @@ package catalog
 
 import "testing"
 
-func TestResolveExampleAliases(t *testing.T) {
-	example, ok := ResolveExample("example-network-visualization")
-	if !ok {
-		t.Fatal("expected alias to resolve")
-	}
-	if example.Step != "run_network_visualisation" {
-		t.Fatalf("unexpected step: %s", example.Step)
+func TestResolveExperimentAliases(t *testing.T) {
+	for _, name := range []string{"experiment-network-visualization", "example-network-visualization"} {
+		experiment, ok := ResolveExperiment(name)
+		if !ok {
+			t.Fatalf("expected %q alias to resolve", name)
+		}
+		if experiment.Step != "run_network_visualisation" {
+			t.Fatalf("unexpected step for %q: %s", name, experiment.Step)
+		}
 	}
 }
 
-func TestResolveTinyGPTOpenAIExample(t *testing.T) {
-	example, ok := ResolveExample("tiny_gpt_openai")
+func TestResolveTinyGPTOpenAIExperiment(t *testing.T) {
+	experiment, ok := ResolveExperiment("tiny_gpt_openai")
 	if !ok {
 		t.Fatal("expected tiny_gpt_openai to resolve")
 	}
-	if example.Step != "run_tiny_gpt_openai" {
-		t.Fatalf("unexpected step: %s", example.Step)
+	if experiment.Step != "run_tiny_gpt_openai" {
+		t.Fatalf("unexpected step: %s", experiment.Step)
 	}
 }
 
-func TestResolveOptimizerLabExample(t *testing.T) {
-	example, ok := ResolveExample("optimizer_lab")
+func TestResolveOptimizerLabExperiment(t *testing.T) {
+	experiment, ok := ResolveExperiment("optimizer_lab")
 	if !ok {
 		t.Fatal("expected optimizer_lab to resolve")
 	}
-	if example.Step != "run_optimizer_lab" {
-		t.Fatalf("unexpected step: %s", example.Step)
+	if experiment.Step != "run_optimizer_lab" {
+		t.Fatalf("unexpected step: %s", experiment.Step)
 	}
-	if example.DefaultGPU != "auto" || !example.Quick {
-		t.Fatalf("unexpected optimizer lab defaults: %+v", example)
+	if experiment.DefaultGPU != "auto" || !experiment.Quick {
+		t.Fatalf("unexpected optimizer lab defaults: %+v", experiment)
 	}
 }
 
-func TestResolveTokenizerLabExample(t *testing.T) {
-	example, ok := ResolveExample("tokenizer_lab")
+func TestResolveTokenizerLabExperiment(t *testing.T) {
+	experiment, ok := ResolveExperiment("tokenizer_lab")
 	if !ok {
 		t.Fatal("expected tokenizer_lab to resolve")
 	}
-	if example.Step != "run_tokenizer_lab" || !example.Quick {
-		t.Fatalf("unexpected tokenizer lab example: %+v", example)
+	if experiment.Step != "run_tokenizer_lab" || !experiment.Quick {
+		t.Fatalf("unexpected tokenizer lab experiment: %+v", experiment)
 	}
 }
 
-func TestResolvePaddingMasksExample(t *testing.T) {
-	example, ok := ResolveExample("padding_masks")
+func TestResolvePaddingMasksExperiment(t *testing.T) {
+	experiment, ok := ResolveExperiment("padding_masks")
 	if !ok {
 		t.Fatal("expected padding_masks to resolve")
 	}
-	if example.Step != "run_padding_masks" || example.DefaultGPU != "auto" || !example.Quick {
-		t.Fatalf("unexpected padding masks example: %+v", example)
+	if experiment.Step != "run_padding_masks" || experiment.DefaultGPU != "auto" || !experiment.Quick {
+		t.Fatalf("unexpected padding masks experiment: %+v", experiment)
 	}
 }
 
-func TestResolveWord2VecExample(t *testing.T) {
-	example, ok := ResolveExample("word2vec")
+func TestResolveWord2VecExperiment(t *testing.T) {
+	experiment, ok := ResolveExperiment("word2vec")
 	if !ok {
 		t.Fatal("expected word2vec to resolve")
 	}
-	if example.Step != "run_word2vec" || example.DefaultGPU != "auto" || example.Quick {
-		t.Fatalf("unexpected word2vec example: %+v", example)
+	if experiment.Step != "run_word2vec" || experiment.DefaultGPU != "auto" || experiment.Quick {
+		t.Fatalf("unexpected word2vec experiment: %+v", experiment)
 	}
 }
 
-func TestResolveTextClassifierExample(t *testing.T) {
-	example, ok := ResolveExample("text_classifier")
+func TestResolveTextClassifierExperiment(t *testing.T) {
+	experiment, ok := ResolveExperiment("text_classifier")
 	if !ok {
 		t.Fatal("expected text_classifier to resolve")
 	}
-	if example.Step != "run_text_classifier" || example.DefaultGPU != "auto" || example.Quick {
-		t.Fatalf("unexpected text classifier example: %+v", example)
+	if experiment.Step != "run_text_classifier" || experiment.DefaultGPU != "auto" || experiment.Quick {
+		t.Fatalf("unexpected text classifier experiment: %+v", experiment)
 	}
 }
 
-func TestResolveSequenceTaggingExample(t *testing.T) {
-	example, ok := ResolveExample("sequence_tagging")
+func TestResolveSequenceTaggingExperiment(t *testing.T) {
+	experiment, ok := ResolveExperiment("sequence_tagging")
 	if !ok {
 		t.Fatal("expected sequence_tagging to resolve")
 	}
-	if example.Step != "run_sequence_tagging" || !example.Quick {
-		t.Fatalf("unexpected sequence tagging example: %+v", example)
+	if experiment.Step != "run_sequence_tagging" || !experiment.Quick {
+		t.Fatalf("unexpected sequence tagging experiment: %+v", experiment)
 	}
 }
 
-func TestResolveDecodingLabExample(t *testing.T) {
-	example, ok := ResolveExample("decoding_lab")
+func TestResolveDecodingLabExperiment(t *testing.T) {
+	experiment, ok := ResolveExperiment("decoding_lab")
 	if !ok {
 		t.Fatal("expected decoding_lab to resolve")
 	}
-	if example.Step != "run_decoding_lab" || !example.Quick {
-		t.Fatalf("unexpected decoding lab example: %+v", example)
+	if experiment.Step != "run_decoding_lab" || !experiment.Quick {
+		t.Fatalf("unexpected decoding lab experiment: %+v", experiment)
 	}
 }
 
-func TestResolveSeq2SeqExample(t *testing.T) {
-	example, ok := ResolveExample("seq2seq")
+func TestResolveSeq2SeqExperiment(t *testing.T) {
+	experiment, ok := ResolveExperiment("seq2seq")
 	if !ok {
 		t.Fatal("expected seq2seq to resolve")
 	}
-	if example.Step != "run_seq2seq" || example.DefaultGPU != "auto" || example.Quick {
-		t.Fatalf("unexpected seq2seq example: %+v", example)
+	if experiment.Step != "run_seq2seq" || experiment.DefaultGPU != "auto" || experiment.Quick {
+		t.Fatalf("unexpected seq2seq experiment: %+v", experiment)
 	}
 }
 
-func TestResolveSemanticSearchExample(t *testing.T) {
-	example, ok := ResolveExample("semantic_search")
+func TestResolveSemanticSearchExperiment(t *testing.T) {
+	experiment, ok := ResolveExperiment("semantic_search")
 	if !ok {
 		t.Fatal("expected semantic_search to resolve")
 	}
-	if example.Step != "run_semantic_search" || example.DefaultGPU != "auto" || !example.Quick {
-		t.Fatalf("unexpected semantic search example: %+v", example)
+	if experiment.Step != "run_semantic_search" || experiment.DefaultGPU != "auto" || !experiment.Quick {
+		t.Fatalf("unexpected semantic search experiment: %+v", experiment)
 	}
 }
 
-func TestResolveCNNExample(t *testing.T) {
-	example, ok := ResolveExample("cnn")
+func TestResolveCNNExperiment(t *testing.T) {
+	experiment, ok := ResolveExperiment("cnn")
 	if !ok {
 		t.Fatal("expected cnn to resolve")
 	}
-	if example.Step != "run_cnn" || example.Quick {
-		t.Fatalf("unexpected cnn example: %+v", example)
+	if experiment.Step != "run_cnn" || experiment.Quick {
+		t.Fatalf("unexpected cnn experiment: %+v", experiment)
 	}
 }
 
-func TestResolveAutoencoderExample(t *testing.T) {
-	example, ok := ResolveExample("autoencoder")
+func TestResolveAutoencoderExperiment(t *testing.T) {
+	experiment, ok := ResolveExperiment("autoencoder")
 	if !ok {
 		t.Fatal("expected autoencoder to resolve")
 	}
-	if example.Step != "run_autoencoder" || example.DefaultGPU != "auto" || example.Quick {
-		t.Fatalf("unexpected autoencoder example: %+v", example)
+	if experiment.Step != "run_autoencoder" || experiment.DefaultGPU != "auto" || experiment.Quick {
+		t.Fatalf("unexpected autoencoder experiment: %+v", experiment)
 	}
 }
 
-func TestResolveGRUSequenceExample(t *testing.T) {
-	example, ok := ResolveExample("gru_sequence")
+func TestResolveGRUSequenceExperiment(t *testing.T) {
+	experiment, ok := ResolveExperiment("gru_sequence")
 	if !ok {
 		t.Fatal("expected gru_sequence to resolve")
 	}
-	if example.Step != "run_gru_sequence" || example.DefaultGPU != "auto" || example.Quick {
-		t.Fatalf("unexpected gru sequence example: %+v", example)
+	if experiment.Step != "run_gru_sequence" || experiment.DefaultGPU != "auto" || experiment.Quick {
+		t.Fatalf("unexpected gru sequence experiment: %+v", experiment)
 	}
 }
 
-func TestResolveTransformerEncoderExample(t *testing.T) {
-	example, ok := ResolveExample("transformer_encoder")
+func TestResolveTransformerEncoderExperiment(t *testing.T) {
+	experiment, ok := ResolveExperiment("transformer_encoder")
 	if !ok {
 		t.Fatal("expected transformer_encoder to resolve")
 	}
-	if example.Step != "run_transformer_encoder" || example.DefaultGPU != "auto" || example.Quick {
-		t.Fatalf("unexpected transformer encoder example: %+v", example)
+	if experiment.Step != "run_transformer_encoder" || experiment.DefaultGPU != "auto" || experiment.Quick {
+		t.Fatalf("unexpected transformer encoder experiment: %+v", experiment)
 	}
 }
 
-func TestResolveDQNExample(t *testing.T) {
-	example, ok := ResolveExample("dqn")
+func TestResolveDQNExperiment(t *testing.T) {
+	experiment, ok := ResolveExperiment("dqn")
 	if !ok {
 		t.Fatal("expected dqn to resolve")
 	}
-	if example.Step != "run_dqn" || example.DefaultGPU != "auto" || example.Quick {
-		t.Fatalf("unexpected dqn example: %+v", example)
+	if experiment.Step != "run_dqn" || experiment.DefaultGPU != "auto" || experiment.Quick {
+		t.Fatalf("unexpected dqn experiment: %+v", experiment)
 	}
 }

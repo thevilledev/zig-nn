@@ -97,9 +97,9 @@ const fallback_toy_corpus =
     \\
 ;
 
-const toy_corpus_path = "examples/tiny_gpt/data/toy.txt";
-const shakespeare_corpus_path = "examples/tiny_gpt/data/shakespeare/input.txt";
-const tinystories_corpus_path = "examples/tiny_gpt/data/tinystories/tinystories_1mb.txt";
+const toy_corpus_path = "experiments/tiny_gpt/data/toy.txt";
+const shakespeare_corpus_path = "experiments/tiny_gpt/data/shakespeare/input.txt";
+const tinystories_corpus_path = "experiments/tiny_gpt/data/tinystories/tinystories_1mb.txt";
 const max_corpus_bytes = 8 * 1024 * 1024;
 fn loadCorpus(allocator: std.mem.Allocator, options: CliOptions) !Corpus {
     if (options.corpus_path) |path| {
@@ -863,7 +863,7 @@ pub fn main(init: std.process.Init) !void {
         try writeTextFile(path, summary_json);
     }
 
-    try stdout.print("\n=== Tiny GPT Example ===\n\n", .{});
+    try stdout.print("\n=== TinyGPT Experiment ===\n\n", .{});
     try stdout.print("Architecture: {} layers, {} heads, {} channels, block size {}, vocab {}\n", .{
         config.n_layer,
         config.n_head,

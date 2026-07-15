@@ -1,6 +1,6 @@
-# Quantization Examples
+# Quantization Experiments
 
-This directory contains reproducible quantization experiments. Each example
+This directory contains reproducible quantization experiments. Each experiment
 should be runnable through `zig build`, print comparable metrics, and keep
 reusable code in `src/`.
 
@@ -36,7 +36,7 @@ that quantize deterministic per-head key/value vectors. Run them with:
 zig build benchmark -- --filter quantization
 ```
 
-The current example implements:
+The current experiment implements:
 
 - uniform scalar quantization baseline
 - deterministic random sign plus normalized Hadamard rotation

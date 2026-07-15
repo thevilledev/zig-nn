@@ -2,6 +2,12 @@
 
 This library implements several advanced activation functions used in modern neural networks. These functions are particularly important in transformer architectures and have shown significant improvements over traditional activation functions.
 
+Read the implementation in [`src/activation.zig`](../src/activation.zig) and
+[`src/layer.zig`](../src/layer.zig), run the
+[Gated Network experiment](../experiments/gated_network/gated_network.zig), and
+use [Research Resources](research.md#activations-and-gating) for the primary
+papers.
+
 ## Overview
 
 The activation functions in this library are implemented with a focus on:

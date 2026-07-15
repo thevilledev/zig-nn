@@ -5,7 +5,7 @@ const Matrix = nn.Matrix;
 const Activation = nn.Activation;
 const visualiseNetwork = nn.visualiseNetwork;
 
-/// This example demonstrates visualizing different neural network architectures
+/// This experiment demonstrates visualizing different neural network architectures
 /// using the ASCII visualization tool.
 pub fn main() !void {
     // Initialize allocator

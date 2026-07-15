@@ -44,7 +44,7 @@ func (a *App) newRootCommand() *cobra.Command {
 	root := &cobra.Command{
 		Use:           "nnctl",
 		Short:         "Repository task runner for zig-nn",
-		Long:          "nnctl builds, tests, runs examples, prepares data, and trains or serves the TinyGPT demo in this repository.",
+		Long:          "nnctl builds, tests, runs experiments, prepares data, and trains or serves the TinyGPT demo in this repository.",
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		Version:       fmt.Sprintf("dev (%s)", runtime.Version()),
@@ -69,7 +69,7 @@ func (a *App) newRootCommand() *cobra.Command {
 		a.newBenchmarkCommand(withRepo),
 		a.newDeployCommand(withRepo),
 		a.newCloudCommand(withRepo),
-		a.newExamplesCommand(withRepo),
+		a.newExperimentsCommand(withRepo),
 		a.newRunCommand(withRepo),
 		a.newTrainCommand(withRepo),
 		a.newChatCommand(withRepo),
@@ -91,8 +91,8 @@ func (a *App) newAllCommand(withRepo repoRunner) *cobra.Command {
 	}
 	cmd := &cobra.Command{
 		Use:   "all",
-		Short: "Build, test, and build examples",
-		Long:  "Builds the library, runs unit tests, runs acceptance tests, and builds all examples.",
+		Short: "Build, test, and build experiments",
+		Long:  "Builds the library, runs unit tests, runs acceptance tests, and builds all experiments.",
 		Args:  cobra.NoArgs,
 		RunE: withRepo(func(ctx context.Context, cmd *cobra.Command, args []string) error {
 			return a.runAll(ctx, opts)
@@ -558,17 +558,18 @@ func (a *App) newCloudPricingCommand() *cobra.Command {
 	return cmd
 }
 
-func (a *App) newExamplesCommand(withRepo repoRunner) *cobra.Command {
+func (a *App) newExperimentsCommand(withRepo repoRunner) *cobra.Command {
 	opts := buildOptions{
 		mode: getenvDefault("NNCTL_OPTIMIZE", getenvDefault("BUILD_MODE", defaultBuildMode)),
 	}
 	cmd := &cobra.Command{
-		Use:   "examples",
-		Short: "Build all examples",
-		Long:  "Builds all example executables without running them. Use nnctl run <example> to run one example.",
-		Args:  cobra.NoArgs,
+		Use:     "experiments",
+		Aliases: []string{"examples"},
+		Short:   "Build all experiments",
+		Long:    "Builds all experiment executables without running them. Use nnctl run <experiment> to run one experiment.",
+		Args:    cobra.NoArgs,
 		RunE: withRepo(func(ctx context.Context, cmd *cobra.Command, args []string) error {
-			return a.runExamples(ctx, opts)
+			return a.runExperiments(ctx, opts)
 		}),
 	}
 	addModeFlags(cmd, &opts.mode)
@@ -580,9 +581,9 @@ func (a *App) newRunCommand(withRepo repoRunner) *cobra.Command {
 	mode := ""
 	gpu := ""
 	cmd := &cobra.Command{
-		Use:   "run <example>",
-		Short: "Run an example",
-		Long:  `Runs a named example. Flags configure the Zig build. Args after "--" are passed to the example executable.`,
+		Use:   "run <experiment>",
+		Short: "Run an experiment",
+		Long:  `Runs a named experiment. Flags configure the Zig build. Args after "--" are passed to the experiment executable.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return cmd.Help()
 		},
@@ -592,30 +593,30 @@ func (a *App) newRunCommand(withRepo repoRunner) *cobra.Command {
 
 	quick := &cobra.Command{
 		Use:   "quick",
-		Short: `Run all examples marked as quick`,
+		Short: `Run all experiments marked as quick`,
 		Args:  cobra.ArbitraryArgs,
 		RunE: withRepo(func(ctx context.Context, cmd *cobra.Command, args []string) error {
-			return a.runExample(ctx, "quick", nil, mode, gpu)
+			return a.runExperiment(ctx, "quick", nil, mode, gpu)
 		}),
 	}
 	cmd.AddCommand(quick)
 
-	for _, example := range catalog.SortedExamples() {
-		if example.Hidden {
+	for _, experiment := range catalog.SortedExperiments() {
+		if experiment.Hidden {
 			continue
 		}
-		example := example
-		exampleCmd := &cobra.Command{
-			Use:     example.Name + " [-- example args]",
-			Aliases: exampleAliases(example),
-			Short:   example.Description,
-			Long:    exampleHelpLong(example),
+		experiment := experiment
+		experimentCmd := &cobra.Command{
+			Use:     experiment.Name + " [-- experiment args]",
+			Aliases: experimentAliases(experiment),
+			Short:   experiment.Description,
+			Long:    experimentHelpLong(experiment),
 			Args:    cobra.ArbitraryArgs,
 			RunE: withRepo(func(ctx context.Context, cmd *cobra.Command, args []string) error {
-				return a.runExample(ctx, example.Name, args, mode, gpu)
+				return a.runExperiment(ctx, experiment.Name, args, mode, gpu)
 			}),
 		}
-		cmd.AddCommand(exampleCmd)
+		cmd.AddCommand(experimentCmd)
 	}
 	return cmd
 }
@@ -673,7 +674,7 @@ Runs include an explicit train/eval split, validation loss, scheduled learning r
 
 Corpora:
   auto         Use prepared TinyStories, then Tiny Shakespeare, then toy.
-  toy          Always available from examples/tiny_gpt/data/toy.txt.
+  toy          Always available from experiments/tiny_gpt/data/toy.txt.
   shakespeare  Requires "nnctl data tiny-gpt".
   tinystories  Requires "nnctl data tiny-gpt".
 
@@ -734,7 +735,7 @@ func (a *App) newChatCommand(withRepo repoRunner) *cobra.Command {
 func (a *App) newListCommand(root *cobra.Command) *cobra.Command {
 	return &cobra.Command{
 		Use:   "list [topic]",
-		Short: "List tasks, examples, or tests",
+		Short: "List tasks, experiments, or tests",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			topic := "tasks"
@@ -744,8 +745,8 @@ func (a *App) newListCommand(root *cobra.Command) *cobra.Command {
 			switch topic {
 			case "tasks", "commands":
 				return root.Help()
-			case "examples", "example":
-				a.listExamples()
+			case "experiments", "experiment", "examples", "example":
+				a.listExperiments()
 			case "tests", "test":
 				a.listTests()
 			default:
@@ -788,7 +789,7 @@ func (a *App) newCleanCommand(withRepo repoRunner) *cobra.Command {
 func (a *App) newDataCommand(withRepo repoRunner) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "data <command>",
-		Short: "Download or prepare example data",
+		Short: "Download or prepare experiment data",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return cmd.Help()
 		},
@@ -824,7 +825,7 @@ func (a *App) newDataMNISTCommand(withRepo repoRunner) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "mnist",
 		Short: "Download and extract the MNIST dataset",
-		Long:  "Downloads and extracts the four MNIST IDX files expected by the MNIST example.",
+		Long:  "Downloads and extracts the four MNIST IDX files expected by the MNIST experiment.",
 		Args:  cobra.NoArgs,
 		RunE: withRepo(func(ctx context.Context, cmd *cobra.Command, args []string) error {
 			return a.runDataMNIST(ctx, dir, force)
@@ -844,9 +845,9 @@ func (a *App) newDataTinyGPTCommand(withRepo repoRunner) *cobra.Command {
 		Long: `Downloads Tiny Shakespeare and a TinyStories validation split, then writes a small TinyStories slice used by the TinyGPT preset.
 
 Prepared files:
-  examples/tiny_gpt/data/shakespeare/input.txt
-  examples/tiny_gpt/data/tinystories/valid.txt
-  examples/tiny_gpt/data/tinystories/tinystories_1mb.txt
+  experiments/tiny_gpt/data/shakespeare/input.txt
+  experiments/tiny_gpt/data/tinystories/valid.txt
+  experiments/tiny_gpt/data/tinystories/tinystories_1mb.txt
 
 The checked-in toy corpus works offline and does not need this command.
 Set TINYSTORIES_BYTES before running to change the TinyStories slice size.`,
@@ -886,7 +887,7 @@ Common workflows:
 
 Corpora:
   auto         Use prepared TinyStories, then Tiny Shakespeare, then toy.
-  toy          Works offline from examples/tiny_gpt/data/toy.txt.
+  toy          Works offline from experiments/tiny_gpt/data/toy.txt.
   shakespeare  Requires "nnctl data tiny-gpt".
   tinystories  Requires "nnctl data tiny-gpt".
 
@@ -962,18 +963,18 @@ func modeFlagChanged(cmd *cobra.Command) bool {
 	return cmd.Flags().Changed("mode") || cmd.Flags().Changed("optimize")
 }
 
-func exampleAliases(example catalog.Example) []string {
-	aliases := append([]string(nil), example.Aliases...)
-	underscored := strings.ReplaceAll(example.Name, "-", "_")
-	if underscored != example.Name {
+func experimentAliases(experiment catalog.Experiment) []string {
+	aliases := append([]string(nil), experiment.Aliases...)
+	underscored := strings.ReplaceAll(experiment.Name, "-", "_")
+	if underscored != experiment.Name {
 		aliases = append(aliases, underscored)
 	}
 	return aliases
 }
 
-func exampleHelpLong(example catalog.Example) string {
-	if catalog.NormalizeName(example.Name) != "tiny-gpt" {
-		return example.Description
+func experimentHelpLong(experiment catalog.Experiment) string {
+	if catalog.NormalizeName(experiment.Name) != "tiny-gpt" {
+		return experiment.Description
 	}
 	return `Runs the TinyGPT demo. This path does quick output-head training by default, then samples text. Pass TinyGPT flags after "--".
 

@@ -341,7 +341,7 @@ fn printFilter(convolution: nn.Spatial.Conv2d, output_channel: usize) void {
     }
 }
 
-test "CNN example learns orientation from synthetic images" {
+test "CNN experiment learns orientation from synthetic images" {
     const testing = std.testing;
     var training_data = try generatePatterns(testing.allocator, train_samples, 41);
     defer training_data.deinit();

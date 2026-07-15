@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-type Example struct {
+type Experiment struct {
 	Name            string
 	Step            string
 	Description     string
@@ -16,7 +16,7 @@ type Example struct {
 	Aliases         []string
 }
 
-var examples = []Example{
+var experiments = []Experiment{
 	{Name: "simple-xor", Step: "run_simple_xor", Description: "Run simple XOR", Quick: true},
 	{Name: "gated-network", Step: "run_gated_network", Description: "Run gated network", Quick: true},
 	{Name: "xor-training", Step: "run_xor_training", Description: "Run XOR training with backpropagation"},
@@ -40,12 +40,12 @@ var examples = []Example{
 	{Name: "gru-sequence", Step: "run_gru_sequence", Description: "Learn selective sequence memory with a GRU", DefaultGPU: "auto"},
 	{Name: "transformer-encoder", Step: "run_transformer_encoder", Description: "Learn bidirectional context with a Transformer encoder", DefaultGPU: "auto"},
 	{Name: "dqn", Step: "run_dqn", Description: "Learn value-based reinforcement learning with DQN", DefaultGPU: "auto"},
-	{Name: "serving", Step: "run_serving", Description: "Run serving example"},
-	{Name: "mnist", Step: "run_mnist", Description: "Run MNIST example"},
-	{Name: "gpu", Step: "run_gpu", Description: "Run GPU example", DefaultGPU: "auto", Quick: true},
-	{Name: "gpu-metal", Step: "run_gpu", Description: "Run GPU example with Metal", DefaultGPU: "metal"},
-	{Name: "gpu-cuda", Step: "run_gpu", Description: "Run GPU example with CUDA", DefaultGPU: "cuda"},
-	{Name: "gpu-rocm", Step: "run_gpu", Description: "Run GPU example with ROCm", DefaultGPU: "rocm"},
+	{Name: "serving", Step: "run_serving", Description: "Run serving experiment"},
+	{Name: "mnist", Step: "run_mnist", Description: "Run MNIST experiment"},
+	{Name: "gpu", Step: "run_gpu", Description: "Run GPU experiment", DefaultGPU: "auto", Quick: true},
+	{Name: "gpu-metal", Step: "run_gpu", Description: "Run GPU experiment with Metal", DefaultGPU: "metal"},
+	{Name: "gpu-cuda", Step: "run_gpu", Description: "Run GPU experiment with CUDA", DefaultGPU: "cuda"},
+	{Name: "gpu-rocm", Step: "run_gpu", Description: "Run GPU experiment with ROCm", DefaultGPU: "rocm"},
 	{Name: "gpu-benchmark", Step: "run_gpu_benchmark", Description: "Benchmark GPU backend against CPU", DefaultGPU: "auto", DefaultOptimize: "ReleaseFast"},
 	{Name: "turboquant", Step: "run_turboquant", Description: "Run TurboQuant paper lab", Quick: true},
 	{Name: "tiny-gpt", Step: "run_tiny_gpt", Description: "Run tiny GPT decoder-only Transformer", Quick: true},
@@ -98,12 +98,12 @@ var tests = []string{
 	"tiny-gpt-openai",
 }
 
-func Examples() []Example {
-	return append([]Example(nil), examples...)
+func Experiments() []Experiment {
+	return append([]Experiment(nil), experiments...)
 }
 
-func SortedExamples() []Example {
-	sorted := Examples()
+func SortedExperiments() []Experiment {
+	sorted := Experiments()
 	sort.Slice(sorted, func(i, j int) bool {
 		return sorted[i].Name < sorted[j].Name
 	})
@@ -114,24 +114,25 @@ func Tests() []string {
 	return append([]string(nil), tests...)
 }
 
-func ResolveExample(name string) (Example, bool) {
+func ResolveExperiment(name string) (Experiment, bool) {
 	normalized := NormalizeName(name)
-	for _, example := range examples {
-		if NormalizeName(example.Name) == normalized {
-			return example, true
+	for _, experiment := range experiments {
+		if NormalizeName(experiment.Name) == normalized {
+			return experiment, true
 		}
-		for _, alias := range example.Aliases {
+		for _, alias := range experiment.Aliases {
 			if NormalizeName(alias) == normalized {
-				return example, true
+				return experiment, true
 			}
 		}
 	}
-	return Example{}, false
+	return Experiment{}, false
 }
 
 func NormalizeName(name string) string {
 	name = strings.TrimSpace(strings.ToLower(name))
 	name = strings.TrimPrefix(name, "example-")
+	name = strings.TrimPrefix(name, "experiment-")
 	name = strings.ReplaceAll(name, "_", "-")
 	return name
 }

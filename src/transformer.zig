@@ -549,7 +549,7 @@ pub const FullSelfAttention = struct {
 /// Encoder-decoder attention: decoder queries attend to a separate encoder
 /// memory. The returned attention matrix has shape
 /// `[decoder_tokens, encoder_tokens]`, which makes learned alignments directly
-/// inspectable in teaching examples.
+/// inspectable in teaching experiments.
 pub const CrossAttention = struct {
     query: Linear,
     key: Linear,

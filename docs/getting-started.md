@@ -27,21 +27,23 @@ nnctl run quick
 ```
 
 `nnctl all` builds the library, runs the unit and acceptance tests, and builds
-all examples. `nnctl run quick` runs the quick examples that do not require an
+all experiments. `nnctl run quick` runs the quick experiments that do not require an
 external data file or a saved model.
 
 `go install` writes the executable to Go's install bin directory. In a standard
 Go setup that directory is already on your `PATH`.
 
-If a GPU toolchain is unavailable on your machine, run individual CPU examples
-from [Examples](examples.md) instead of the full `run-examples` target.
+If a GPU toolchain is unavailable, the CPU experiments still work and `auto`
+may fall back to CPU. Choose an individual program from the
+[experiment guide](../experiments/README.md); explicit `metal`, `cuda`, and
+`rocm` requests require the corresponding toolchain.
 
 ## Common nnctl Commands
 
 ```bash
 nnctl build
 nnctl test
-nnctl examples
+nnctl experiments
 nnctl run quick
 nnctl data tiny-gpt
 nnctl data speech-commands
@@ -65,8 +67,11 @@ nnctl release --mode ReleaseFast
 zig build
 zig build test
 zig build test-acceptance
-zig build examples
+zig build experiments
 ```
+
+The former `nnctl examples` and `zig build examples` spellings remain as
+compatibility aliases.
 
 Individual test steps are also available:
 
@@ -100,7 +105,7 @@ zig build test-rocm_backend
 
 ## Data And Model Files
 
-Most examples are self-contained. Some workflows use local data or checkpoints:
+Most experiments are self-contained. Some workflows use local data or checkpoints:
 
 - MNIST expects the dataset files. Use `nnctl data mnist`, then run
   `nnctl run mnist`.
@@ -113,4 +118,5 @@ Most examples are self-contained. Some workflows use local data or checkpoints:
   locally trained checkpoint. Run `nnctl data speech-commands`, then
   `nnctl train speech-commands --output speech-commands.bin`.
 
-See [Examples](examples.md) for the full example list.
+See [Experiments](../experiments/README.md) for the complete catalog and the
+evidence each program is designed to expose.

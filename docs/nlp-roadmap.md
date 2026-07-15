@@ -1,33 +1,25 @@
 # NLP And Adjacent Learning Roadmap
 
-The NLP path is organized as small, inspectable lessons. Reusable mechanics
-live in `src/`; every feature has a runnable example that exposes the data,
-objective, gradients, and evaluation signal.
+The NLP path is organized as small, inspectable experiments. Reusable mechanics
+live in `src/`; each implemented feature has a runnable program that exposes
+the data, objective, gradients, and evaluation signal.
 
-## Current Learning Path
+## Implemented Learning Path
 
-| Lesson | Run | Reusable feature | What to inspect |
-| --- | --- | --- | --- |
-| Tokenizer lab | `nnctl run tokenizer-lab` | Byte fallback and learned byte-pair encoding | Merge learning, vocabulary growth, unknown-free byte round trips |
-| Padding masks | `nnctl run padding-masks` | Batched matmul, masked softmax/backward, dropout, masked sparse loss, head layouts | Why padded values must not affect attention or pooling |
-| Word2Vec | `nnctl run word2vec` | Skip-gram pairs, unigram negative sampling, two embedding tables | How prediction turns co-occurrence into vector neighborhoods |
-| Speech commands | `nnctl run speech-commands` | PCM16 WAV decoding, resampling, FFT, and pooled log-mel features | Closed-set keyword recognition, speaker-disjoint evaluation, and checkpoint compatibility |
-| Text classifier | `nnctl run text-classifier` | Padding-aware multi-head encoder | Contextual classification with learned embeddings and masked pooling |
-| Sequence tagging | `nnctl run sequence-tagging` | Linear-chain CRF, forward-backward, Viterbi | Local emission scores versus globally valid BIO sequences |
-| Decoding lab | `nnctl run decoding-lab` | Greedy, temperature, top-k, nucleus top-p, repetition penalty | How truncation changes a next-token distribution |
-| Seq2Seq | `nnctl run seq2seq` | Cross-attention with query and memory gradients | Learned target-to-source alignment during translation and reordering |
-| Semantic search | `nnctl run semantic-search` | Symmetric InfoNCE and deterministic top-k cosine ranking | Dual encoders, in-batch negatives, recall@1, and MRR |
-| Tiny GPT | `nnctl run tiny-gpt` | Decoder-only Transformer and KV cache | Autoregressive training, checkpointing, serving, and sampling |
+The authoritative sequence, commands, source links, and expected evidence now
+live in [Language, Retrieval, and Sequence Models](../experiments/README.md#language-retrieval-and-sequence-models).
+That catalog covers tokenization through retrieval and generation without
+duplicating the same table here.
 
-Most examples use tiny synthetic or checked-in datasets so the lesson remains
-repeatable. Speech Commands uses a reproducible external teaching dataset.
-Their metrics demonstrate mechanics, not production model quality.
+Most experiments use tiny synthetic or checked-in datasets so the lesson
+remains repeatable. Speech Commands uses a reproducible external teaching
+dataset. Their metrics demonstrate mechanics, not production model quality.
 
 ## GPU Boundary
 
 Using `Tensor` means an operation is backend-neutral; it is GPU-accelerated
 only when the build enables a GPU backend and `Device` actually selects it.
-Run an example with `-Dgpu=auto` through Zig or use its `nnctl` command, which
+Run an experiment with `-Dgpu=auto` through Zig or use its `nnctl` command, which
 supplies the catalogued backend default.
 
 | Area | Device-resident work | Intentional host work |
@@ -47,12 +39,12 @@ requirements and verification commands.
 
 ## Next Roadmap Set
 
-These are the next useful increments. Each item includes the example required
+These are the next useful increments. Each item includes the experiment required
 to make it a learning feature rather than an isolated API.
 
 1. **Teacher-forced encoder-decoder stack and beam search** — compose encoder,
    causal decoder, cross-attention, padding masks, and length-normalized beam
-   search. Add a `machine-translation` example that compares greedy and beam
+   search. Add a `machine-translation` experiment that compares greedy and beam
    outputs and visualizes alignments.
 2. **Sequence bucketing and dynamic batches** — build batches by similar
    lengths, generate encoder/decoder masks, and accumulate gradients across
@@ -63,15 +55,15 @@ to make it a learning feature rather than an isolated API.
    compatibility explicit. Extend `tokenizer-lab` and TinyGPT checkpoint tests.
 4. **Approximate nearest-neighbor indexing** — add an inspectable HNSW or
    inverted-file index with recall-versus-latency measurements. Add an
-   `ann-search` example that compares exact cosine ranking with the index.
+   `ann-search` experiment that compares exact cosine ranking with the index.
 5. **CTC alignment for speech or OCR** — implement blank-aware forward-backward
-   and greedy/prefix decoding. Add a `ctc-alignment` example over synthetic
+   and greedy/prefix decoding. Add a `ctc-alignment` experiment over synthetic
    noisy character frames.
 6. **One-dimensional sequence models for time series** — add causal Conv1d and
-   masked forecasting losses. Add a `time-series` example with rolling-window
+   masked forecasting losses. Add a `time-series` experiment with rolling-window
    evaluation and a persistence baseline.
 7. **Graph message passing** — add neighborhood aggregation and sparse graph
-   batches. Add a `node-classification` example that contrasts an MLP with a
+   batches. Add a `node-classification` experiment that contrasts an MLP with a
    small graph convolutional network.
 
 Mixed precision, fused attention, and accelerator-native top-k are backend

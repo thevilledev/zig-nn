@@ -4,7 +4,7 @@ const Network = nn.Network;
 const Matrix = nn.Matrix;
 const Activation = nn.Activation;
 
-/// This example demonstrates a simple neural network structure for the XOR problem
+/// This experiment demonstrates a simple neural network structure for the XOR problem
 /// XOR truth table:
 /// 0 XOR 0 = 0
 /// 0 XOR 1 = 1
@@ -21,7 +21,7 @@ pub fn main() !void {
     const stdout = &stdout_writer.interface;
     defer stdout.flush() catch {};
 
-    try stdout.print("\n=== Simple Neural Network Example ===\n\n", .{});
+    try stdout.print("\n=== Simple Neural Network Experiment ===\n\n", .{});
 
     // Create a simple network with one hidden layer
     var network = Network.init(allocator, 0.1, .MeanSquaredError);
@@ -62,5 +62,5 @@ pub fn main() !void {
     }
 
     try stdout.print("\nNote: Since weights are initialized randomly, outputs will not match XOR truth table.\n", .{});
-    try stdout.print("This example demonstrates a forward pass; run `zig build run_xor_training` for training.\n", .{});
+    try stdout.print("This experiment demonstrates a forward pass; run `zig build run_xor_training` for training.\n", .{});
 }

@@ -1,5 +1,5 @@
-/// Regression Example using Neural Networks
-/// This example demonstrates how to use the neural network to approximate
+/// Regression experiment using neural networks.
+/// This experiment demonstrates how to use the neural network to approximate
 /// a nonlinear continuous function: f(x) = x² * sin(x)
 ///
 /// The network architecture:

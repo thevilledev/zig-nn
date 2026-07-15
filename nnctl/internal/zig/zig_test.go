@@ -6,12 +6,12 @@ import (
 )
 
 func TestArgs(t *testing.T) {
-	got := Args("examples", Options{
+	got := Args("experiments", Options{
 		Optimize: "ReleaseFast",
 		GPU:      "metal",
 		Summary:  "all",
 	})
-	want := []string{"build", "examples", "-Dgpu=metal", "-Doptimize=ReleaseFast", "--summary", "all"}
+	want := []string{"build", "experiments", "-Dgpu=metal", "-Doptimize=ReleaseFast", "--summary", "all"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Args() = %#v, want %#v", got, want)
 	}

@@ -85,64 +85,66 @@ pub fn build(b: *std.Build) void {
     // running `zig build`).
     b.installArtifact(lib);
 
-    // Create a step for building examples
-    const examples_step = b.step("examples", "Build all examples");
+    // Create a step for building experiments
+    const experiments_step = b.step("experiments", "Build all experiments");
+    const examples_step = b.step("examples", "Alias for the experiments build step");
+    examples_step.dependOn(experiments_step);
 
-    // Define all examples in a single place for easier maintenance
+    // Define all experiments in a single place for easier maintenance
     inline for ([_]struct {
         name: []const u8,
         src: []const u8,
         description: []const u8,
     }{
-        .{ .name = "gated_network", .src = "examples/gated_network/gated_network.zig", .description = "Run the gated network example" },
-        .{ .name = "simple_xor", .src = "examples/simple_xor/simple_xor.zig", .description = "Run the simple XOR example" },
-        .{ .name = "xor_training", .src = "examples/xor_training/xor_training.zig", .description = "Run the XOR training example with backpropagation" },
-        .{ .name = "binary_classification", .src = "examples/binary_classification/binary_classification.zig", .description = "Run the binary classification example with circular decision boundary" },
-        .{ .name = "regression", .src = "examples/regression/regression.zig", .description = "Run the regression example with nonlinear function approximation" },
-        .{ .name = "mnist", .src = "examples/mnist/mnist.zig", .description = "Run the MNIST digit recognition example" },
-        .{ .name = "serving", .src = "examples/serving/server.zig", .description = "Run the serving example" },
-        .{ .name = "network_visualisation", .src = "examples/network_visualisation/network_visualisation.zig", .description = "Run the network visualisation example" },
-        .{ .name = "backend_demo", .src = "examples/backend_demo/backend_demo.zig", .description = "Run the backend abstraction demonstration" },
-        .{ .name = "backend_training", .src = "examples/backend_training/backend_training.zig", .description = "Run the backend-aware training example" },
-        .{ .name = "optimizer_lab", .src = "examples/optimizer_lab/optimizer_lab.zig", .description = "Compare SGD, momentum, and AdamW on two-moons classification" },
-        .{ .name = "tokenizer_lab", .src = "examples/tokenizer_lab/tokenizer_lab.zig", .description = "Compare byte and learned BPE tokenization" },
-        .{ .name = "padding_masks", .src = "examples/padding_masks/padding_masks.zig", .description = "Learn batching and padding masks for variable-length sequences" },
-        .{ .name = "word2vec", .src = "examples/word2vec/word2vec.zig", .description = "Learn distributional word embeddings with skip-gram" },
-        .{ .name = "speech_commands", .src = "examples/speech_commands/speech_commands.zig", .description = "Train and run an eight-word speech command recognizer" },
-        .{ .name = "text_classifier", .src = "examples/text_classifier/text_classifier.zig", .description = "Classify padded text with a masked multi-head encoder" },
-        .{ .name = "sequence_tagging", .src = "examples/sequence_tagging/sequence_tagging.zig", .description = "Learn structured BIO tagging with a linear-chain CRF" },
-        .{ .name = "decoding_lab", .src = "examples/decoding_lab/decoding_lab.zig", .description = "Compare greedy, top-k, nucleus, and repetition-aware decoding" },
-        .{ .name = "seq2seq", .src = "examples/seq2seq/seq2seq.zig", .description = "Learn encoder-decoder alignment with cross-attention" },
-        .{ .name = "semantic_search", .src = "examples/semantic_search/semantic_search.zig", .description = "Learn dual-encoder retrieval with symmetric InfoNCE" },
-        .{ .name = "cnn", .src = "examples/cnn/cnn.zig", .description = "Learn image patterns with convolution and max pooling" },
-        .{ .name = "autoencoder", .src = "examples/autoencoder/autoencoder.zig", .description = "Learn denoising and latent representations with an autoencoder" },
-        .{ .name = "gru_sequence", .src = "examples/gru_sequence/gru_sequence.zig", .description = "Learn selective sequence memory with a GRU" },
-        .{ .name = "transformer_encoder", .src = "examples/transformer_encoder/transformer_encoder.zig", .description = "Learn bidirectional context with a Transformer encoder" },
-        .{ .name = "dqn", .src = "examples/dqn/dqn.zig", .description = "Learn value-based reinforcement learning with DQN" },
-        .{ .name = "gpu", .src = "examples/gpu/gpu.zig", .description = "Run the GPU example" },
-        .{ .name = "gpu_benchmark", .src = "examples/gpu_benchmark/gpu_benchmark.zig", .description = "Benchmark Metal backend against CPU" },
-        .{ .name = "turboquant", .src = "examples/quantization/turboquant.zig", .description = "Run the TurboQuant paper lab example" },
-        .{ .name = "tiny_gpt", .src = "examples/tiny_gpt/tiny_gpt.zig", .description = "Run the tiny GPT decoder-only Transformer example" },
-        .{ .name = "tiny_gpt_openai", .src = "examples/tiny_gpt/openai_server.zig", .description = "Run the Tiny GPT OpenAI-compatible inference server" },
-        // Add new examples here in the future
-    }) |example| {
+        .{ .name = "gated_network", .src = "experiments/gated_network/gated_network.zig", .description = "Run the gated network experiment" },
+        .{ .name = "simple_xor", .src = "experiments/simple_xor/simple_xor.zig", .description = "Run the simple XOR experiment" },
+        .{ .name = "xor_training", .src = "experiments/xor_training/xor_training.zig", .description = "Run the XOR training experiment with backpropagation" },
+        .{ .name = "binary_classification", .src = "experiments/binary_classification/binary_classification.zig", .description = "Run the binary classification experiment with circular decision boundary" },
+        .{ .name = "regression", .src = "experiments/regression/regression.zig", .description = "Run the regression experiment with nonlinear function approximation" },
+        .{ .name = "mnist", .src = "experiments/mnist/mnist.zig", .description = "Run the MNIST digit recognition experiment" },
+        .{ .name = "serving", .src = "experiments/serving/server.zig", .description = "Run the serving experiment" },
+        .{ .name = "network_visualisation", .src = "experiments/network_visualisation/network_visualisation.zig", .description = "Run the network visualisation experiment" },
+        .{ .name = "backend_demo", .src = "experiments/backend_demo/backend_demo.zig", .description = "Run the backend abstraction demonstration" },
+        .{ .name = "backend_training", .src = "experiments/backend_training/backend_training.zig", .description = "Run the backend-aware training experiment" },
+        .{ .name = "optimizer_lab", .src = "experiments/optimizer_lab/optimizer_lab.zig", .description = "Compare SGD, momentum, and AdamW on two-moons classification" },
+        .{ .name = "tokenizer_lab", .src = "experiments/tokenizer_lab/tokenizer_lab.zig", .description = "Compare byte and learned BPE tokenization" },
+        .{ .name = "padding_masks", .src = "experiments/padding_masks/padding_masks.zig", .description = "Learn batching and padding masks for variable-length sequences" },
+        .{ .name = "word2vec", .src = "experiments/word2vec/word2vec.zig", .description = "Learn distributional word embeddings with skip-gram" },
+        .{ .name = "speech_commands", .src = "experiments/speech_commands/speech_commands.zig", .description = "Train and run an eight-word speech command recognizer" },
+        .{ .name = "text_classifier", .src = "experiments/text_classifier/text_classifier.zig", .description = "Classify padded text with a masked multi-head encoder" },
+        .{ .name = "sequence_tagging", .src = "experiments/sequence_tagging/sequence_tagging.zig", .description = "Learn structured BIO tagging with a linear-chain CRF" },
+        .{ .name = "decoding_lab", .src = "experiments/decoding_lab/decoding_lab.zig", .description = "Compare greedy, top-k, nucleus, and repetition-aware decoding" },
+        .{ .name = "seq2seq", .src = "experiments/seq2seq/seq2seq.zig", .description = "Learn encoder-decoder alignment with cross-attention" },
+        .{ .name = "semantic_search", .src = "experiments/semantic_search/semantic_search.zig", .description = "Learn dual-encoder retrieval with symmetric InfoNCE" },
+        .{ .name = "cnn", .src = "experiments/cnn/cnn.zig", .description = "Learn image patterns with convolution and max pooling" },
+        .{ .name = "autoencoder", .src = "experiments/autoencoder/autoencoder.zig", .description = "Learn denoising and latent representations with an autoencoder" },
+        .{ .name = "gru_sequence", .src = "experiments/gru_sequence/gru_sequence.zig", .description = "Learn selective sequence memory with a GRU" },
+        .{ .name = "transformer_encoder", .src = "experiments/transformer_encoder/transformer_encoder.zig", .description = "Learn bidirectional context with a Transformer encoder" },
+        .{ .name = "dqn", .src = "experiments/dqn/dqn.zig", .description = "Learn value-based reinforcement learning with DQN" },
+        .{ .name = "gpu", .src = "experiments/gpu/gpu.zig", .description = "Run the GPU experiment" },
+        .{ .name = "gpu_benchmark", .src = "experiments/gpu_benchmark/gpu_benchmark.zig", .description = "Benchmark Metal backend against CPU" },
+        .{ .name = "turboquant", .src = "experiments/quantization/turboquant.zig", .description = "Run the TurboQuant paper lab experiment" },
+        .{ .name = "tiny_gpt", .src = "experiments/tiny_gpt/tiny_gpt.zig", .description = "Run the tiny GPT decoder-only Transformer experiment" },
+        .{ .name = "tiny_gpt_openai", .src = "experiments/tiny_gpt/openai_server.zig", .description = "Run the Tiny GPT OpenAI-compatible inference server" },
+        // Add new experiments here in the future
+    }) |experiment| {
         const exe_mod = b.createModule(.{
-            .root_source_file = b.path(example.src),
+            .root_source_file = b.path(experiment.src),
             .target = target,
             .optimize = optimize,
         });
 
-        // Add the library module to the example executable
+        // Add the library module to the experiment executable
         exe_mod.addImport("nn", lib_mod);
 
-        // Build the example executable
+        // Build the experiment executable
         const exe = b.addExecutable(.{
-            .name = example.name,
+            .name = experiment.name,
             .root_module = exe_mod,
         });
 
-        // Conditionally link frameworks/libraries for GPU examples
-        if (std.mem.eql(u8, example.name, "gpu") or std.mem.eql(u8, example.name, "gpu_benchmark")) {
+        // Conditionally link frameworks/libraries for GPU experiments
+        if (std.mem.eql(u8, experiment.name, "gpu") or std.mem.eql(u8, experiment.name, "gpu_benchmark")) {
             if (enable_metal) {
                 addMetalSupport(b, exe_mod, enable_metal, false);
             }
@@ -154,10 +156,10 @@ pub fn build(b: *std.Build) void {
             }
         }
 
-        // Install the example executable
+        // Install the experiment executable
         b.installArtifact(exe);
 
-        // Create a run step for the example
+        // Create a run step for the experiment
         const run_cmd = b.addRunArtifact(exe);
         run_cmd.step.dependOn(b.getInstallStep());
 
@@ -166,13 +168,13 @@ pub fn build(b: *std.Build) void {
             run_cmd.addArgs(args);
         }
 
-        // Add a separate step to run the example
-        const step_name = "run_" ++ example.name;
-        const run_step = b.step(step_name, example.description);
+        // Add a separate step to run the experiment
+        const step_name = "run_" ++ experiment.name;
+        const run_step = b.step(step_name, experiment.description);
         run_step.dependOn(&run_cmd.step);
 
-        // Add the example to the examples step
-        examples_step.dependOn(&exe.step);
+        // Add the experiment to the experiments step
+        experiments_step.dependOn(&exe.step);
     }
 
     addBenchmarkStep(
@@ -238,47 +240,47 @@ pub fn build(b: *std.Build) void {
     prev_step = addTestStep(b, test_step, "cuda_backend", "src/cuda_backend.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
     _ = addTestStep(b, test_step, "rocm_backend", "src/rocm_backend.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
 
-    // Create a step for running acceptance tests from examples
-    const acceptance_test_step = b.step("test-acceptance", "Run all example acceptance tests");
+    // Create a step for running acceptance tests from experiments
+    const acceptance_test_step = b.step("test-acceptance", "Run all experiment acceptance tests");
 
-    // Add test steps for all examples
-    var example_prev_step: ?*std.Build.Step = null;
+    // Add test steps for all experiments
+    var experiment_prev_step: ?*std.Build.Step = null;
     inline for ([_]struct {
         name: []const u8,
         path: []const u8,
     }{
-        .{ .name = "gated_network", .path = "examples/gated_network/gated_network.zig" },
-        .{ .name = "simple_xor", .path = "examples/simple_xor/simple_xor.zig" },
-        .{ .name = "xor_training", .path = "examples/xor_training/xor_training.zig" },
-        .{ .name = "binary_classification", .path = "examples/binary_classification/binary_classification.zig" },
-        .{ .name = "regression", .path = "examples/regression/regression.zig" },
-        .{ .name = "mnist", .path = "examples/mnist/mnist.zig" },
-        .{ .name = "serving", .path = "examples/serving/server.zig" },
-        .{ .name = "network_visualisation", .path = "examples/network_visualisation/network_visualisation.zig" },
-        .{ .name = "backend_demo", .path = "examples/backend_demo/backend_demo.zig" },
-        .{ .name = "backend_training", .path = "examples/backend_training/backend_training.zig" },
-        .{ .name = "optimizer_lab", .path = "examples/optimizer_lab/optimizer_lab.zig" },
-        .{ .name = "tokenizer_lab", .path = "examples/tokenizer_lab/tokenizer_lab.zig" },
-        .{ .name = "padding_masks", .path = "examples/padding_masks/padding_masks.zig" },
-        .{ .name = "word2vec", .path = "examples/word2vec/word2vec.zig" },
-        .{ .name = "speech_commands", .path = "examples/speech_commands/speech_commands.zig" },
-        .{ .name = "text_classifier", .path = "examples/text_classifier/text_classifier.zig" },
-        .{ .name = "sequence_tagging", .path = "examples/sequence_tagging/sequence_tagging.zig" },
-        .{ .name = "decoding_lab", .path = "examples/decoding_lab/decoding_lab.zig" },
-        .{ .name = "seq2seq", .path = "examples/seq2seq/seq2seq.zig" },
-        .{ .name = "semantic_search", .path = "examples/semantic_search/semantic_search.zig" },
-        .{ .name = "cnn", .path = "examples/cnn/cnn.zig" },
-        .{ .name = "autoencoder", .path = "examples/autoencoder/autoencoder.zig" },
-        .{ .name = "gru_sequence", .path = "examples/gru_sequence/gru_sequence.zig" },
-        .{ .name = "transformer_encoder", .path = "examples/transformer_encoder/transformer_encoder.zig" },
-        .{ .name = "dqn", .path = "examples/dqn/dqn.zig" },
-        .{ .name = "gpu", .path = "examples/gpu/gpu.zig" },
-        .{ .name = "gpu_benchmark", .path = "examples/gpu_benchmark/gpu_benchmark.zig" },
-        .{ .name = "turboquant", .path = "examples/quantization/turboquant.zig" },
-        .{ .name = "tiny_gpt", .path = "examples/tiny_gpt/tiny_gpt.zig" },
-        .{ .name = "tiny_gpt_openai", .path = "examples/tiny_gpt/openai_server.zig" },
-    }) |example| {
-        example_prev_step = addTestStep(b, acceptance_test_step, example.name, example.path, example_prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, lib_mod);
+        .{ .name = "gated_network", .path = "experiments/gated_network/gated_network.zig" },
+        .{ .name = "simple_xor", .path = "experiments/simple_xor/simple_xor.zig" },
+        .{ .name = "xor_training", .path = "experiments/xor_training/xor_training.zig" },
+        .{ .name = "binary_classification", .path = "experiments/binary_classification/binary_classification.zig" },
+        .{ .name = "regression", .path = "experiments/regression/regression.zig" },
+        .{ .name = "mnist", .path = "experiments/mnist/mnist.zig" },
+        .{ .name = "serving", .path = "experiments/serving/server.zig" },
+        .{ .name = "network_visualisation", .path = "experiments/network_visualisation/network_visualisation.zig" },
+        .{ .name = "backend_demo", .path = "experiments/backend_demo/backend_demo.zig" },
+        .{ .name = "backend_training", .path = "experiments/backend_training/backend_training.zig" },
+        .{ .name = "optimizer_lab", .path = "experiments/optimizer_lab/optimizer_lab.zig" },
+        .{ .name = "tokenizer_lab", .path = "experiments/tokenizer_lab/tokenizer_lab.zig" },
+        .{ .name = "padding_masks", .path = "experiments/padding_masks/padding_masks.zig" },
+        .{ .name = "word2vec", .path = "experiments/word2vec/word2vec.zig" },
+        .{ .name = "speech_commands", .path = "experiments/speech_commands/speech_commands.zig" },
+        .{ .name = "text_classifier", .path = "experiments/text_classifier/text_classifier.zig" },
+        .{ .name = "sequence_tagging", .path = "experiments/sequence_tagging/sequence_tagging.zig" },
+        .{ .name = "decoding_lab", .path = "experiments/decoding_lab/decoding_lab.zig" },
+        .{ .name = "seq2seq", .path = "experiments/seq2seq/seq2seq.zig" },
+        .{ .name = "semantic_search", .path = "experiments/semantic_search/semantic_search.zig" },
+        .{ .name = "cnn", .path = "experiments/cnn/cnn.zig" },
+        .{ .name = "autoencoder", .path = "experiments/autoencoder/autoencoder.zig" },
+        .{ .name = "gru_sequence", .path = "experiments/gru_sequence/gru_sequence.zig" },
+        .{ .name = "transformer_encoder", .path = "experiments/transformer_encoder/transformer_encoder.zig" },
+        .{ .name = "dqn", .path = "experiments/dqn/dqn.zig" },
+        .{ .name = "gpu", .path = "experiments/gpu/gpu.zig" },
+        .{ .name = "gpu_benchmark", .path = "experiments/gpu_benchmark/gpu_benchmark.zig" },
+        .{ .name = "turboquant", .path = "experiments/quantization/turboquant.zig" },
+        .{ .name = "tiny_gpt", .path = "experiments/tiny_gpt/tiny_gpt.zig" },
+        .{ .name = "tiny_gpt_openai", .path = "experiments/tiny_gpt/openai_server.zig" },
+    }) |experiment| {
+        experiment_prev_step = addTestStep(b, acceptance_test_step, experiment.name, experiment.path, experiment_prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, lib_mod);
     }
 }
 
@@ -314,7 +316,7 @@ fn addBenchmarkStep(
     bench_mod.addImport("nn", bench_nn_mod);
 
     const tiny_gpt_mod = b.createModule(.{
-        .root_source_file = b.path("examples/tiny_gpt/model.zig"),
+        .root_source_file = b.path("experiments/tiny_gpt/model.zig"),
         .target = target,
         .optimize = benchmark_optimize,
     });

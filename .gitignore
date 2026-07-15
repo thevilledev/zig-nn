@@ -5,9 +5,9 @@ node_modules/
 plan.md
 .cursor
 data
-!examples/tiny_gpt/data/
-!examples/tiny_gpt/data/README.md
-!examples/tiny_gpt/data/toy.txt
-examples/tiny_gpt/data/shakespeare/
-examples/tiny_gpt/data/tinystories/
+!experiments/tiny_gpt/data/
+!experiments/tiny_gpt/data/README.md
+!experiments/tiny_gpt/data/toy.txt
+experiments/tiny_gpt/data/shakespeare/
+experiments/tiny_gpt/data/tinystories/
 *.bin

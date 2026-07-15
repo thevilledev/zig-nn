@@ -26,6 +26,7 @@ func TestDirectHelpAvailableForEveryCommand(t *testing.T) {
 		{"cloud", "list", "--help"},
 		{"cloud", "pricing", "--help"},
 		{"cloud", "ssh-keys", "--help"},
+		{"experiments", "--help"},
 		{"examples", "--help"},
 		{"run", "--help"},
 		{"run", "tiny-gpt", "--help"},
@@ -69,6 +70,31 @@ func TestDirectHelpAvailableForEveryCommand(t *testing.T) {
 	}
 }
 
+func TestExperimentListCompatibilityAliases(t *testing.T) {
+	outputs := make([]string, 0, 4)
+	for _, topic := range []string{"experiments", "experiment", "examples", "example"} {
+		var stdout bytes.Buffer
+		app := &App{Stdout: &stdout}
+		if err := app.Run(context.Background(), []string{"list", topic}); err != nil {
+			t.Fatalf("nnctl list %s: %v", topic, err)
+		}
+		outputs = append(outputs, stdout.String())
+	}
+	for index := 1; index < len(outputs); index++ {
+		if outputs[index] != outputs[0] {
+			t.Fatalf("list alias output differs:\nprimary:\n%s\nalias:\n%s", outputs[0], outputs[index])
+		}
+	}
+}
+
+func TestUnknownExperimentPointsToPrimaryListCommand(t *testing.T) {
+	app := &App{}
+	err := app.runExperiment(context.Background(), "definitely-missing", nil, "", "")
+	if err == nil || !strings.Contains(err.Error(), "nnctl list experiments") {
+		t.Fatalf("runExperiment() error = %v", err)
+	}
+}
+
 func TestNestedHelpContainsTinyGPTCorpusWorkflow(t *testing.T) {
 	var stdout bytes.Buffer
 	app := &App{Stdout: &stdout}
@@ -98,7 +124,7 @@ func TestNestedHelpContainsTinyGPTCorpusWorkflow(t *testing.T) {
 	}
 }
 
-func TestHelpAfterRunPassthroughSeparatorReachesExample(t *testing.T) {
+func TestHelpAfterRunPassthroughSeparatorReachesExperiment(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	app := &App{Stdout: &stdout, Stderr: &stderr}
 
@@ -109,7 +135,7 @@ func TestHelpAfterRunPassthroughSeparatorReachesExample(t *testing.T) {
 		t.Fatalf("passthrough --help was captured by Cobra help:\n%s", stdout.String())
 	}
 	if !strings.Contains(stdout.String(), "--help") {
-		t.Fatalf("passthrough --help did not reach the example command:\nstdout:\n%s\nstderr:\n%s", stdout.String(), stderr.String())
+		t.Fatalf("passthrough --help did not reach the experiment command:\nstdout:\n%s\nstderr:\n%s", stdout.String(), stderr.String())
 	}
 }
 

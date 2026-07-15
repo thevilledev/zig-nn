@@ -765,7 +765,7 @@ pub const ExecutionContext = struct {
     }
 
     /// Applies inverted dropout. Supplying a seed makes the mask reproducible,
-    /// which keeps learning examples and gradient tests deterministic.
+    /// which keeps learning experiments and gradient tests deterministic.
     pub fn dropout(self: *ExecutionContext, input: Tensor, probability: f32, seed: u64, training: bool) !DropoutResult {
         if (probability < 0 or probability >= 1) return error.InvalidProbability;
         const values = try self.device.allocator.alloc(f32, input.shape.len);

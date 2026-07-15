@@ -89,7 +89,7 @@ fn runBackendTraining(allocator: std.mem.Allocator) !TrainingResult {
     };
 }
 
-test "backend training example reduces loss" {
+test "backend training experiment reduces loss" {
     const result = try runBackendTraining(std.testing.allocator);
 
     try std.testing.expect(result.after_loss < result.before_loss);

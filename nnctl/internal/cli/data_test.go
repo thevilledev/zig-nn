@@ -82,6 +82,16 @@ func TestPrepareSpeechCommandsRejectsTraversal(t *testing.T) {
 	}
 }
 
+func TestRunDataTinyGPTUsesExperimentsPath(t *testing.T) {
+	repoRoot := t.TempDir()
+	app := &App{repoRoot: repoRoot}
+	err := app.runDataTinyGPT(context.Background())
+	want := filepath.Join(repoRoot, "experiments", "tiny_gpt", "scripts", "prepare_data.sh")
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("runDataTinyGPT() error = %v, want path %s", err, want)
+	}
+}
+
 func speechCommandsFixture(t *testing.T, contents string) []byte {
 	t.Helper()
 	var buffer bytes.Buffer

@@ -1,12 +1,12 @@
 # Tiny GPT Data Presets
 
-The Tiny GPT example is meant to grow through a small sequence of corpora.
+The TinyGPT experiment is meant to grow through a small sequence of corpora.
 Each preset keeps the same model code, but changes the amount and character of
 language evidence the model sees.
 
 ## Presets
 
-- `toy`: checked in at `examples/tiny_gpt/data/toy.txt`. This is the offline
+- `toy`: checked in at `experiments/tiny_gpt/data/toy.txt`. This is the offline
   smoke-test corpus used when no external data has been prepared.
 - `shakespeare`: Tiny Shakespeare, the classic character-level dataset used by
   Karpathy's char-rnn and nanoGPT demos.
@@ -27,9 +27,9 @@ bin/nnctl data tiny-gpt
 
 This creates:
 
-- `examples/tiny_gpt/data/shakespeare/input.txt`
-- `examples/tiny_gpt/data/tinystories/valid.txt`
-- `examples/tiny_gpt/data/tinystories/tinystories_1mb.txt`
+- `experiments/tiny_gpt/data/shakespeare/input.txt`
+- `experiments/tiny_gpt/data/tinystories/valid.txt`
+- `experiments/tiny_gpt/data/tinystories/tinystories_1mb.txt`
 
 Generated corpora are intentionally ignored by git. The checked-in files only
 describe how to reproduce them.

@@ -1,6 +1,6 @@
-# Tiny GPT Example
+# TinyGPT Experiment
 
-This example is a tiny, readable decoder-only Transformer in the style of
+This experiment is a tiny, readable decoder-only Transformer in the style of
 Karpathy's minGPT and nanoGPT demos. The original `nn.Matrix` implementation
 remains the checkpoint and server compatibility path; a bidirectional adapter
 also runs the public `nn.Transformer.Decoder` on CPU, Metal, or CUDA.
@@ -11,7 +11,7 @@ Run it with:
 nnctl run tiny-gpt -- --prompt "to be" --tokens 80 --seed 42
 ```
 
-By default the example uses `--corpus auto`: a prepared TinyStories slice if it
+By default the experiment uses `--corpus auto`: a prepared TinyStories slice if it
 exists, then prepared Tiny Shakespeare, then the checked-in toy corpus. The fast
 run trains only the output head on a small prefix, then samples with a small
 character backoff prior. That path is an architecture/readability demo, not
@@ -147,11 +147,11 @@ Implemented pieces:
 - fast demo-corpus output-head training
 - seeded random-window mini-batch training with averaged/clipped gradients
 - OpenAI-compatible non-streaming `/v1/chat/completions`, `/v1/completions`,
-  and `/v1/models` serving example
+  and `/v1/models` serving experiment
 - readable sampling with a tiny character backoff prior
 
 The full-training path is intentionally educational rather than high-throughput:
-it uses explicit backward passes in the example file, trains small batches of
+it uses explicit backward passes in the experiment files, trains small batches of
 context windows, and keeps the model character-level and small enough to inspect.
 The serving path accepts common OpenAI request fields and returns explicit JSON
 errors for unsupported streaming, `n > 1`, token-array prompts, and multimodal

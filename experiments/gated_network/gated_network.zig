@@ -15,7 +15,7 @@ pub fn main() !void {
     const stdout = &stdout_writer.interface;
     defer stdout.flush() catch {};
 
-    try stdout.print("\n=== Gated Neural Network Example ===\n\n", .{});
+    try stdout.print("\n=== Gated Neural Network Experiment ===\n\n", .{});
 
     // Create a network with gated layers
     var network = Network.init(allocator, 0.1, .MeanSquaredError);
@@ -68,5 +68,5 @@ pub fn main() !void {
     }
 
     try stdout.print("\nNote: Since weights are initialized randomly, outputs will vary between runs.\n", .{});
-    try stdout.print("This example demonstrates the structure and forward propagation of a neural network using GLU and SwiGLU layers.\n", .{});
+    try stdout.print("This experiment demonstrates the structure and forward propagation of a neural network using GLU and SwiGLU layers.\n", .{});
 }
