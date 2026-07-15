@@ -24,6 +24,11 @@ description = "Run nnctl Go tests"
 dir = "nnctl"
 run = "go test ./..."
 
+[tasks."go:test-race"]
+description = "Run nnctl Go tests with the race detector"
+dir = "nnctl"
+run = "go test -race ./..."
+
 [tasks."go:lint"]
 description = "Run golangci-lint for nnctl"
 dir = "nnctl"
@@ -57,7 +62,7 @@ description = "Run local CI checks"
 depends = [
   "zig:test",
   "zig:test-acceptance",
-  "go:test",
+  "go:test-race",
   "go:lint",
   "actions:lint",
   "hooks:check",

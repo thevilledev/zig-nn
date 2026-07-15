@@ -6,10 +6,21 @@ run:
 linters:
   default: standard
   enable:
-    - misspell
-  disable:
+    - cyclop
     - errcheck
+    - gocognit
+    - misspell
+  settings:
+    cyclop:
+      max-complexity: 20
+    gocognit:
+      min-complexity: 30
   exclusions:
     generated: lax
     presets:
       - common-false-positives
+    rules:
+      - path: _test\.go
+        linters:
+          - cyclop
+          - gocognit
