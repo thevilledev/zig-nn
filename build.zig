@@ -112,6 +112,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "sequence_tagging", .src = "examples/sequence_tagging/sequence_tagging.zig", .description = "Learn structured BIO tagging with a linear-chain CRF" },
         .{ .name = "decoding_lab", .src = "examples/decoding_lab/decoding_lab.zig", .description = "Compare greedy, top-k, nucleus, and repetition-aware decoding" },
         .{ .name = "seq2seq", .src = "examples/seq2seq/seq2seq.zig", .description = "Learn encoder-decoder alignment with cross-attention" },
+        .{ .name = "semantic_search", .src = "examples/semantic_search/semantic_search.zig", .description = "Learn dual-encoder retrieval with symmetric InfoNCE" },
         .{ .name = "cnn", .src = "examples/cnn/cnn.zig", .description = "Learn image patterns with convolution and max pooling" },
         .{ .name = "autoencoder", .src = "examples/autoencoder/autoencoder.zig", .description = "Learn denoising and latent representations with an autoencoder" },
         .{ .name = "gru_sequence", .src = "examples/gru_sequence/gru_sequence.zig", .description = "Learn selective sequence memory with a GRU" },
@@ -214,6 +215,7 @@ pub fn build(b: *std.Build) void {
     prev_step = addTestStep(b, test_step, "embeddings", "src/embeddings.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
     prev_step = addTestStep(b, test_step, "structured", "src/structured.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
     prev_step = addTestStep(b, test_step, "decoding", "src/decoding.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
+    prev_step = addTestStep(b, test_step, "retrieval", "src/retrieval.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
     prev_step = addTestStep(b, test_step, "modules", "src/modules.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
     prev_step = addTestStep(b, test_step, "training", "src/training.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
     prev_step = addTestStep(b, test_step, "spatial", "src/spatial.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
@@ -261,6 +263,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "sequence_tagging", .path = "examples/sequence_tagging/sequence_tagging.zig" },
         .{ .name = "decoding_lab", .path = "examples/decoding_lab/decoding_lab.zig" },
         .{ .name = "seq2seq", .path = "examples/seq2seq/seq2seq.zig" },
+        .{ .name = "semantic_search", .path = "examples/semantic_search/semantic_search.zig" },
         .{ .name = "cnn", .path = "examples/cnn/cnn.zig" },
         .{ .name = "autoencoder", .path = "examples/autoencoder/autoencoder.zig" },
         .{ .name = "gru_sequence", .path = "examples/gru_sequence/gru_sequence.zig" },

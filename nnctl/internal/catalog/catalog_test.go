@@ -105,6 +105,16 @@ func TestResolveSeq2SeqExample(t *testing.T) {
 	}
 }
 
+func TestResolveSemanticSearchExample(t *testing.T) {
+	example, ok := ResolveExample("semantic_search")
+	if !ok {
+		t.Fatal("expected semantic_search to resolve")
+	}
+	if example.Step != "run_semantic_search" || example.DefaultGPU != "auto" || !example.Quick {
+		t.Fatalf("unexpected semantic search example: %+v", example)
+	}
+}
+
 func TestResolveCNNExample(t *testing.T) {
 	example, ok := ResolveExample("cnn")
 	if !ok {
