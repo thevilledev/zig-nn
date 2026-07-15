@@ -64,7 +64,9 @@ func (a *app) runDataSpeechCommands(ctx context.Context, dir string, force bool)
 
 func (a *app) prepareSpeechCommands(ctx context.Context, url, dir string, force bool) error {
 	if err := validateSpeechCommandsDir(dir); err == nil && !force {
-		fmt.Fprintf(a.stdout(), "exists %s\n", filepath.Base(dir))
+		if _, err := fmt.Fprintf(a.stdout(), "exists %s\n", filepath.Base(dir)); err != nil {
+			return fmt.Errorf("report existing speech commands data: %w", err)
+		}
 		return nil
 	}
 	if _, err := os.Stat(dir); err == nil && !force {
@@ -82,37 +84,42 @@ func (a *app) prepareSpeechCommands(ctx context.Context, url, dir string, force 
 		return fmt.Errorf("create temporary archive: %w", err)
 	}
 	archivePath := archive.Name()
-	defer os.Remove(archivePath)
+	archiveClosed := false
+	defer func() {
+		if !archiveClosed {
+			_ = archive.Close()
+		}
+		_ = os.Remove(archivePath)
+	}()
 
-	fmt.Fprintln(a.stdout(), "download mini_speech_commands.zip")
+	if _, err := fmt.Fprintln(a.stdout(), "download mini_speech_commands.zip"); err != nil {
+		return fmt.Errorf("report speech commands download: %w", err)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		archive.Close()
-		return err
+		return fmt.Errorf("create speech commands request: %w", err)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := a.http().Do(req)
 	if err != nil {
-		archive.Close()
 		return fmt.Errorf("download %s: %w", url, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		archive.Close()
 		return fmt.Errorf("download %s: %s", url, resp.Status)
 	}
 	if _, err := io.Copy(archive, resp.Body); err != nil {
-		archive.Close()
 		return fmt.Errorf("write temporary speech commands archive: %w", err)
 	}
 	if err := archive.Close(); err != nil {
 		return fmt.Errorf("close temporary speech commands archive: %w", err)
 	}
+	archiveClosed = true
 
 	extracted, err := os.MkdirTemp(parent, ".mini-speech-commands-extract-*")
 	if err != nil {
 		return fmt.Errorf("create temporary extraction directory: %w", err)
 	}
-	defer os.RemoveAll(extracted)
+	defer func() { _ = os.RemoveAll(extracted) }()
 	if err := extractSpeechCommandsZip(archivePath, extracted); err != nil {
 		return err
 	}
@@ -122,7 +129,9 @@ func (a *app) prepareSpeechCommands(ctx context.Context, url, dir string, force 
 	if err := replaceDirectory(extracted, dir, force); err != nil {
 		return err
 	}
-	fmt.Fprintf(a.stdout(), "prepared %s\n", dir)
+	if _, err := fmt.Fprintf(a.stdout(), "prepared %s\n", dir); err != nil {
+		return fmt.Errorf("report prepared speech commands: %w", err)
+	}
 	return nil
 }
 
@@ -131,7 +140,7 @@ func extractSpeechCommandsZip(archivePath, destination string) error {
 	if err != nil {
 		return fmt.Errorf("open speech commands archive: %w", err)
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	const root = "mini_speech_commands/"
 	for _, file := range reader.File {
@@ -175,7 +184,7 @@ func extractSpeechCommandsZip(archivePath, destination string) error {
 		}
 		output, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 		if err != nil {
-			source.Close()
+			_ = source.Close()
 			return fmt.Errorf("create extracted file %q: %w", target, err)
 		}
 		_, copyErr := io.Copy(output, source)
@@ -231,8 +240,11 @@ func replaceDirectory(source, destination string, force bool) error {
 		return fmt.Errorf("backup speech commands data: %w", err)
 	}
 	if err := os.Rename(source, destination); err != nil {
-		_ = os.Rename(backup, destination)
-		return fmt.Errorf("install replacement speech commands data: %w", err)
+		installErr := fmt.Errorf("install replacement speech commands data: %w", err)
+		if restoreErr := os.Rename(backup, destination); restoreErr != nil {
+			return errors.Join(installErr, fmt.Errorf("restore speech commands backup: %w", restoreErr))
+		}
+		return installErr
 	}
 	if err := os.RemoveAll(backup); err != nil {
 		return fmt.Errorf("remove speech commands backup: %w", err)
@@ -243,23 +255,27 @@ func replaceDirectory(source, destination string, force bool) error {
 func (a *app) downloadGzip(ctx context.Context, url, dest string, force bool) error {
 	if !force {
 		if _, err := os.Stat(dest); err == nil {
-			fmt.Fprintf(a.stdout(), "exists %s\n", filepath.Base(dest))
+			if _, err := fmt.Fprintf(a.stdout(), "exists %s\n", filepath.Base(dest)); err != nil {
+				return fmt.Errorf("report existing data file: %w", err)
+			}
 			return nil
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("stat %s: %w", dest, err)
 		}
 	}
 
-	fmt.Fprintf(a.stdout(), "download %s\n", filepath.Base(dest))
+	if _, err := fmt.Fprintf(a.stdout(), "download %s\n", filepath.Base(dest)); err != nil {
+		return fmt.Errorf("report data download: %w", err)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return err
+		return fmt.Errorf("create data request: %w", err)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := a.http().Do(req)
 	if err != nil {
 		return fmt.Errorf("download %s: %w", url, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("download %s: %s", url, resp.Status)
@@ -269,25 +285,33 @@ func (a *app) downloadGzip(ctx context.Context, url, dest string, force bool) er
 	if err != nil {
 		return fmt.Errorf("open gzip stream for %s: %w", url, err)
 	}
-	defer gz.Close()
+	defer func() { _ = gz.Close() }()
 
 	tmp := dest + ".tmp"
 	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 	if err != nil {
 		return fmt.Errorf("create %s: %w", tmp, err)
 	}
+	outClosed := false
+	installed := false
+	defer func() {
+		if !outClosed {
+			_ = out.Close()
+		}
+		if !installed {
+			_ = os.Remove(tmp)
+		}
+	}()
 	if _, err := io.Copy(out, gz); err != nil {
-		out.Close()
-		os.Remove(tmp)
 		return fmt.Errorf("write %s: %w", dest, err)
 	}
 	if err := out.Close(); err != nil {
-		os.Remove(tmp)
 		return fmt.Errorf("close %s: %w", tmp, err)
 	}
+	outClosed = true
 	if err := os.Rename(tmp, dest); err != nil {
-		os.Remove(tmp)
 		return fmt.Errorf("rename %s: %w", dest, err)
 	}
+	installed = true
 	return nil
 }

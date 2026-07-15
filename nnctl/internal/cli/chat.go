@@ -160,7 +160,7 @@ type chatProxy struct {
 	modelName   string
 	maxTokens   int
 	temperature float64
-	client      *http.Client
+	client      httpDoer
 }
 
 func (p chatProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -168,7 +168,7 @@ func (p chatProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 
 	var payload map[string]any
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64*1024))
@@ -211,7 +211,7 @@ func (p chatProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "inference server unavailable", http.StatusBadGateway)
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if contentType := resp.Header.Get("Content-Type"); contentType != "" {
 		w.Header().Set("Content-Type", contentType)

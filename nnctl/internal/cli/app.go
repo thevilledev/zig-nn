@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"strings"
 )
@@ -15,23 +16,33 @@ const (
 )
 
 type app struct {
-	Stdin  io.Reader
-	Stdout io.Writer
-	Stderr io.Writer
+	stdinReader  io.Reader
+	stdoutWriter io.Writer
+	stderrWriter io.Writer
+	httpClient   httpDoer
 
 	repoRoot string
 	zig      string
 }
 
+type httpDoer interface {
+	Do(*http.Request) (*http.Response, error)
+}
+
+func newApp(stdin io.Reader, stdout, stderr io.Writer) *app {
+	return &app{
+		stdinReader:  stdin,
+		stdoutWriter: stdout,
+		stderrWriter: stderr,
+		httpClient:   http.DefaultClient,
+	}
+}
+
 // Main runs nnctl with the process standard streams and returns its exit code.
 func Main(args []string) int {
-	app := &app{
-		Stdin:  os.Stdin,
-		Stdout: os.Stdout,
-		Stderr: os.Stderr,
-	}
+	app := newApp(os.Stdin, os.Stdout, os.Stderr)
 	if err := app.execute(context.Background(), args); err != nil {
-		fmt.Fprintln(app.stderr(), "error:", err)
+		_, _ = fmt.Fprintln(app.stderr(), "error:", err)
 		return 1
 	}
 	return 0
@@ -44,24 +55,31 @@ func (a *app) execute(ctx context.Context, args []string) error {
 }
 
 func (a *app) stdout() io.Writer {
-	if a.Stdout == nil {
+	if a.stdoutWriter == nil {
 		return io.Discard
 	}
-	return a.Stdout
+	return a.stdoutWriter
 }
 
 func (a *app) stderr() io.Writer {
-	if a.Stderr == nil {
+	if a.stderrWriter == nil {
 		return io.Discard
 	}
-	return a.Stderr
+	return a.stderrWriter
 }
 
 func (a *app) stdin() io.Reader {
-	if a.Stdin == nil {
+	if a.stdinReader == nil {
 		return strings.NewReader("")
 	}
-	return a.Stdin
+	return a.stdinReader
+}
+
+func (a *app) http() httpDoer {
+	if a.httpClient == nil {
+		return http.DefaultClient
+	}
+	return a.httpClient
 }
 
 func getenvDefault(key, fallback string) string {

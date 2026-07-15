@@ -13,7 +13,7 @@ import (
 
 func TestCloudDeployDryRunJSON(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	app := &app{Stdout: &stdout, Stderr: &stderr}
+	app := &app{stdoutWriter: &stdout, stderrWriter: &stderr}
 
 	err := app.execute(context.Background(), []string{"cloud", "deploy", "--instance-type", "1V100.6V", "--source-os-volume-id", "vol-golden", "--dry-run", "--json"})
 	if err != nil {
@@ -68,7 +68,7 @@ func TestCloudDeployDryRunJSON(t *testing.T) {
 
 func TestCloudDeployDryRunJSONOnDemand(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	app := &app{Stdout: &stdout, Stderr: &stderr}
+	app := &app{stdoutWriter: &stdout, stderrWriter: &stderr}
 
 	err := app.execute(context.Background(), []string{"cloud", "deploy", "--instance-type", "1H200.141S.44V", "--market", "on-demand", "--location-code", "FIN-02", "--dry-run", "--json"})
 	if err != nil {
@@ -103,7 +103,7 @@ func TestCloudDeployDryRunJSONOnDemand(t *testing.T) {
 
 func TestCloudDeployDryRunJSONCanReuseClonedOSVolume(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	app := &app{Stdout: &stdout, Stderr: &stderr}
+	app := &app{stdoutWriter: &stdout, stderrWriter: &stderr}
 
 	err := app.execute(context.Background(), []string{
 		"cloud",
@@ -145,7 +145,7 @@ func TestCloudDeployDryRunJSONCanReuseClonedOSVolume(t *testing.T) {
 
 func TestCloudDeployDryRunJSONWithSourceOSVolumeName(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	app := &app{Stdout: &stdout, Stderr: &stderr}
+	app := &app{stdoutWriter: &stdout, stderrWriter: &stderr}
 
 	err := app.execute(context.Background(), []string{"cloud", "deploy", "--instance-type", "1V100.6V", "--source-os-volume-name", "golden", "--dry-run", "--json"})
 	if err != nil {
@@ -185,7 +185,7 @@ func TestCloudDeployDryRunJSONWithSourceOSVolumeName(t *testing.T) {
 
 func TestCloudDeployAcceptsSourceVolumeNameAlias(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	app := &app{Stdout: &stdout, Stderr: &stderr}
+	app := &app{stdoutWriter: &stdout, stderrWriter: &stderr}
 
 	err := app.execute(context.Background(), []string{"cloud", "deploy", "--instance-type", "1V100.6V", "--source-volume-name", "golden", "--dry-run", "--json"})
 	if err != nil {
@@ -205,7 +205,7 @@ func TestCloudDeployAcceptsSourceVolumeNameAlias(t *testing.T) {
 
 func TestCloudDeployRejectsNonUUIDSSHKeyID(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	app := &app{Stdout: &stdout, Stderr: &stderr}
+	app := &app{stdoutWriter: &stdout, stderrWriter: &stderr}
 
 	err := app.execute(context.Background(), []string{"cloud", "deploy", "--instance-type", "1V100.6V", "--source-os-volume-id", "vol-golden", "--dry-run", "--ssh-key-id", "ville+mba@vesilehto.fi"})
 	if err == nil {
@@ -218,7 +218,7 @@ func TestCloudDeployRejectsNonUUIDSSHKeyID(t *testing.T) {
 
 func TestCloudDeployRequiresInstanceTypeFlag(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	app := &app{Stdout: &stdout, Stderr: &stderr}
+	app := &app{stdoutWriter: &stdout, stderrWriter: &stderr}
 
 	err := app.execute(context.Background(), []string{"cloud", "deploy", "--dry-run"})
 	if err == nil {
@@ -231,7 +231,7 @@ func TestCloudDeployRequiresInstanceTypeFlag(t *testing.T) {
 
 func TestCloudDeployDryRunWithoutSourceOSVolumeUsesDefaultImage(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	app := &app{Stdout: &stdout, Stderr: &stderr}
+	app := &app{stdoutWriter: &stdout, stderrWriter: &stderr}
 
 	err := app.execute(context.Background(), []string{"cloud", "deploy", "--instance-type", "1V100.6V", "--dry-run", "--json"})
 	if err != nil {
@@ -270,7 +270,7 @@ func TestCloudDeployDryRunWithoutSourceOSVolumeUsesDefaultImage(t *testing.T) {
 
 func TestCloudDestroyDryRunJSON(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	app := &app{Stdout: &stdout, Stderr: &stderr}
+	app := &app{stdoutWriter: &stdout, stderrWriter: &stderr}
 
 	err := app.execute(context.Background(), []string{"cloud", "destroy", "inst-1", "inst-2", "--dry-run", "--permanent=false", "--volume-id", "vol-1", "--json"})
 	if err != nil {
@@ -306,7 +306,7 @@ func TestCloudDestroyDryRunJSON(t *testing.T) {
 
 func TestCloudDestroyDefaultsToPermanentDryRun(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	app := &app{Stdout: &stdout, Stderr: &stderr}
+	app := &app{stdoutWriter: &stdout, stderrWriter: &stderr}
 
 	err := app.execute(context.Background(), []string{"cloud", "destroy", "inst-1", "--dry-run", "--json"})
 	if err != nil {
@@ -324,7 +324,7 @@ func TestCloudDestroyDefaultsToPermanentDryRun(t *testing.T) {
 
 func TestCloudVolumePurgeDryRunJSON(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	app := &app{Stdout: &stdout, Stderr: &stderr}
+	app := &app{stdoutWriter: &stdout, stderrWriter: &stderr}
 
 	err := app.execute(context.Background(), []string{"cloud", "volume", "vol-1", "vol-2", "--purge", "--dry-run", "--json"})
 	if err != nil {
@@ -345,7 +345,7 @@ func TestCloudVolumePurgeDryRunJSON(t *testing.T) {
 
 func TestCloudVolumePurgeAllDryRunJSON(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	app := &app{Stdout: &stdout, Stderr: &stderr}
+	app := &app{stdoutWriter: &stdout, stderrWriter: &stderr}
 
 	err := app.execute(context.Background(), []string{"cloud", "volume", "--purge-all", "--dry-run", "--json"})
 	if err != nil {
@@ -369,7 +369,7 @@ func TestCloudVolumePurgeAllDryRunJSON(t *testing.T) {
 
 func TestCloudVolumePurgeAllRejectsArgs(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	app := &app{Stdout: &stdout, Stderr: &stderr}
+	app := &app{stdoutWriter: &stdout, stderrWriter: &stderr}
 
 	err := app.execute(context.Background(), []string{"cloud", "volume", "vol-1", "--purge-all"})
 	if err == nil {
@@ -382,7 +382,7 @@ func TestCloudVolumePurgeAllRejectsArgs(t *testing.T) {
 
 func TestCloudVolumePurgeAllRejectsPurge(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	app := &app{Stdout: &stdout, Stderr: &stderr}
+	app := &app{stdoutWriter: &stdout, stderrWriter: &stderr}
 
 	err := app.execute(context.Background(), []string{"cloud", "volume", "vol-1", "--purge", "--purge-all"})
 	if err == nil {
@@ -395,7 +395,7 @@ func TestCloudVolumePurgeAllRejectsPurge(t *testing.T) {
 
 func TestCloudVolumeRejectsArgsWithoutPurge(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	app := &app{Stdout: &stdout, Stderr: &stderr}
+	app := &app{stdoutWriter: &stdout, stderrWriter: &stderr}
 
 	err := app.execute(context.Background(), []string{"cloud", "volume", "vol-1"})
 	if err == nil {
@@ -408,7 +408,7 @@ func TestCloudVolumeRejectsArgsWithoutPurge(t *testing.T) {
 
 func TestCloudVolumeDryRunRequiresPurge(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	app := &app{Stdout: &stdout, Stderr: &stderr}
+	app := &app{stdoutWriter: &stdout, stderrWriter: &stderr}
 
 	err := app.execute(context.Background(), []string{"cloud", "volume", "--dry-run"})
 	if err == nil {
@@ -421,7 +421,7 @@ func TestCloudVolumeDryRunRequiresPurge(t *testing.T) {
 
 func TestPrintCloudVolumesPlainText(t *testing.T) {
 	var stdout bytes.Buffer
-	app := &app{Stdout: &stdout}
+	app := &app{stdoutWriter: &stdout}
 
 	err := app.printCloudVolumes([]verda.Volume{
 		{
@@ -457,7 +457,7 @@ func TestPrintCloudVolumesPlainText(t *testing.T) {
 
 func TestCloudPackerTemplateWritesEmbeddedFiles(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	app := &app{Stdout: &stdout, Stderr: &stderr}
+	app := &app{stdoutWriter: &stdout, stderrWriter: &stderr}
 	dir := t.TempDir()
 
 	err := app.execute(context.Background(), []string{"cloud", "packer-template", dir})
@@ -491,7 +491,7 @@ func TestCloudPackerTemplateWritesEmbeddedFiles(t *testing.T) {
 
 func TestPrintCloudSSHKeysPlainText(t *testing.T) {
 	var stdout bytes.Buffer
-	app := &app{Stdout: &stdout}
+	app := &app{stdoutWriter: &stdout}
 
 	err := app.printCloudSSHKeys([]verda.SSHKey{
 		{ID: "11111111-1111-1111-1111-111111111111", Name: "ville+mba@vesilehto.fi", Fingerprint: "SHA256:abc"},
@@ -517,7 +517,7 @@ func TestPrintCloudSSHKeysPlainText(t *testing.T) {
 
 func TestPrintCloudSSHKeysJSON(t *testing.T) {
 	var stdout bytes.Buffer
-	app := &app{Stdout: &stdout}
+	app := &app{stdoutWriter: &stdout}
 
 	err := app.printCloudSSHKeys([]verda.SSHKey{
 		{ID: "11111111-1111-1111-1111-111111111111", Name: "key", Fingerprint: "SHA256:abc"},
@@ -537,7 +537,7 @@ func TestPrintCloudSSHKeysJSON(t *testing.T) {
 
 func TestPrintCloudDestroyResultPlainText(t *testing.T) {
 	var stdout bytes.Buffer
-	app := &app{Stdout: &stdout}
+	app := &app{stdoutWriter: &stdout}
 
 	err := app.printCloudDestroyResult(&verda.DestroyResult{
 		Provider: "verda",
@@ -563,7 +563,7 @@ func TestPrintCloudDestroyResultPlainText(t *testing.T) {
 
 func TestPrintCloudInstancesPlainText(t *testing.T) {
 	var stdout bytes.Buffer
-	app := &app{Stdout: &stdout}
+	app := &app{stdoutWriter: &stdout}
 	ip := "203.0.113.10"
 
 	err := app.printCloudInstances([]verda.Instance{
@@ -597,7 +597,7 @@ func TestActiveCloudInstancesFiltersInactiveStatuses(t *testing.T) {
 
 func TestPrintCloudPricingPlainText(t *testing.T) {
 	var stdout bytes.Buffer
-	app := &app{Stdout: &stdout}
+	app := &app{stdoutWriter: &stdout}
 
 	err := app.printCloudPricing([]verda.InstancePrice{
 		{LocationCode: "FIN-02", Market: "spot", IsSpot: true, InstanceType: "1L40S.20V", GPUCount: 1, Model: "L40S", PricePerHour: 0.42, PriceKnown: true, Currency: "eur", Available: true},
@@ -616,7 +616,7 @@ func TestPrintCloudPricingPlainText(t *testing.T) {
 
 func TestPrintCloudPricingJSON(t *testing.T) {
 	var stdout bytes.Buffer
-	app := &app{Stdout: &stdout}
+	app := &app{stdoutWriter: &stdout}
 
 	err := app.printCloudPricing([]verda.InstancePrice{
 		{LocationCode: "FIN-02", Market: "spot", IsSpot: true, InstanceType: "1L40S.20V", GPUCount: 1, Model: "L40S", PricePerHour: 0.42, PriceKnown: true, Currency: "eur", Available: true},

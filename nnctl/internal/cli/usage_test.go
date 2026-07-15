@@ -55,7 +55,7 @@ func TestDirectHelpAvailableForEveryCommand(t *testing.T) {
 	for _, args := range tests {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
-			app := &app{Stdout: &stdout, Stderr: &stderr}
+			app := &app{stdoutWriter: &stdout, stderrWriter: &stderr}
 
 			if err := app.execute(context.Background(), args); err != nil {
 				t.Fatalf("Run() error = %v", err)
@@ -74,7 +74,7 @@ func TestExperimentListCompatibilityAliases(t *testing.T) {
 	outputs := make([]string, 0, 4)
 	for _, topic := range []string{"experiments", "experiment", "examples", "example"} {
 		var stdout bytes.Buffer
-		app := &app{Stdout: &stdout}
+		app := &app{stdoutWriter: &stdout}
 		if err := app.execute(context.Background(), []string{"list", topic}); err != nil {
 			t.Fatalf("nnctl list %s: %v", topic, err)
 		}
@@ -97,7 +97,7 @@ func TestUnknownExperimentPointsToPrimaryListCommand(t *testing.T) {
 
 func TestNestedHelpContainsTinyGPTCorpusWorkflow(t *testing.T) {
 	var stdout bytes.Buffer
-	app := &app{Stdout: &stdout}
+	app := &app{stdoutWriter: &stdout}
 
 	if err := app.execute(context.Background(), []string{"help", "train", "tiny-gpt"}); err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -126,7 +126,7 @@ func TestNestedHelpContainsTinyGPTCorpusWorkflow(t *testing.T) {
 
 func TestHelpAfterRunPassthroughSeparatorReachesExperiment(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	app := &app{Stdout: &stdout, Stderr: &stderr}
+	app := &app{stdoutWriter: &stdout, stderrWriter: &stderr}
 
 	if err := app.execute(context.Background(), []string{"--zig", "/bin/echo", "run", "tiny-gpt", "--", "--help"}); err != nil {
 		t.Fatalf("Run() error = %v\nstderr:\n%s", err, stderr.String())
@@ -165,7 +165,7 @@ func TestCompletionScripts(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
-			app := &app{Stdout: &stdout, Stderr: &stderr}
+			app := &app{stdoutWriter: &stdout, stderrWriter: &stderr}
 
 			if err := app.execute(context.Background(), tt.args); err != nil {
 				t.Fatalf("Run() error = %v\nstderr:\n%s", err, stderr.String())
@@ -184,7 +184,7 @@ func TestCompletionScripts(t *testing.T) {
 
 func TestCompletionDoesNotResolveRepo(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	app := &app{Stdout: &stdout, Stderr: &stderr}
+	app := &app{stdoutWriter: &stdout, stderrWriter: &stderr}
 
 	if err := app.execute(context.Background(), []string{"--repo", "/definitely/not/zig-nn", "completion", "bash"}); err != nil {
 		t.Fatalf("Run() error = %v\nstderr:\n%s", err, stderr.String())

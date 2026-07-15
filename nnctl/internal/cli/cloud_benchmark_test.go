@@ -170,7 +170,7 @@ printf '%s\n' 'matmul,64x64x64,cuda,ReleaseFast,1,8,41879,35256,80710,-0.0365066
 	}
 
 	var stderr strings.Builder
-	app := &app{Stderr: &stderr}
+	app := &app{stderrWriter: &stderr}
 	output, err := app.captureCloudBenchmarkSSH(context.Background(), ssh, nil, "root@example", "benchmark")
 	if err != nil {
 		t.Fatalf("captureCloudBenchmarkSSH() error = %v", err)
