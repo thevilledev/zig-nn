@@ -70,6 +70,12 @@ snapshot inference checks, and benchmark rows for the target machine.
   and compression ratio
 - Intended for reproducible small experiments
 
+### Spatial Layers (`spatial.zig`)
+
+- CPU-first `Conv2d` reference over flattened NHWC image batches
+- Explicit input, weight, and bias gradients for studying backpropagation
+- Max-pool forward and backward operations with inspectable gradient routing
+
 ## Memory Management
 
 ### Allocation Strategy
@@ -123,8 +129,6 @@ Areas for potential improvement:
 2. Optimizer state support for backend trainers
 3. Distributed training support
 4. Additional layer types:
-   - Convolutional layers
-   - Attention mechanisms
    - Residual connections
 5. Backend-aware Tiny GPT inference and training experiments
 6. Quantized network inference and KV-cache experiments

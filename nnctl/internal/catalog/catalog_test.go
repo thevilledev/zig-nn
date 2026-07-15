@@ -34,3 +34,13 @@ func TestResolveOptimizerLabExample(t *testing.T) {
 		t.Fatalf("unexpected optimizer lab defaults: %+v", example)
 	}
 }
+
+func TestResolveCNNExample(t *testing.T) {
+	example, ok := ResolveExample("cnn")
+	if !ok {
+		t.Fatal("expected cnn to resolve")
+	}
+	if example.Step != "run_cnn" || !example.Quick {
+		t.Fatalf("unexpected cnn example: %+v", example)
+	}
+}
