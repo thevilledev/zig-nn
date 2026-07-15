@@ -44,6 +44,8 @@ nnctl test
 nnctl examples
 nnctl run quick
 nnctl data tiny-gpt
+nnctl data speech-commands
+nnctl train speech-commands --output speech-commands.bin
 nnctl release
 nnctl fmt
 nnctl clean
@@ -77,6 +79,7 @@ zig build test-embeddings
 zig build test-structured
 zig build test-decoding
 zig build test-retrieval
+zig build test-audio
 zig build test-modules
 zig build test-training
 zig build test-spatial
@@ -97,8 +100,7 @@ zig build test-rocm_backend
 
 ## Data And Model Files
 
-Most examples are self-contained. Two examples need local files, and one has
-optional sourced corpora:
+Most examples are self-contained. Some workflows use local data or checkpoints:
 
 - MNIST expects the dataset files. Use `nnctl data mnist`, then run
   `nnctl run mnist`.
@@ -107,5 +109,8 @@ optional sourced corpora:
   `nnctl run serving`.
 - Tiny GPT falls back to the checked-in toy corpus by default. To use sourced
   Tiny Shakespeare or TinyStories corpora, run `nnctl data tiny-gpt`.
+- Speech Commands needs the external Mini Speech Commands WAV dataset and a
+  locally trained checkpoint. Run `nnctl data speech-commands`, then
+  `nnctl train speech-commands --output speech-commands.bin`.
 
 See [Examples](examples.md) for the full example list.

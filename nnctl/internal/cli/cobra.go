@@ -628,7 +628,36 @@ func (a *App) newTrainCommand(withRepo repoRunner) *cobra.Command {
 			return cmd.Help()
 		},
 	}
-	cmd.AddCommand(a.newTrainTinyGPTCommand(withRepo))
+	cmd.AddCommand(a.newTrainTinyGPTCommand(withRepo), a.newTrainSpeechCommandsCommand(withRepo))
+	return cmd
+}
+
+func (a *App) newTrainSpeechCommandsCommand(withRepo repoRunner) *cobra.Command {
+	opts := defaultSpeechCommandsTrainOptions()
+	cmd := &cobra.Command{
+		Use:     "speech-commands",
+		Aliases: []string{"speechcommands"},
+		Short:   "Train an eight-word speech command checkpoint",
+		Long: `Trains a small device-backed MLP from scratch on Mini Speech Commands.
+Prepare the official dataset first with "nnctl data speech-commands". The best
+validation checkpoint is evaluated once on a speaker-disjoint held-out split.`,
+		Example: `  nnctl data speech-commands
+  nnctl train speech-commands --output speech-commands.bin
+  nnctl run speech-commands -- --model speech-commands.bin --input clip.wav`,
+		Args: cobra.NoArgs,
+		RunE: withRepo(func(ctx context.Context, cmd *cobra.Command, args []string) error {
+			return a.runTrainSpeechCommands(ctx, opts)
+		}),
+	}
+	addModeFlags(cmd, &opts.mode)
+	addGPUFlag(cmd, &opts.gpu)
+	cmd.Flags().StringVar(&opts.dataDir, "data-dir", opts.dataDir, "Mini Speech Commands directory")
+	cmd.Flags().StringVar(&opts.output, "output", opts.output, "best-validation checkpoint path")
+	cmd.Flags().IntVar(&opts.epochs, "epochs", opts.epochs, "training epochs")
+	cmd.Flags().IntVar(&opts.batchSize, "batch-size", opts.batchSize, "training batch size")
+	cmd.Flags().StringVar(&opts.learningRate, "learning-rate", opts.learningRate, "AdamW learning rate")
+	cmd.Flags().IntVar(&opts.seed, "seed", opts.seed, "split, shuffle, and initialization seed")
+	cmd.Flags().SortFlags = false
 	return cmd
 }
 
@@ -764,7 +793,28 @@ func (a *App) newDataCommand(withRepo repoRunner) *cobra.Command {
 			return cmd.Help()
 		},
 	}
-	cmd.AddCommand(a.newDataMNISTCommand(withRepo), a.newDataTinyGPTCommand(withRepo))
+	cmd.AddCommand(a.newDataMNISTCommand(withRepo), a.newDataTinyGPTCommand(withRepo), a.newDataSpeechCommandsCommand(withRepo))
+	return cmd
+}
+
+func (a *App) newDataSpeechCommandsCommand(withRepo repoRunner) *cobra.Command {
+	dir := "data/mini_speech_commands"
+	force := false
+	cmd := &cobra.Command{
+		Use:     "speech-commands",
+		Aliases: []string{"speechcommands"},
+		Short:   "Download and extract Mini Speech Commands",
+		Long:    "Downloads the official eight-word Mini Speech Commands WAV dataset and extracts it safely into the repository data directory.",
+		Example: `  nnctl data speech-commands
+  nnctl train speech-commands --output speech-commands.bin`,
+		Args: cobra.NoArgs,
+		RunE: withRepo(func(ctx context.Context, cmd *cobra.Command, args []string) error {
+			return a.runDataSpeechCommands(ctx, dir, force)
+		}),
+	}
+	cmd.Flags().StringVar(&dir, "dir", dir, "dataset output directory")
+	cmd.Flags().BoolVar(&force, "force", false, "replace an existing prepared dataset")
+	cmd.Flags().SortFlags = false
 	return cmd
 }
 

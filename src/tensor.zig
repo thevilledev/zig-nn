@@ -63,12 +63,12 @@ pub const Shape = struct {
         };
     }
 
-    pub fn slice(self: Shape) []const usize {
+    pub fn slice(self: *const Shape) []const usize {
         return self.dims[0..self.rank];
     }
 
     pub fn eql(self: Shape, other: Shape) bool {
-        return std.mem.eql(usize, self.slice(), other.slice());
+        return std.mem.eql(usize, self.dims[0..self.rank], other.dims[0..other.rank]);
     }
 
     fn matrixDimensions(self: Shape) struct { rows: usize, cols: usize } {
@@ -978,6 +978,14 @@ test "shape validates rank dimensions and overflow" {
     try testing.expectError(error.InvalidRank, Shape.init(&.{}));
     try testing.expectError(error.InvalidDimension, Shape.init(&.{ 2, 0 }));
     try testing.expectError(error.ShapeOverflow, Shape.init(&.{ std.math.maxInt(usize), 2 }));
+}
+
+test "shape slice borrows the stored dimensions" {
+    const testing = std.testing;
+    var shape = try Shape.init(&.{ 2, 3, 4 });
+    const dimensions = shape.slice();
+    try testing.expectEqual(@intFromPtr(&shape.dims[0]), @intFromPtr(dimensions.ptr));
+    try testing.expectEqualSlices(usize, &.{ 2, 3, 4 }, dimensions);
 }
 
 test "execution context tracks tensor transfers and kernels" {

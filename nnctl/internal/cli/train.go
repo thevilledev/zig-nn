@@ -40,6 +40,30 @@ type tinyGPTTrainOptions struct {
 	summaryPath     string
 }
 
+type speechCommandsTrainOptions struct {
+	mode         string
+	gpu          string
+	dataDir      string
+	output       string
+	epochs       int
+	batchSize    int
+	learningRate string
+	seed         int
+}
+
+func defaultSpeechCommandsTrainOptions() speechCommandsTrainOptions {
+	return speechCommandsTrainOptions{
+		mode:         "ReleaseFast",
+		gpu:          "auto",
+		dataDir:      "data/mini_speech_commands",
+		output:       "speech-commands.bin",
+		epochs:       12,
+		batchSize:    64,
+		learningRate: "0.003",
+		seed:         42,
+	}
+}
+
 func defaultTinyGPTTrainOptions() tinyGPTTrainOptions {
 	return tinyGPTTrainOptions{
 		mode:            getenvDefault("NNCTL_OPTIMIZE", "ReleaseFast"),
@@ -208,4 +232,41 @@ func tinyGPTTrainArgs(opts tinyGPTTrainOptions) ([]string, error) {
 		args = append(args, "--summary-path", opts.summaryPath)
 	}
 	return args, nil
+}
+
+func (a *App) runTrainSpeechCommands(ctx context.Context, opts speechCommandsTrainOptions) error {
+	trainArgs, err := speechCommandsTrainArgs(opts)
+	if err != nil {
+		return err
+	}
+	return a.runZig(ctx, zig.RunArgs("run_speech_commands", zig.Options{Optimize: opts.mode, GPU: opts.gpu}, trainArgs)...)
+}
+
+func speechCommandsTrainArgs(opts speechCommandsTrainOptions) ([]string, error) {
+	if opts.dataDir == "" || opts.output == "" {
+		return nil, fmt.Errorf("speech command training requires --data-dir and --output")
+	}
+	if opts.epochs <= 0 || opts.batchSize <= 0 || opts.seed < 0 {
+		return nil, fmt.Errorf("epochs and batch size must be positive, and seed must be non-negative")
+	}
+	backend := opts.gpu
+	switch backend {
+	case "", "auto":
+		backend = "auto"
+	case "none":
+		backend = "cpu"
+	case "metal", "cuda", "rocm":
+	default:
+		return nil, fmt.Errorf("unknown GPU backend %q", opts.gpu)
+	}
+	return []string{
+		"--train",
+		"--data-dir", opts.dataDir,
+		"--output", opts.output,
+		"--epochs", strconv.Itoa(opts.epochs),
+		"--batch-size", strconv.Itoa(opts.batchSize),
+		"--learning-rate", opts.learningRate,
+		"--seed", strconv.Itoa(opts.seed),
+		"--backend", backend,
+	}, nil
 }

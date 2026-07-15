@@ -23,29 +23,31 @@ The examples are intentionally small enough to read beside the reusable code:
    the same MLP under SGD, momentum, and AdamW.
 3. Use CNN for spatial inductive bias, then Autoencoder for denoising and a
    learned bottleneck representation.
-4. Run Tokenizer Lab to compare raw bytes with learned BPE merges and inspect
+4. Train Speech Commands to see WAV decoding, log-mel features, a
+   speaker-disjoint split, checkpointing, and closed-set audio classification.
+5. Run Tokenizer Lab to compare raw bytes with learned BPE merges and inspect
    the compression-versus-vocabulary tradeoff.
-5. Use Padding Masks to batch variable-length sequences without learning from
+6. Use Padding Masks to batch variable-length sequences without learning from
    filler values.
-6. Run Word2Vec to see how a prediction objective turns co-occurrence into
+7. Run Word2Vec to see how a prediction objective turns co-occurrence into
    geometric neighborhoods.
-7. Use Text Classifier to combine learned embeddings, padding masks, multi-head
+8. Use Text Classifier to combine learned embeddings, padding masks, multi-head
    attention, pooling, and sparse cross-entropy.
-8. Use Sequence Tagging to compare independent token decisions with globally
+9. Use Sequence Tagging to compare independent token decisions with globally
    normalized CRF and Viterbi decoding.
-9. Run Decoding Lab to contrast greedy choice, fixed top-k truncation, adaptive
+10. Run Decoding Lab to contrast greedy choice, fixed top-k truncation, adaptive
    nucleus top-p truncation, and repetition penalties.
-10. Use Seq2Seq to see decoder queries learn an alignment over separate encoder
+11. Use Seq2Seq to see decoder queries learn an alignment over separate encoder
    memory while translating and reordering tokens.
-11. Run Semantic Search to train two vocabularies into a shared embedding space
+12. Run Semantic Search to train two vocabularies into a shared embedding space
     with symmetric InfoNCE and rank documents by cosine similarity.
-12. Compare GRU Sequence with Transformer Encoder. The GRU carries state through
+13. Compare GRU Sequence with Transformer Encoder. The GRU carries state through
     time; the encoder uses unmasked attention to retrieve context from any token.
-13. Finish with DQN to see how an MLP, replay memory, exploration, Bellman
+14. Finish with DQN to see how an MLP, replay memory, exploration, Bellman
    targets, and a target network fit into an agent-environment loop.
 
 The CNN and CRF tagging examples use inspectable CPU-first references. The
-optimizer, padding-mask, Word2Vec, text-classifier, Seq2Seq, semantic-search,
+optimizer, padding-mask, Word2Vec, speech-command, text-classifier, Seq2Seq, semantic-search,
 autoencoder, GRU, Transformer encoder, and DQN models accept `--backend`; use
 `nnctl` for automatic backend flags or pass `-Dgpu=auto` to direct Zig runs.
 DQN intentionally crosses the host boundary for environment interaction,
@@ -69,6 +71,7 @@ on the selected device.
 | Tokenizer lab | `zig build run_tokenizer_lab` | `nnctl run tokenizer-lab` | Byte fallback, learned BPE merges, vocabulary growth, and round trips |
 | Padding masks | `zig build run_padding_masks -Dgpu=auto` | `nnctl run padding-masks` | Batched matmul, masked softmax, dropout, and sparse loss for padded sequences |
 | Word2Vec | `zig build run_word2vec -Dgpu=auto` | `nnctl run word2vec` | Skip-gram pairs, unigram negative sampling, and learned embedding neighborhoods |
+| Speech commands | `zig build run_speech_commands -Dgpu=auto -Doptimize=ReleaseFast` | `nnctl run speech-commands` | Closed-set recognition of eight spoken words with log-mel features and a custom MLP |
 | Text classifier | `zig build run_text_classifier -Dgpu=auto` | `nnctl run text-classifier` | Padding-aware multi-head encoder trained on contextual sentiment phrases |
 | Sequence tagging | `zig build run_sequence_tagging` | `nnctl run sequence-tagging` | Forward-backward CRF training and Viterbi decoding for BIO tags |
 | Decoding lab | `zig build run_decoding_lab` | `nnctl run decoding-lab` | Greedy, top-k, nucleus top-p, repetition penalties, and seeded sampling |
@@ -91,6 +94,7 @@ on the selected device.
 - [Quantization examples](../examples/quantization/README.md)
 - [Tiny GPT example](../examples/tiny_gpt/README.md)
 - [Serving example](../examples/serving/README.md)
+- [Speech Commands example](../examples/speech_commands/README.md)
 
 ## External Inputs
 
@@ -99,6 +103,15 @@ MNIST needs downloaded data:
 ```bash
 nnctl data mnist
 nnctl run mnist
+```
+
+Speech Commands downloads an external WAV dataset, trains a checkpoint, and
+then recognizes one or more clips:
+
+```bash
+nnctl data speech-commands
+nnctl train speech-commands --output speech-commands.bin
+nnctl run speech-commands -- --model speech-commands.bin --input clip.wav
 ```
 
 The serving example needs a saved model:

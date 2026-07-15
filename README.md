@@ -8,9 +8,9 @@ This is for learning neural-network fundamentals by building the pieces
 directly: matrix math, layers, training loops, small examples, focused
 experiments, and a CPU-first path with separate backend-aware matrix operations
 plus a device-resident f32 tensor path for CPU, Metal, CUDA, and ROCm. The
-learning path now spans optimization, convolution, tokenization, embeddings,
-structured prediction, encoder/decoder Transformers, semantic retrieval,
-recurrent sequence models, and reinforcement learning. Each reusable learning
+learning path now spans optimization, convolution, audio features, tokenization,
+embeddings, structured prediction, encoder/decoder Transformers, semantic
+retrieval, recurrent sequence models, and reinforcement learning. Each reusable learning
 feature in `src/` has a matching runnable example.
 It is not trying to be a production ML framework.
 
@@ -36,6 +36,9 @@ nnctl run optimizer-lab
 nnctl run tokenizer-lab
 nnctl run padding-masks
 nnctl run word2vec
+nnctl data speech-commands
+nnctl train speech-commands --output speech-commands.bin
+nnctl run speech-commands -- --model speech-commands.bin --input clip.wav
 nnctl run text-classifier
 nnctl run sequence-tagging
 nnctl run decoding-lab
@@ -87,7 +90,8 @@ checks, see [Development Environment](docs/development.md). GPU details are in
 Start with [Examples](docs/examples.md) when you want a guided path through the
 code. Read `src/matrix.zig`, `src/layer.zig`, and `src/network.zig` for the
 original CPU fundamentals. Continue with `src/tensor.zig`, `src/modules.zig`,
-and `src/training.zig` for device-backed models. For text work, continue with
+and `src/training.zig` for device-backed models. For audio work, inspect
+`src/audio.zig` beside the speech-command example. For text work, continue with
 `src/text.zig`, `src/embeddings.zig`, `src/structured.zig`,
 `src/decoding.zig`, `src/transformer.zig`, and `src/retrieval.zig` beside their
 matching examples. The spatial, recurrent, and reinforcement paths live in

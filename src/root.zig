@@ -31,6 +31,7 @@ const embeddings_mod = @import("embeddings.zig");
 const structured_mod = @import("structured.zig");
 const decoding_mod = @import("decoding.zig");
 const retrieval_mod = @import("retrieval.zig");
+const audio_mod = @import("audio.zig");
 
 /// Library usage example:
 ///
@@ -94,6 +95,7 @@ pub const Embeddings = embeddings_mod;
 pub const Structured = structured_mod;
 pub const Decoding = decoding_mod;
 pub const Retrieval = retrieval_mod;
+pub const Audio = audio_mod;
 
 // Export backend interface types
 pub const BackendMatrix = backend_mod.Matrix;

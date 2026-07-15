@@ -1,8 +1,34 @@
 package cli
 
 import (
+	"reflect"
 	"testing"
 )
+
+func TestSpeechCommandsTrainArgs(t *testing.T) {
+	args, err := speechCommandsTrainArgs(defaultSpeechCommandsTrainOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"--train", "--data-dir", "data/mini_speech_commands", "--output", "speech-commands.bin",
+		"--epochs", "12", "--batch-size", "64", "--learning-rate", "0.003",
+		"--seed", "42", "--backend", "auto",
+	}
+	if !reflect.DeepEqual(args, want) {
+		t.Fatalf("speechCommandsTrainArgs() = %#v, want %#v", args, want)
+	}
+
+	opts := defaultSpeechCommandsTrainOptions()
+	opts.gpu = "none"
+	args, err = speechCommandsTrainArgs(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := args[len(args)-1]; got != "cpu" {
+		t.Fatalf("backend = %q, want cpu", got)
+	}
+}
 
 func TestTinyGPTTrainArgsFreshCheckpoint(t *testing.T) {
 	got, err := tinyGPTTrainArgs(tinyGPTTrainOptions{

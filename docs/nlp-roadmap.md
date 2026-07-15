@@ -11,6 +11,7 @@ objective, gradients, and evaluation signal.
 | Tokenizer lab | `nnctl run tokenizer-lab` | Byte fallback and learned byte-pair encoding | Merge learning, vocabulary growth, unknown-free byte round trips |
 | Padding masks | `nnctl run padding-masks` | Batched matmul, masked softmax/backward, dropout, masked sparse loss, head layouts | Why padded values must not affect attention or pooling |
 | Word2Vec | `nnctl run word2vec` | Skip-gram pairs, unigram negative sampling, two embedding tables | How prediction turns co-occurrence into vector neighborhoods |
+| Speech commands | `nnctl run speech-commands` | PCM16 WAV decoding, resampling, FFT, and pooled log-mel features | Closed-set keyword recognition, speaker-disjoint evaluation, and checkpoint compatibility |
 | Text classifier | `nnctl run text-classifier` | Padding-aware multi-head encoder | Contextual classification with learned embeddings and masked pooling |
 | Sequence tagging | `nnctl run sequence-tagging` | Linear-chain CRF, forward-backward, Viterbi | Local emission scores versus globally valid BIO sequences |
 | Decoding lab | `nnctl run decoding-lab` | Greedy, temperature, top-k, nucleus top-p, repetition penalty | How truncation changes a next-token distribution |
@@ -18,8 +19,9 @@ objective, gradients, and evaluation signal.
 | Semantic search | `nnctl run semantic-search` | Symmetric InfoNCE and deterministic top-k cosine ranking | Dual encoders, in-batch negatives, recall@1, and MRR |
 | Tiny GPT | `nnctl run tiny-gpt` | Decoder-only Transformer and KV cache | Autoregressive training, checkpointing, serving, and sampling |
 
-The examples use tiny synthetic or checked-in datasets so the lesson remains
-repeatable. Their metrics demonstrate mechanics, not production model quality.
+Most examples use tiny synthetic or checked-in datasets so the lesson remains
+repeatable. Speech Commands uses a reproducible external teaching dataset.
+Their metrics demonstrate mechanics, not production model quality.
 
 ## GPU Boundary
 
@@ -32,6 +34,7 @@ supplies the catalogued backend default.
 | --- | --- | --- |
 | Padding and multi-head attention | Batched matmul, masked softmax and backward, head transforms, dropout, loss | Length-to-mask construction before upload |
 | Word2Vec | Embedding lookup/backward and optimizer updates | Pair generation and negative sampling before upload; metric reporting |
+| Speech commands | MLP forward/backward and AdamW updates | WAV decoding, log-mel extraction, dataset splitting, feature normalization, and metric reporting |
 | Text classifier | Encoder forward/backward, pooling, classifier, optimizer | Tokenization and dataset assembly |
 | CRF tagging | None; the readable reference is CPU-first | Forward-backward, Viterbi, and training |
 | Cross-attention Seq2Seq | Projections, attention, gradients, classifier, optimizer | Synthetic sequence construction and final alignment display |
