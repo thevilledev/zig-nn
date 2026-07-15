@@ -14,6 +14,21 @@ The convention in this repo is:
 
 ## Current Experiments
 
+### GRU Selective Memory
+
+Location: [examples/gru_sequence](../examples/gru_sequence/gru_sequence.zig)
+
+Run:
+
+```bash
+nnctl run gru-sequence
+```
+
+This marks the first bit in a six-step sequence, fills the remaining steps
+with random distractors, and trains a GRU to recall the marked bit from its
+final state. The training loop performs full backpropagation through time and
+reports held-out accuracy plus device telemetry.
+
 ### Denoising Autoencoder
 
 Location: [examples/autoencoder](../examples/autoencoder/autoencoder.zig)

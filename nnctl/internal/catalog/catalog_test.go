@@ -40,7 +40,7 @@ func TestResolveCNNExample(t *testing.T) {
 	if !ok {
 		t.Fatal("expected cnn to resolve")
 	}
-	if example.Step != "run_cnn" || !example.Quick {
+	if example.Step != "run_cnn" || example.Quick {
 		t.Fatalf("unexpected cnn example: %+v", example)
 	}
 }
@@ -50,7 +50,17 @@ func TestResolveAutoencoderExample(t *testing.T) {
 	if !ok {
 		t.Fatal("expected autoencoder to resolve")
 	}
-	if example.Step != "run_autoencoder" || example.DefaultGPU != "auto" || !example.Quick {
+	if example.Step != "run_autoencoder" || example.DefaultGPU != "auto" || example.Quick {
 		t.Fatalf("unexpected autoencoder example: %+v", example)
+	}
+}
+
+func TestResolveGRUSequenceExample(t *testing.T) {
+	example, ok := ResolveExample("gru_sequence")
+	if !ok {
+		t.Fatal("expected gru_sequence to resolve")
+	}
+	if example.Step != "run_gru_sequence" || example.DefaultGPU != "auto" || example.Quick {
+		t.Fatalf("unexpected gru sequence example: %+v", example)
 	}
 }
