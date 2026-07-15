@@ -20,6 +20,7 @@ typedef struct ZigNNCUDABackend {
     cublasHandle_t cublas;
     CUfunction matrix_multiply;
     CUfunction batched_matrix_multiply;
+    CUfunction permute_batch_heads;
     CUfunction matrix_add;
     CUfunction matrix_add_row_bias;
     CUfunction matrix_subtract;
@@ -200,6 +201,7 @@ static int cuda_get_function(CUmodule module, CUfunction* function, const char* 
 static int cuda_load_functions(ZigNNCUDABackend* backend, char* error_buffer, unsigned long error_buffer_len) {
     return cuda_get_function(backend->module, &backend->matrix_multiply, "matrix_multiply", error_buffer, error_buffer_len) &&
         cuda_get_function(backend->module, &backend->batched_matrix_multiply, "batched_matrix_multiply", error_buffer, error_buffer_len) &&
+        cuda_get_function(backend->module, &backend->permute_batch_heads, "permute_batch_heads", error_buffer, error_buffer_len) &&
         cuda_get_function(backend->module, &backend->matrix_add, "matrix_add", error_buffer, error_buffer_len) &&
         cuda_get_function(backend->module, &backend->matrix_add_row_bias, "matrix_add_row_bias", error_buffer, error_buffer_len) &&
         cuda_get_function(backend->module, &backend->matrix_subtract, "matrix_subtract", error_buffer, error_buffer_len) &&
@@ -559,6 +561,17 @@ int cuda_launch_batched_matrix_multiply(CUDABackendRef backend_ref, CUDABufferRe
     unsigned int output_cols = transpose_b ? b_rows : b_cols;
     void* args[] = { &raw_a, &raw_b, &raw_result, &batch, &a_rows, &a_cols, &b_rows, &b_cols, &transpose_a, &transpose_b };
     return cuda_launch_2d(backend, backend->batched_matrix_multiply, output_cols, batch * output_rows, args);
+}
+
+int cuda_launch_permute_batch_heads(CUDABackendRef backend_ref, CUDABufferRef input_ref, CUDABufferRef result_ref, unsigned int batch, unsigned int tokens, unsigned int heads, unsigned int width, unsigned int split) {
+    ZigNNCUDABackend* backend = (ZigNNCUDABackend*)backend_ref;
+    ZigNNCUDABuffer* input = (ZigNNCUDABuffer*)input_ref;
+    ZigNNCUDABuffer* result = (ZigNNCUDABuffer*)result_ref;
+    if (backend == NULL || input == NULL || result == NULL) return 0;
+    CUdeviceptr raw_input = input->device_ptr;
+    CUdeviceptr raw_result = result->device_ptr;
+    void* args[] = { &raw_input, &raw_result, &batch, &tokens, &heads, &width, &split };
+    return cuda_launch_2d(backend, backend->permute_batch_heads, width, batch * tokens * heads, args);
 }
 
 int cuda_launch_binary_kernel(CUDABackendRef backend_ref, int kernel_id, CUDABufferRef a_ref, CUDABufferRef b_ref, CUDABufferRef result_ref, unsigned int rows, unsigned int cols) {

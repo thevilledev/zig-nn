@@ -49,6 +49,28 @@ extern "C" __global__ void batched_matrix_multiply(
     C[flat_row * output_cols + col] = sum;
 }
 
+extern "C" __global__ void permute_batch_heads(
+    const float* input,
+    float* output,
+    unsigned int batch,
+    unsigned int tokens,
+    unsigned int heads,
+    unsigned int width,
+    unsigned int split
+) {
+    unsigned int channel = blockIdx.x * blockDim.x + threadIdx.x;
+    unsigned int token_head = blockIdx.y * blockDim.y + threadIdx.y;
+    if (channel >= width || token_head >= batch * tokens * heads) return;
+    unsigned int batch_index = token_head / (tokens * heads);
+    unsigned int remainder = token_head % (tokens * heads);
+    unsigned int token = remainder / heads;
+    unsigned int head = remainder % heads;
+    unsigned int token_major = (((batch_index * tokens + token) * heads + head) * width + channel);
+    unsigned int head_major = (((batch_index * heads + head) * tokens + token) * width + channel);
+    if (split) output[head_major] = input[token_major];
+    else output[token_major] = input[head_major];
+}
+
 extern "C" __global__ void matrix_add(
     const float* A,
     const float* B,

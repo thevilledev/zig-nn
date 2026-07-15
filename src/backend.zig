@@ -344,6 +344,20 @@ pub const Matrix = struct {
         );
     }
 
+    /// Reorders `[batch, tokens, heads, width]` to
+    /// `[batch, heads, tokens, width]`, or reverses that layout.
+    pub fn permuteBatchHeads(
+        self: *const Matrix,
+        allocator: Allocator,
+        batch: usize,
+        tokens: usize,
+        heads: usize,
+        width: usize,
+        split: bool,
+    ) !*Matrix {
+        return self.backend.permuteBatchHeads(self, allocator, batch, tokens, heads, width, split);
+    }
+
     /// Performs element-wise matrix addition: C = A + B
     pub fn add(self: *const Matrix, other: *const Matrix, allocator: Allocator) !*Matrix {
         return self.backend.add(self, other, allocator);

@@ -126,6 +126,10 @@ const ROCm = if (enable_rocm) struct {
         return c.rocm_launch_batched_matrix_multiply(toC(backend_ref), toC(a), toC(b), toC(result), batch, a_rows, a_cols, b_rows, b_cols, @intFromBool(transpose_a), @intFromBool(transpose_b)) != 0;
     }
 
+    pub fn launchPermuteBatchHeads(backend_ref: *Backend, input: *Buffer, result: *Buffer, batch: u32, tokens: u32, heads: u32, width: u32, split: bool) bool {
+        return c.rocm_launch_permute_batch_heads(toC(backend_ref), toC(input), toC(result), batch, tokens, heads, width, @intFromBool(split)) != 0;
+    }
+
     pub fn launchBinaryKernel(backend_ref: *Backend, kernel_id: KernelId, a: *Buffer, b: *Buffer, result: *Buffer, rows: u32, cols: u32) bool {
         return c.rocm_launch_binary_kernel(toC(backend_ref), @intFromEnum(kernel_id), toC(a), toC(b), toC(result), rows, cols) != 0;
     }
@@ -257,6 +261,10 @@ const ROCm = if (enable_rocm) struct {
     }
 
     pub fn launchBatchedMatrixMultiply(_: *Backend, _: *Buffer, _: *Buffer, _: *Buffer, _: u32, _: u32, _: u32, _: u32, _: u32, _: bool, _: bool) bool {
+        return false;
+    }
+
+    pub fn launchPermuteBatchHeads(_: *Backend, _: *Buffer, _: *Buffer, _: u32, _: u32, _: u32, _: u32, _: bool) bool {
         return false;
     }
 
@@ -576,6 +584,19 @@ pub const ROCmBackend = struct {
         if (!ROCm.launchBatchedMatrixMultiply(backend_ref, a_buffer, b_buffer, result_buffer, toU32(batch), toU32(a_rows), toU32(a_cols), toU32(b_rows), toU32(b_cols), transpose_a, transpose_b)) return false;
         if (!self.completeSubmittedKernel()) return false;
         result_rocm.markGPUModified();
+        return true;
+    }
+
+    fn dispatchPermuteBatchHeads(self: *ROCmBackend, input: *const Matrix, result: *Matrix, batch: usize, tokens: usize, heads: usize, width: usize, split: bool) bool {
+        const backend_ref = self.backend orelse return false;
+        const source = getROCmMatrix(input);
+        const destination = getROCmMatrix(result);
+        if (!source.syncToGPU()) return false;
+        const source_buffer = source.buffer orelse return false;
+        const destination_buffer = destination.buffer orelse return false;
+        if (!ROCm.launchPermuteBatchHeads(backend_ref, source_buffer, destination_buffer, toU32(batch), toU32(tokens), toU32(heads), toU32(width), split)) return false;
+        if (!self.completeSubmittedKernel()) return false;
+        destination.markGPUModified();
         return true;
     }
 
@@ -1070,6 +1091,28 @@ pub const ROCmBackend = struct {
             }
         }
         result_rocm.markHostModified();
+        return result;
+    }
+
+    pub fn permuteBatchHeads(ptr: *anyopaque, input: *const Matrix, allocator: Allocator, batch: usize, tokens: usize, heads: usize, width: usize, split: bool) error{ OutOfMemory, DimensionMismatch }!*Matrix {
+        if (batch == 0 or tokens == 0 or heads == 0 or width == 0 or input.rows * input.cols != batch * tokens * heads * width) return error.DimensionMismatch;
+        const self = @as(*ROCmBackend, @ptrCast(@alignCast(ptr)));
+        const result = try initMatrix(
+            ptr,
+            allocator,
+            if (split) batch * heads * tokens else batch * tokens,
+            if (split) width else heads * width,
+        );
+        const source = getROCmMatrix(input);
+        const destination = getROCmMatrix(result);
+        if (self.dispatchPermuteBatchHeads(input, result, batch, tokens, heads, width, split)) return result;
+        ensureHostData(source);
+        for (0..batch) |batch_index| for (0..heads) |head| for (0..tokens) |token| for (0..width) |channel| {
+            const token_major = (((batch_index * tokens + token) * heads + head) * width + channel);
+            const head_major = (((batch_index * heads + head) * tokens + token) * width + channel);
+            if (split) destination.host_data[head_major] = source.host_data[token_major] else destination.host_data[token_major] = source.host_data[head_major];
+        };
+        destination.markHostModified();
         return result;
     }
 

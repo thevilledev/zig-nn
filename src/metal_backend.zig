@@ -342,6 +342,7 @@ pub const MetalBackend = struct {
     // Pipeline states for different operations
     matrix_multiply_pipeline: ?*Metal.ComputePipelineState,
     batched_matrix_multiply_pipeline: ?*Metal.ComputePipelineState,
+    permute_batch_heads_pipeline: ?*Metal.ComputePipelineState,
     element_wise_add_pipeline: ?*Metal.ComputePipelineState,
     add_row_bias_pipeline: ?*Metal.ComputePipelineState,
     element_wise_subtract_pipeline: ?*Metal.ComputePipelineState,
@@ -407,6 +408,7 @@ pub const MetalBackend = struct {
             .library = null,
             .matrix_multiply_pipeline = null,
             .batched_matrix_multiply_pipeline = null,
+            .permute_batch_heads_pipeline = null,
             .element_wise_add_pipeline = null,
             .add_row_bias_pipeline = null,
             .element_wise_subtract_pipeline = null,
@@ -459,6 +461,7 @@ pub const MetalBackend = struct {
         _ = self.synchronizeQueued();
         Metal.release(self.matrix_multiply_pipeline);
         Metal.release(self.batched_matrix_multiply_pipeline);
+        Metal.release(self.permute_batch_heads_pipeline);
         Metal.release(self.element_wise_add_pipeline);
         Metal.release(self.add_row_bias_pipeline);
         Metal.release(self.element_wise_subtract_pipeline);
@@ -503,6 +506,7 @@ pub const MetalBackend = struct {
     fn loadPipelines(self: *MetalBackend) !void {
         try self.loadPipeline(&self.matrix_multiply_pipeline, "matrix_multiply");
         try self.loadPipeline(&self.batched_matrix_multiply_pipeline, "batched_matrix_multiply");
+        try self.loadPipeline(&self.permute_batch_heads_pipeline, "permute_batch_heads");
         try self.loadPipeline(&self.element_wise_add_pipeline, "matrix_add");
         try self.loadPipeline(&self.add_row_bias_pipeline, "matrix_add_row_bias");
         try self.loadPipeline(&self.element_wise_subtract_pipeline, "matrix_subtract");
@@ -723,6 +727,34 @@ pub const MetalBackend = struct {
         Metal.commandBufferCommit(command_buffer);
         if (!self.completeSubmittedKernel(command_buffer)) return false;
         result_metal.markGPUModified();
+        return true;
+    }
+
+    fn dispatchPermuteBatchHeads(self: *MetalBackend, input: *const Matrix, result: *Matrix, batch: usize, tokens: usize, heads: usize, width: usize, split: bool) bool {
+        const pipeline = self.permute_batch_heads_pipeline orelse return false;
+        const command_queue = self.command_queue orelse return false;
+        const source = getMetalMatrix(input);
+        const destination = getMetalMatrix(result);
+        if (!source.syncToGPU()) return false;
+        const source_buffer = source.buffer orelse return false;
+        const destination_buffer = destination.buffer orelse return false;
+        const command_buffer = Metal.commandQueueCreateCommandBuffer(command_queue) orelse return false;
+        defer Metal.release(command_buffer);
+        const encoder = Metal.commandBufferCreateComputeCommandEncoder(command_buffer) orelse return false;
+        defer Metal.release(encoder);
+        Metal.computeEncoderSetPipelineState(encoder, pipeline);
+        Metal.computeEncoderSetBuffer(encoder, source_buffer, 0, 0);
+        Metal.computeEncoderSetBuffer(encoder, destination_buffer, 0, 1);
+        setU32(encoder, toU32(batch), 2);
+        setU32(encoder, toU32(tokens), 3);
+        setU32(encoder, toU32(heads), 4);
+        setU32(encoder, toU32(width), 5);
+        setU32(encoder, @intFromBool(split), 6);
+        Metal.computeEncoderDispatchThreads(encoder, pipeline, width, batch * tokens * heads, 1);
+        Metal.computeEncoderEndEncoding(encoder);
+        Metal.commandBufferCommit(command_buffer);
+        if (!self.completeSubmittedKernel(command_buffer)) return false;
+        destination.markGPUModified();
         return true;
     }
 
@@ -1457,6 +1489,34 @@ pub const MetalBackend = struct {
             }
         }
         result_metal.markHostModified();
+        return result;
+    }
+
+    pub fn permuteBatchHeads(ptr: *anyopaque, input: *const Matrix, allocator: Allocator, batch: usize, tokens: usize, heads: usize, width: usize, split: bool) error{ OutOfMemory, DimensionMismatch }!*Matrix {
+        if (batch == 0 or tokens == 0 or heads == 0 or width == 0 or input.rows * input.cols != batch * tokens * heads * width) return error.DimensionMismatch;
+        const self = @as(*MetalBackend, @ptrCast(@alignCast(ptr)));
+        const result = try initMatrix(
+            ptr,
+            allocator,
+            if (split) batch * heads * tokens else batch * tokens,
+            if (split) width else heads * width,
+        );
+        const source = getMetalMatrix(input);
+        const destination = getMetalMatrix(result);
+        if (self.dispatchPermuteBatchHeads(input, result, batch, tokens, heads, width, split)) return result;
+        ensureHostData(source);
+        for (0..batch) |batch_index| {
+            for (0..heads) |head| {
+                for (0..tokens) |token| {
+                    for (0..width) |channel| {
+                        const token_major = (((batch_index * tokens + token) * heads + head) * width + channel);
+                        const head_major = (((batch_index * heads + head) * tokens + token) * width + channel);
+                        if (split) destination.host_data[head_major] = source.host_data[token_major] else destination.host_data[token_major] = source.host_data[head_major];
+                    }
+                }
+            }
+        }
+        destination.markHostModified();
         return result;
     }
 

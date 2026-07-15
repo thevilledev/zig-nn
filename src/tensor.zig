@@ -384,6 +384,30 @@ pub const ExecutionContext = struct {
         };
     }
 
+    /// Splits token-major channels into head-major batches:
+    /// `[batch, tokens, heads, width] -> [batch * heads, tokens, width]`.
+    pub fn splitHeads(self: *ExecutionContext, input: Tensor) !Tensor {
+        if (input.shape.rank != 4) return error.InvalidRank;
+        const batch = input.shape.dims[0];
+        const tokens = input.shape.dims[1];
+        const heads = input.shape.dims[2];
+        const width = input.shape.dims[3];
+        const matrix = try input.matrix.permuteBatchHeads(self.device.allocator, batch, tokens, heads, width, true);
+        self.stats.kernels += 1;
+        return .{ .matrix = matrix, .shape = try Shape.init(&.{ batch * heads, tokens, width }), .allocator = self.device.allocator };
+    }
+
+    /// Merges head-major batches back into token-major channels:
+    /// `[batch * heads, tokens, width] -> [batch, tokens, heads, width]`.
+    pub fn mergeHeads(self: *ExecutionContext, input: Tensor, batch: usize, heads: usize) !Tensor {
+        if (input.shape.rank != 3 or batch == 0 or heads == 0 or input.shape.dims[0] != batch * heads) return error.DimensionMismatch;
+        const tokens = input.shape.dims[1];
+        const width = input.shape.dims[2];
+        const matrix = try input.matrix.permuteBatchHeads(self.device.allocator, batch, tokens, heads, width, false);
+        self.stats.kernels += 1;
+        return .{ .matrix = matrix, .shape = try Shape.init(&.{ batch, tokens, heads, width }), .allocator = self.device.allocator };
+    }
+
     pub fn add(self: *ExecutionContext, a: Tensor, b: Tensor) !Tensor {
         if (!a.shape.eql(b.shape)) return error.DimensionMismatch;
         if (a.backendType() != b.backendType()) return error.BackendMismatch;
@@ -1007,6 +1031,26 @@ test "batched matmul supports logical transposes on every available device" {
             try testing.expectEqual(@as(usize, 1), context.backendStats().kernel_launches);
         }
     }
+}
+
+test "split and merge heads preserve token-major values" {
+    const testing = std.testing;
+    var device = try Device.init(testing.allocator, .cpu);
+    defer device.deinit();
+    var context = ExecutionContext.init(&device);
+    var input = try context.upload(&.{ 1, 2, 2, 2 }, &.{ 1, 2, 3, 4, 5, 6, 7, 8 });
+    defer input.deinit();
+    var split = try context.splitHeads(input);
+    defer split.deinit();
+    try testing.expectEqualSlices(usize, &.{ 2, 2, 2 }, split.shape.slice());
+    var split_values: [8]f32 = undefined;
+    try context.readback(split, &split_values);
+    try testing.expectEqualSlices(f32, &.{ 1, 2, 5, 6, 3, 4, 7, 8 }, &split_values);
+    var merged = try context.mergeHeads(split, 1, 2);
+    defer merged.deinit();
+    var merged_values: [8]f32 = undefined;
+    try context.readback(merged, &merged_values);
+    try testing.expectEqualSlices(f32, &.{ 1, 2, 3, 4, 5, 6, 7, 8 }, &merged_values);
 }
 
 test "masked softmax backward matches finite differences" {

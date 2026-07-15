@@ -65,6 +65,16 @@ func TestResolveWord2VecExample(t *testing.T) {
 	}
 }
 
+func TestResolveTextClassifierExample(t *testing.T) {
+	example, ok := ResolveExample("text_classifier")
+	if !ok {
+		t.Fatal("expected text_classifier to resolve")
+	}
+	if example.Step != "run_text_classifier" || example.DefaultGPU != "auto" || example.Quick {
+		t.Fatalf("unexpected text classifier example: %+v", example)
+	}
+}
+
 func TestResolveCNNExample(t *testing.T) {
 	example, ok := ResolveExample("cnn")
 	if !ok {

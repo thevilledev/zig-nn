@@ -539,6 +539,236 @@ pub const FullSelfAttention = struct {
     }
 };
 
+/// Bidirectional multi-head self-attention over padded batches. Callers pass a
+/// `[batch * heads, tokens, tokens]` attention mask and a
+/// `[batch, tokens, channels]` token mask, keeping mask application explicit
+/// and inspectable.
+pub const MaskedMultiHeadSelfAttention = struct {
+    query: Linear,
+    key: Linear,
+    value: Linear,
+    output: Linear,
+    channels: usize,
+    heads: usize,
+    head_width: usize,
+
+    pub fn init(context: *ExecutionContext, channels: usize, heads: usize, random: std.Random) !MaskedMultiHeadSelfAttention {
+        if (channels == 0 or heads == 0 or channels % heads != 0) return error.InvalidDimension;
+        var query = try Linear.init(context, channels, channels, random);
+        errdefer query.deinit();
+        var key = try Linear.init(context, channels, channels, random);
+        errdefer key.deinit();
+        var value = try Linear.init(context, channels, channels, random);
+        errdefer value.deinit();
+        const output = try Linear.init(context, channels, channels, random);
+        return .{
+            .query = query,
+            .key = key,
+            .value = value,
+            .output = output,
+            .channels = channels,
+            .heads = heads,
+            .head_width = channels / heads,
+        };
+    }
+
+    pub fn deinit(self: *MaskedMultiHeadSelfAttention) void {
+        self.query.deinit();
+        self.key.deinit();
+        self.value.deinit();
+        self.output.deinit();
+        self.* = undefined;
+    }
+
+    pub fn forward(self: *const MaskedMultiHeadSelfAttention, context: *ExecutionContext, input: Tensor, attention_mask: Tensor, token_mask: Tensor) !Tensor {
+        const dimensions = try self.validate(input, attention_mask, token_mask);
+        var input_flat = input;
+        input_flat.shape = try tensor.Shape.init(&.{ dimensions.batch * dimensions.tokens, self.channels });
+        var query = try self.projectHeads(context, &self.query, input_flat, dimensions.batch, dimensions.tokens);
+        defer query.deinit();
+        var key = try self.projectHeads(context, &self.key, input_flat, dimensions.batch, dimensions.tokens);
+        defer key.deinit();
+        var value = try self.projectHeads(context, &self.value, input_flat, dimensions.batch, dimensions.tokens);
+        defer value.deinit();
+        var scores = try context.batchedMatmul(query, key, false, true);
+        defer scores.deinit();
+        var scaled_scores = try context.scale(scores, 1.0 / @sqrt(@as(f32, @floatFromInt(self.head_width))));
+        defer scaled_scores.deinit();
+        var probabilities = try context.maskedSoftmax(scaled_scores, attention_mask);
+        defer probabilities.deinit();
+        var attended = try context.batchedMatmul(probabilities, value, false, false);
+        defer attended.deinit();
+        var merged = try context.mergeHeads(attended, dimensions.batch, self.heads);
+        defer merged.deinit();
+        try merged.reshape(&.{ dimensions.batch * dimensions.tokens, self.channels });
+        var projected = try self.output.forward(context, merged);
+        defer projected.deinit();
+        try projected.reshape(input.shape.slice());
+        return context.multiply(projected, token_mask);
+    }
+
+    pub fn backward(self: *const MaskedMultiHeadSelfAttention, context: *ExecutionContext, input: Tensor, attention_mask: Tensor, token_mask: Tensor, output_gradient: Tensor) !FullSelfAttentionGradients {
+        const dimensions = try self.validate(input, attention_mask, token_mask);
+        if (!input.shape.eql(output_gradient.shape)) return error.DimensionMismatch;
+        var input_flat = input;
+        input_flat.shape = try tensor.Shape.init(&.{ dimensions.batch * dimensions.tokens, self.channels });
+        var query = try self.projectHeads(context, &self.query, input_flat, dimensions.batch, dimensions.tokens);
+        defer query.deinit();
+        var key = try self.projectHeads(context, &self.key, input_flat, dimensions.batch, dimensions.tokens);
+        defer key.deinit();
+        var value = try self.projectHeads(context, &self.value, input_flat, dimensions.batch, dimensions.tokens);
+        defer value.deinit();
+        var scores = try context.batchedMatmul(query, key, false, true);
+        defer scores.deinit();
+        const attention_scale = 1.0 / @sqrt(@as(f32, @floatFromInt(self.head_width)));
+        var scaled_scores = try context.scale(scores, attention_scale);
+        defer scaled_scores.deinit();
+        var probabilities = try context.maskedSoftmax(scaled_scores, attention_mask);
+        defer probabilities.deinit();
+        var attended = try context.batchedMatmul(probabilities, value, false, false);
+        defer attended.deinit();
+        var merged = try context.mergeHeads(attended, dimensions.batch, self.heads);
+        defer merged.deinit();
+        try merged.reshape(&.{ dimensions.batch * dimensions.tokens, self.channels });
+
+        var masked_output_gradient = try context.multiply(output_gradient, token_mask);
+        defer masked_output_gradient.deinit();
+        try masked_output_gradient.reshape(&.{ dimensions.batch * dimensions.tokens, self.channels });
+        var output_gradients = try self.output.backward(context, merged, masked_output_gradient);
+        errdefer output_gradients.deinit();
+        try output_gradients.input.reshape(&.{ dimensions.batch, dimensions.tokens, self.heads, self.head_width });
+        var attended_gradient = try context.splitHeads(output_gradients.input);
+        defer attended_gradient.deinit();
+        var probability_gradient = try context.batchedMatmul(attended_gradient, value, false, true);
+        defer probability_gradient.deinit();
+        var scaled_score_gradient = try context.maskedSoftmaxBackward(probabilities, probability_gradient, attention_mask);
+        defer scaled_score_gradient.deinit();
+        var score_gradient = try context.scale(scaled_score_gradient, attention_scale);
+        defer score_gradient.deinit();
+        var query_gradient = try context.batchedMatmul(score_gradient, key, false, false);
+        defer query_gradient.deinit();
+        var key_gradient = try context.batchedMatmul(score_gradient, query, true, false);
+        defer key_gradient.deinit();
+        var value_gradient = try context.batchedMatmul(probabilities, attended_gradient, true, false);
+        defer value_gradient.deinit();
+
+        var query_merged = try context.mergeHeads(query_gradient, dimensions.batch, self.heads);
+        defer query_merged.deinit();
+        try query_merged.reshape(&.{ dimensions.batch * dimensions.tokens, self.channels });
+        var key_merged = try context.mergeHeads(key_gradient, dimensions.batch, self.heads);
+        defer key_merged.deinit();
+        try key_merged.reshape(&.{ dimensions.batch * dimensions.tokens, self.channels });
+        var value_merged = try context.mergeHeads(value_gradient, dimensions.batch, self.heads);
+        defer value_merged.deinit();
+        try value_merged.reshape(&.{ dimensions.batch * dimensions.tokens, self.channels });
+        var query_gradients = try self.query.backward(context, input_flat, query_merged);
+        errdefer query_gradients.deinit();
+        var key_gradients = try self.key.backward(context, input_flat, key_merged);
+        errdefer key_gradients.deinit();
+        var value_gradients = try self.value.backward(context, input_flat, value_merged);
+        errdefer value_gradients.deinit();
+        var query_key_gradient = try context.add(query_gradients.input, key_gradients.input);
+        defer query_key_gradient.deinit();
+        var input_gradient_flat = try context.add(query_key_gradient, value_gradients.input);
+        defer input_gradient_flat.deinit();
+        try input_gradient_flat.reshape(input.shape.slice());
+        const input_gradient = try context.multiply(input_gradient_flat, token_mask);
+
+        output_gradients.input.deinit();
+        query_gradients.input.deinit();
+        key_gradients.input.deinit();
+        value_gradients.input.deinit();
+        return .{
+            .input = input_gradient,
+            .query_weights = query_gradients.weights,
+            .query_bias = query_gradients.bias,
+            .key_weights = key_gradients.weights,
+            .key_bias = key_gradients.bias,
+            .value_weights = value_gradients.weights,
+            .value_bias = value_gradients.bias,
+            .output_weights = output_gradients.weights,
+            .output_bias = output_gradients.bias,
+        };
+    }
+
+    pub fn parameterCount(self: MaskedMultiHeadSelfAttention) usize {
+        return self.query.parameterCount() + self.key.parameterCount() + self.value.parameterCount() + self.output.parameterCount();
+    }
+
+    fn projectHeads(self: MaskedMultiHeadSelfAttention, context: *ExecutionContext, projection: *const Linear, input_flat: Tensor, batch: usize, tokens: usize) !Tensor {
+        var projected = try projection.forward(context, input_flat);
+        defer projected.deinit();
+        try projected.reshape(&.{ batch, tokens, self.heads, self.head_width });
+        return context.splitHeads(projected);
+    }
+
+    fn validate(self: MaskedMultiHeadSelfAttention, input: Tensor, attention_mask: Tensor, token_mask: Tensor) !struct { batch: usize, tokens: usize } {
+        if (input.shape.rank != 3 or input.shape.dims[2] != self.channels or !input.shape.eql(token_mask.shape)) return error.DimensionMismatch;
+        const batch = input.shape.dims[0];
+        const tokens = input.shape.dims[1];
+        if (attention_mask.shape.rank != 3 or attention_mask.shape.dims[0] != batch * self.heads or attention_mask.shape.dims[1] != tokens or attention_mask.shape.dims[2] != tokens) return error.DimensionMismatch;
+        return .{ .batch = batch, .tokens = tokens };
+    }
+};
+
+/// Host-side masks derived from sequence lengths. They are uploaded once and
+/// then reused by attention, residual masking, and mean pooling.
+pub const PaddingMasks = struct {
+    allocator: Allocator,
+    attention: []f32,
+    tokens: []f32,
+    mean_pool: []f32,
+    batch: usize,
+    maximum_tokens: usize,
+    heads: usize,
+    channels: usize,
+
+    pub fn init(allocator: Allocator, lengths: []const usize, maximum_tokens: usize, heads: usize, channels: usize) !PaddingMasks {
+        if (lengths.len == 0 or maximum_tokens == 0 or heads == 0 or channels == 0) return error.InvalidDimension;
+        const attention = try allocator.alloc(f32, lengths.len * heads * maximum_tokens * maximum_tokens);
+        errdefer allocator.free(attention);
+        const tokens = try allocator.alloc(f32, lengths.len * maximum_tokens * channels);
+        errdefer allocator.free(tokens);
+        const mean_pool = try allocator.alloc(f32, lengths.len * maximum_tokens);
+        errdefer allocator.free(mean_pool);
+        @memset(attention, 0);
+        @memset(tokens, 0);
+        @memset(mean_pool, 0);
+        for (lengths, 0..) |length, batch_index| {
+            if (length == 0 or length > maximum_tokens) return error.InvalidSequenceLength;
+            const inverse_length = 1.0 / @as(f32, @floatFromInt(length));
+            for (0..maximum_tokens) |token| {
+                if (token >= length) continue;
+                @memset(tokens[(batch_index * maximum_tokens + token) * channels .. (batch_index * maximum_tokens + token + 1) * channels], 1);
+                mean_pool[batch_index * maximum_tokens + token] = inverse_length;
+            }
+            for (0..heads) |head| {
+                const head_offset = (batch_index * heads + head) * maximum_tokens * maximum_tokens;
+                for (0..length) |query| {
+                    @memset(attention[head_offset + query * maximum_tokens .. head_offset + query * maximum_tokens + length], 1);
+                }
+            }
+        }
+        return .{
+            .allocator = allocator,
+            .attention = attention,
+            .tokens = tokens,
+            .mean_pool = mean_pool,
+            .batch = lengths.len,
+            .maximum_tokens = maximum_tokens,
+            .heads = heads,
+            .channels = channels,
+        };
+    }
+
+    pub fn deinit(self: *PaddingMasks) void {
+        self.allocator.free(self.attention);
+        self.allocator.free(self.tokens);
+        self.allocator.free(self.mean_pool);
+        self.* = undefined;
+    }
+};
+
 /// Position-wise GELU feed-forward network.
 pub const FeedForward = struct {
     expand: Linear,
@@ -794,6 +1024,164 @@ pub const EncoderBlock = struct {
         {
             return error.DimensionMismatch;
         }
+    }
+};
+
+/// Dynamic-batch encoder block with padding-aware multi-head attention.
+pub const MaskedEncoderBlock = struct {
+    attention_norm: LayerNorm,
+    attention: MaskedMultiHeadSelfAttention,
+    feed_forward_norm: LayerNorm,
+    feed_forward: FeedForward,
+    channels: usize,
+
+    pub fn init(context: *ExecutionContext, channels: usize, heads: usize, hidden_features: usize, random: std.Random) !MaskedEncoderBlock {
+        var attention_norm = try LayerNorm.init(context, channels, 1e-5);
+        errdefer attention_norm.deinit();
+        var attention = try MaskedMultiHeadSelfAttention.init(context, channels, heads, random);
+        errdefer attention.deinit();
+        var feed_forward_norm = try LayerNorm.init(context, channels, 1e-5);
+        errdefer feed_forward_norm.deinit();
+        const feed_forward = try FeedForward.init(context, channels, hidden_features, random);
+        return .{
+            .attention_norm = attention_norm,
+            .attention = attention,
+            .feed_forward_norm = feed_forward_norm,
+            .feed_forward = feed_forward,
+            .channels = channels,
+        };
+    }
+
+    pub fn deinit(self: *MaskedEncoderBlock) void {
+        self.attention_norm.deinit();
+        self.attention.deinit();
+        self.feed_forward_norm.deinit();
+        self.feed_forward.deinit();
+        self.* = undefined;
+    }
+
+    pub fn forward(self: *const MaskedEncoderBlock, context: *ExecutionContext, input: Tensor, attention_mask: Tensor, token_mask: Tensor) !Tensor {
+        const dimensions = try self.validate(input, token_mask);
+        var input_flat = input;
+        input_flat.shape = try tensor.Shape.init(&.{ dimensions.batch * dimensions.tokens, self.channels });
+        var normalized_attention = try self.attention_norm.forward(context, input_flat);
+        defer normalized_attention.deinit();
+        try normalized_attention.reshape(input.shape.slice());
+        var attention_output = try self.attention.forward(context, normalized_attention, attention_mask, token_mask);
+        defer attention_output.deinit();
+        var attention_residual_unmasked = try context.add(input, attention_output);
+        defer attention_residual_unmasked.deinit();
+        var attention_residual = try context.multiply(attention_residual_unmasked, token_mask);
+        defer attention_residual.deinit();
+        var residual_flat = attention_residual;
+        residual_flat.shape = input_flat.shape;
+        var normalized_feed_forward = try self.feed_forward_norm.forward(context, residual_flat);
+        defer normalized_feed_forward.deinit();
+        var feed_forward_output = try self.feed_forward.forward(context, normalized_feed_forward);
+        defer feed_forward_output.deinit();
+        try feed_forward_output.reshape(input.shape.slice());
+        var output_unmasked = try context.add(attention_residual, feed_forward_output);
+        defer output_unmasked.deinit();
+        return context.multiply(output_unmasked, token_mask);
+    }
+
+    pub fn backward(self: *const MaskedEncoderBlock, context: *ExecutionContext, input: Tensor, attention_mask: Tensor, token_mask: Tensor, output_gradient: Tensor) !EncoderBlockGradients {
+        const dimensions = try self.validate(input, token_mask);
+        if (!input.shape.eql(output_gradient.shape)) return error.DimensionMismatch;
+        var input_flat = input;
+        input_flat.shape = try tensor.Shape.init(&.{ dimensions.batch * dimensions.tokens, self.channels });
+        var normalized_attention = try self.attention_norm.forward(context, input_flat);
+        defer normalized_attention.deinit();
+        try normalized_attention.reshape(input.shape.slice());
+        var attention_output = try self.attention.forward(context, normalized_attention, attention_mask, token_mask);
+        defer attention_output.deinit();
+        var attention_residual_unmasked = try context.add(input, attention_output);
+        defer attention_residual_unmasked.deinit();
+        var attention_residual = try context.multiply(attention_residual_unmasked, token_mask);
+        defer attention_residual.deinit();
+        var residual_flat = attention_residual;
+        residual_flat.shape = input_flat.shape;
+        var normalized_feed_forward = try self.feed_forward_norm.forward(context, residual_flat);
+        defer normalized_feed_forward.deinit();
+
+        var masked_output_gradient = try context.multiply(output_gradient, token_mask);
+        defer masked_output_gradient.deinit();
+        var output_gradient_flat = masked_output_gradient;
+        output_gradient_flat.shape = input_flat.shape;
+        const feed_forward_gradients = try self.feed_forward.backward(context, normalized_feed_forward, output_gradient_flat);
+        errdefer {
+            var owned = feed_forward_gradients;
+            owned.deinit();
+        }
+        const feed_forward_norm_gradients = try self.feed_forward_norm.backward(context, residual_flat, feed_forward_gradients.input);
+        errdefer {
+            var owned = feed_forward_norm_gradients;
+            owned.deinit();
+        }
+        var feed_norm_input_view = feed_forward_norm_gradients.input;
+        feed_norm_input_view.shape = input.shape;
+        var attention_residual_gradient_unmasked = try context.add(masked_output_gradient, feed_norm_input_view);
+        defer attention_residual_gradient_unmasked.deinit();
+        var attention_residual_gradient = try context.multiply(attention_residual_gradient_unmasked, token_mask);
+        defer attention_residual_gradient.deinit();
+        const attention_gradients = try self.attention.backward(context, normalized_attention, attention_mask, token_mask, attention_residual_gradient);
+        errdefer {
+            var owned = attention_gradients;
+            owned.deinit();
+        }
+        var attention_input_view = attention_gradients.input;
+        attention_input_view.shape = input_flat.shape;
+        const attention_norm_gradients = try self.attention_norm.backward(context, input_flat, attention_input_view);
+        errdefer {
+            var owned = attention_norm_gradients;
+            owned.deinit();
+        }
+        var norm_input_view = attention_norm_gradients.input;
+        norm_input_view.shape = input.shape;
+        var input_gradient_unmasked = try context.add(attention_residual_gradient, norm_input_view);
+        defer input_gradient_unmasked.deinit();
+        const input_gradient = try context.multiply(input_gradient_unmasked, token_mask);
+        return .{
+            .input = input_gradient,
+            .attention_norm = attention_norm_gradients,
+            .attention = attention_gradients,
+            .feed_forward_norm = feed_forward_norm_gradients,
+            .feed_forward = feed_forward_gradients,
+        };
+    }
+
+    pub fn parameterTensorCount(_: MaskedEncoderBlock) usize {
+        return 16;
+    }
+
+    pub fn parameterCount(self: MaskedEncoderBlock) usize {
+        return self.attention_norm.parameterCount() + self.attention.parameterCount() + self.feed_forward_norm.parameterCount() + self.feed_forward.parameterCount();
+    }
+
+    pub fn parameters(self: *MaskedEncoderBlock, output: []*Tensor) ![]*Tensor {
+        if (output.len < self.parameterTensorCount()) return error.InsufficientBuffer;
+        output[0] = &self.attention_norm.gamma;
+        output[1] = &self.attention_norm.beta;
+        output[2] = &self.attention.query.weights;
+        output[3] = &self.attention.query.bias;
+        output[4] = &self.attention.key.weights;
+        output[5] = &self.attention.key.bias;
+        output[6] = &self.attention.value.weights;
+        output[7] = &self.attention.value.bias;
+        output[8] = &self.attention.output.weights;
+        output[9] = &self.attention.output.bias;
+        output[10] = &self.feed_forward_norm.gamma;
+        output[11] = &self.feed_forward_norm.beta;
+        output[12] = &self.feed_forward.expand.weights;
+        output[13] = &self.feed_forward.expand.bias;
+        output[14] = &self.feed_forward.project.weights;
+        output[15] = &self.feed_forward.project.bias;
+        return output[0..16];
+    }
+
+    fn validate(self: MaskedEncoderBlock, input: Tensor, token_mask: Tensor) !struct { batch: usize, tokens: usize } {
+        if (input.shape.rank != 3 or input.shape.dims[2] != self.channels or !input.shape.eql(token_mask.shape)) return error.DimensionMismatch;
+        return .{ .batch = input.shape.dims[0], .tokens = input.shape.dims[1] };
     }
 };
 
@@ -1336,6 +1724,98 @@ test "unmasked attention input gradients match finite differences" {
         const minus_sum = minus_result[0] + minus_result[1] + minus_result[2] + minus_result[3];
         const numerical = (plus_sum - minus_sum) / (2 * epsilon);
         try testing.expectApproxEqAbs(numerical, analytical[input_index], 3e-3);
+    }
+}
+
+test "masked multi-head attention ignores padding on every available device" {
+    const testing = std.testing;
+    const preferences = [_]tensor.DevicePreference{ .cpu, .metal, .cuda, .rocm };
+    for (preferences) |preference| {
+        var device = tensor.Device.init(testing.allocator, preference) catch |err| switch (err) {
+            error.BackendUnavailable => continue,
+            else => return err,
+        };
+        defer device.deinit();
+        var context = ExecutionContext.init(&device);
+        var prng = std.Random.DefaultPrng.init(91);
+        var attention = try MaskedMultiHeadSelfAttention.init(&context, 4, 2, prng.random());
+        defer attention.deinit();
+        var input_a = try context.upload(&.{ 1, 3, 4 }, &.{ 1, 0, 0, 1, 0, 1, 1, 0, 0, 0, 0, 0 });
+        defer input_a.deinit();
+        var input_b = try context.upload(&.{ 1, 3, 4 }, &.{ 1, 0, 0, 1, 0, 1, 1, 0, 90, -80, 70, -60 });
+        defer input_b.deinit();
+        var token_mask = try context.upload(&.{ 1, 3, 4 }, &.{ 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0 });
+        defer token_mask.deinit();
+        var attention_mask = try context.upload(&.{ 2, 3, 3 }, &.{
+            1, 1, 0, 1, 1, 0, 0, 0, 0,
+            1, 1, 0, 1, 1, 0, 0, 0, 0,
+        });
+        defer attention_mask.deinit();
+        context.resetStats();
+        var output_a = try attention.forward(&context, input_a, attention_mask, token_mask);
+        defer output_a.deinit();
+        var output_b = try attention.forward(&context, input_b, attention_mask, token_mask);
+        defer output_b.deinit();
+        var output_gradient = try context.createTensor(&.{ 1, 3, 4 });
+        defer output_gradient.deinit();
+        output_gradient.fill(1);
+        var gradients = try attention.backward(&context, input_a, attention_mask, token_mask, output_gradient);
+        defer gradients.deinit();
+        try testing.expectEqual(@as(usize, 0), context.stats.readbacks);
+        var values_a: [12]f32 = undefined;
+        var values_b: [12]f32 = undefined;
+        try context.readback(output_a, &values_a);
+        try context.readback(output_b, &values_b);
+        for (values_a[0..8], values_b[0..8]) |a, b| try testing.expectApproxEqAbs(a, b, 1e-5);
+        try testing.expectEqualSlices(f32, &.{ 0, 0, 0, 0 }, values_a[8..12]);
+        try testing.expectEqualSlices(f32, &.{ 0, 0, 0, 0 }, values_b[8..12]);
+    }
+}
+
+test "masked multi-head attention input gradient matches finite differences" {
+    const testing = std.testing;
+    var device = try tensor.Device.init(testing.allocator, .cpu);
+    defer device.deinit();
+    var context = ExecutionContext.init(&device);
+    var prng = std.Random.DefaultPrng.init(17);
+    var attention = try MaskedMultiHeadSelfAttention.init(&context, 2, 1, prng.random());
+    defer attention.deinit();
+    const input_values = [_]f32{ 0.2, -0.3, 0.5, 0.1 };
+    var input = try context.upload(&.{ 1, 2, 2 }, &input_values);
+    defer input.deinit();
+    var attention_mask = try context.upload(&.{ 1, 2, 2 }, &.{ 1, 1, 1, 1 });
+    defer attention_mask.deinit();
+    var token_mask = try context.upload(&.{ 1, 2, 2 }, &.{ 1, 1, 1, 1 });
+    defer token_mask.deinit();
+    var output_gradient = try context.upload(&.{ 1, 2, 2 }, &.{ 1, 1, 1, 1 });
+    defer output_gradient.deinit();
+    var gradients = try attention.backward(&context, input, attention_mask, token_mask, output_gradient);
+    defer gradients.deinit();
+    var analytical: [4]f32 = undefined;
+    try context.readback(gradients.input, &analytical);
+    const epsilon: f32 = 1e-3;
+    for (0..input_values.len) |input_index| {
+        var plus = input_values;
+        plus[input_index] += epsilon;
+        var plus_input = try context.upload(&.{ 1, 2, 2 }, &plus);
+        defer plus_input.deinit();
+        var plus_output = try attention.forward(&context, plus_input, attention_mask, token_mask);
+        defer plus_output.deinit();
+        var plus_values: [4]f32 = undefined;
+        try context.readback(plus_output, &plus_values);
+        var minus = input_values;
+        minus[input_index] -= epsilon;
+        var minus_input = try context.upload(&.{ 1, 2, 2 }, &minus);
+        defer minus_input.deinit();
+        var minus_output = try attention.forward(&context, minus_input, attention_mask, token_mask);
+        defer minus_output.deinit();
+        var minus_values: [4]f32 = undefined;
+        try context.readback(minus_output, &minus_values);
+        var plus_sum: f32 = 0;
+        var minus_sum: f32 = 0;
+        for (plus_values) |value| plus_sum += value;
+        for (minus_values) |value| minus_sum += value;
+        try testing.expectApproxEqAbs((plus_sum - minus_sum) / (2 * epsilon), analytical[input_index], 5e-3);
     }
 }
 

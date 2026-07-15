@@ -267,6 +267,16 @@ pub const BackendInstance = union(BackendType) {
         return self.attachBackend(matrix);
     }
 
+    pub fn permuteBatchHeads(self: BackendInstance, input: *const BackendMatrix, allocator: std.mem.Allocator, batch: usize, tokens: usize, heads: usize, width: usize, split: bool) !*BackendMatrix {
+        const matrix = try switch (self) {
+            .CPU => |ptr| CPUBackend.permuteBatchHeads(ptr, input, allocator, batch, tokens, heads, width, split),
+            .Metal => |ptr| MetalBackend.permuteBatchHeads(ptr, input, allocator, batch, tokens, heads, width, split),
+            .CUDA => |ptr| CUDABackend.permuteBatchHeads(ptr, input, allocator, batch, tokens, heads, width, split),
+            .ROCm => |ptr| ROCmBackend.permuteBatchHeads(ptr, input, allocator, batch, tokens, heads, width, split),
+        };
+        return self.attachBackend(matrix);
+    }
+
     pub fn add(self: BackendInstance, a: *const BackendMatrix, b: *const BackendMatrix, allocator: std.mem.Allocator) !*BackendMatrix {
         const matrix = try switch (self) {
             .CPU => |ptr| CPUBackend.add(ptr, a, b, allocator),

@@ -234,6 +234,35 @@ pub const CPUBackend = struct {
         return result;
     }
 
+    pub fn permuteBatchHeads(ptr: *anyopaque, input: *const Matrix, allocator: Allocator, batch: usize, tokens: usize, heads: usize, width: usize, split: bool) error{ OutOfMemory, DimensionMismatch }!*Matrix {
+        if (batch == 0 or tokens == 0 or heads == 0 or width == 0 or input.rows * input.cols != batch * tokens * heads * width) return error.DimensionMismatch;
+        const result = try initMatrix(
+            ptr,
+            allocator,
+            if (split) batch * heads * tokens else batch * tokens,
+            if (split) width else heads * width,
+        );
+        errdefer deinitMatrix(undefined, result);
+        const source = @as(*const CPUMatrix, @ptrCast(@alignCast(input.impl_data)));
+        const destination = @as(*CPUMatrix, @ptrCast(@alignCast(result.impl_data)));
+        for (0..batch) |batch_index| {
+            for (0..heads) |head| {
+                for (0..tokens) |token| {
+                    for (0..width) |channel| {
+                        const token_major = (((batch_index * tokens + token) * heads + head) * width + channel);
+                        const head_major = (((batch_index * heads + head) * tokens + token) * width + channel);
+                        if (split) {
+                            destination.data[head_major] = source.data[token_major];
+                        } else {
+                            destination.data[token_major] = source.data[head_major];
+                        }
+                    }
+                }
+            }
+        }
+        return result;
+    }
+
     pub fn add(ptr: *anyopaque, a: *const Matrix, b: *const Matrix, allocator: Allocator) error{ OutOfMemory, DimensionMismatch }!*Matrix {
         if (a.rows != b.rows or a.cols != b.cols) {
             return error.DimensionMismatch;

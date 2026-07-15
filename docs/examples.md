@@ -27,9 +27,11 @@ The examples are intentionally small enough to read beside the reusable code:
    filler values.
 5. Run Word2Vec to see how a prediction objective turns co-occurrence into
    geometric neighborhoods.
-6. Compare GRU Sequence with Transformer Encoder. The GRU carries state through
+6. Use Text Classifier to combine learned embeddings, padding masks, multi-head
+   attention, pooling, and sparse cross-entropy.
+7. Compare GRU Sequence with Transformer Encoder. The GRU carries state through
    time; the encoder uses unmasked attention to retrieve context from any token.
-7. Finish with DQN to see how an MLP, replay memory, exploration, Bellman
+8. Finish with DQN to see how an MLP, replay memory, exploration, Bellman
    targets, and a target network fit into an agent-environment loop.
 
 The CNN uses the inspectable CPU-first spatial reference. The optimizer,
@@ -53,6 +55,7 @@ discrete action choice, and Bellman-target construction.
 | Optimizer lab | `zig build run_optimizer_lab -Dgpu=auto` | `nnctl run optimizer-lab` | Device-resident MLP comparison of SGD, momentum, and AdamW |
 | Padding masks | `zig build run_padding_masks -Dgpu=auto` | `nnctl run padding-masks` | Batched matmul, masked softmax, dropout, and sparse loss for padded sequences |
 | Word2Vec | `zig build run_word2vec -Dgpu=auto` | `nnctl run word2vec` | Skip-gram pairs, unigram negative sampling, and learned embedding neighborhoods |
+| Text classifier | `zig build run_text_classifier -Dgpu=auto` | `nnctl run text-classifier` | Padding-aware multi-head encoder trained on contextual sentiment phrases |
 | CNN | `zig build run_cnn` | `nnctl run cnn` | Convolution, ReLU, max-pool, and softmax on synthetic image patterns |
 | Autoencoder | `zig build run_autoencoder -Dgpu=auto` | `nnctl run autoencoder` | Denoising and two-dimensional latent representations of tiny images |
 | GRU sequence | `zig build run_gru_sequence -Dgpu=auto` | `nnctl run gru-sequence` | Backpropagation through time on a selective-memory task |

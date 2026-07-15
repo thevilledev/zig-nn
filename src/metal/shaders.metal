@@ -57,6 +57,29 @@ kernel void batched_matrix_multiply(
     C[position.y * output_cols + position.x] = sum;
 }
 
+kernel void permute_batch_heads(
+    device const float* input [[buffer(0)]],
+    device float* output [[buffer(1)]],
+    constant uint& batch [[buffer(2)]],
+    constant uint& tokens [[buffer(3)]],
+    constant uint& heads [[buffer(4)]],
+    constant uint& width [[buffer(5)]],
+    constant uint& split [[buffer(6)]],
+    uint2 position [[thread_position_in_grid]]
+) {
+    if (position.x >= width || position.y >= batch * tokens * heads) return;
+    const uint channel = position.x;
+    const uint token_head = position.y;
+    const uint batch_index = token_head / (tokens * heads);
+    const uint remainder = token_head % (tokens * heads);
+    const uint token = remainder / heads;
+    const uint head = remainder % heads;
+    const uint token_major = (((batch_index * tokens + token) * heads + head) * width + channel);
+    const uint head_major = (((batch_index * heads + head) * tokens + token) * width + channel);
+    if (split != 0) output[head_major] = input[token_major];
+    else output[token_major] = input[head_major];
+}
+
 // Element-wise addition compute kernel
 // C = A + B
 kernel void matrix_add(
