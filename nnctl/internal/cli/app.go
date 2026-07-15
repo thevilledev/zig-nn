@@ -29,6 +29,26 @@ type httpDoer interface {
 	Do(*http.Request) (*http.Response, error)
 }
 
+type errorWriter struct {
+	writer io.Writer
+	err    error
+}
+
+func newErrorWriter(writer io.Writer) *errorWriter {
+	return &errorWriter{writer: writer}
+}
+
+func (w *errorWriter) printf(format string, args ...any) {
+	if w.err != nil {
+		return
+	}
+	_, w.err = fmt.Fprintf(w.writer, format, args...)
+}
+
+func (w *errorWriter) Err() error {
+	return w.err
+}
+
 func newApp(stdin io.Reader, stdout, stderr io.Writer) *app {
 	return &app{
 		stdinReader:  stdin,

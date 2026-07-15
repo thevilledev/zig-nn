@@ -164,6 +164,24 @@ func (a *app) runTrainTinyGPT(ctx context.Context, opts tinyGPTTrainOptions) err
 }
 
 func tinyGPTTrainArgs(opts tinyGPTTrainOptions) ([]string, error) {
+	opts = normalizeTinyGPTTrainOptions(opts)
+	if err := validateTinyGPTTrainOptions(opts); err != nil {
+		return nil, err
+	}
+
+	args := tinyGPTBaseTrainArgs(opts)
+	args = appendTinyGPTCorpusArgs(args, opts)
+	args = appendTinyGPTCheckpointArgs(args, opts)
+	if !opts.corpusPrior {
+		args = append(args, "--no-corpus-prior")
+	}
+	if opts.summaryPath != "" {
+		args = append(args, "--summary-path", opts.summaryPath)
+	}
+	return args, nil
+}
+
+func normalizeTinyGPTTrainOptions(opts tinyGPTTrainOptions) tinyGPTTrainOptions {
 	if opts.minLearningRate == "" {
 		opts.minLearningRate = "0"
 	}
@@ -176,18 +194,25 @@ func tinyGPTTrainArgs(opts tinyGPTTrainOptions) ([]string, error) {
 	if opts.evalWindows <= 0 {
 		opts.evalWindows = 12
 	}
+	return opts
+}
+
+func validateTinyGPTTrainOptions(opts tinyGPTTrainOptions) error {
 	if opts.steps < 0 || opts.warmupSteps < 0 || opts.batchSize <= 0 || opts.trainChars < 0 || opts.validationChars < 0 ||
 		opts.tokens < 0 || opts.topK < 0 || opts.seed < 0 {
-		return nil, fmt.Errorf("numeric train options must be non-negative, and batch size must be positive")
+		return fmt.Errorf("numeric train options must be non-negative, and batch size must be positive")
 	}
 	if opts.resume == "" && (opts.blockSize <= 0 || opts.layers <= 0 || opts.heads <= 0 || opts.embd <= 0) {
-		return nil, fmt.Errorf("new checkpoint shape options must be positive")
+		return fmt.Errorf("new checkpoint shape options must be positive")
 	}
 	if opts.output == "" && opts.resume == "" {
-		return nil, fmt.Errorf("train tiny-gpt requires --output <checkpoint> or --resume <checkpoint>")
+		return fmt.Errorf("train tiny-gpt requires --output <checkpoint> or --resume <checkpoint>")
 	}
+	return nil
+}
 
-	args := []string{
+func tinyGPTBaseTrainArgs(opts tinyGPTTrainOptions) []string {
+	return []string{
 		"--train-full",
 		"--full-train-steps", strconv.Itoa(opts.steps),
 		"--full-learning-rate", opts.learningRate,
@@ -207,11 +232,16 @@ func tinyGPTTrainArgs(opts tinyGPTTrainOptions) ([]string, error) {
 		"--top-k", strconv.Itoa(opts.topK),
 		"--seed", strconv.Itoa(opts.seed),
 	}
+}
+
+func appendTinyGPTCorpusArgs(args []string, opts tinyGPTTrainOptions) []string {
 	if opts.corpusPath != "" {
-		args = append(args, "--corpus-path", opts.corpusPath)
-	} else {
-		args = append(args, "--corpus", opts.corpus)
+		return append(args, "--corpus-path", opts.corpusPath)
 	}
+	return append(args, "--corpus", opts.corpus)
+}
+
+func appendTinyGPTCheckpointArgs(args []string, opts tinyGPTTrainOptions) []string {
 	if opts.resume != "" {
 		args = append(args, "--resume-checkpoint", opts.resume)
 	} else {
@@ -225,13 +255,7 @@ func tinyGPTTrainArgs(opts tinyGPTTrainOptions) ([]string, error) {
 	if opts.output != "" && opts.output != opts.resume {
 		args = append(args, "--save-checkpoint", opts.output)
 	}
-	if !opts.corpusPrior {
-		args = append(args, "--no-corpus-prior")
-	}
-	if opts.summaryPath != "" {
-		args = append(args, "--summary-path", opts.summaryPath)
-	}
-	return args, nil
+	return args
 }
 
 func (a *app) runTrainSpeechCommands(ctx context.Context, opts speechCommandsTrainOptions) error {

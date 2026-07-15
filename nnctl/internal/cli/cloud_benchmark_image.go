@@ -39,21 +39,44 @@ func (a *app) prepareCloudBenchmarkSourceVolume(
 	if err != nil {
 		return verda.Volume{}, fmt.Errorf("list Verda volumes: %w", err)
 	}
+	source, targetLocation, reusable, err := resolveCloudBenchmarkSourceVolume(*opts, placements, volumes)
+	if err != nil {
+		return verda.Volume{}, err
+	}
+	if reusable {
+		return source, nil
+	}
+	return a.buildCloudBenchmarkSourceVolume(ctx, client, creds, packerDir, workflowDir, opts, progress, targetLocation)
+}
+
+func resolveCloudBenchmarkSourceVolume(opts cloudBenchmarkDeployOptions, placements []verda.SpotPlacement, volumes []verda.Volume) (verda.Volume, string, bool, error) {
 	if opts.LocationCode == "" {
 		for _, placement := range placements {
 			if source, ok := reusableCloudBenchmarkSourceVolume(volumes, opts.SourceOSVolumeName, placement.LocationCode); ok {
-				return source, nil
+				return source, placement.LocationCode, true, nil
 			}
 		}
 	}
 	targetLocation, err := cloudBenchmarkTargetLocation(opts.LocationCode, placements)
 	if err != nil {
-		return verda.Volume{}, err
+		return verda.Volume{}, "", false, err
 	}
 	if source, ok := reusableCloudBenchmarkSourceVolume(volumes, opts.SourceOSVolumeName, targetLocation); ok {
-		return source, nil
+		return source, targetLocation, true, nil
 	}
+	return verda.Volume{}, targetLocation, false, nil
+}
 
+func (a *app) buildCloudBenchmarkSourceVolume(
+	ctx context.Context,
+	client cloudBenchmarkClient,
+	creds verda.Credentials,
+	packerDir string,
+	workflowDir string,
+	opts *cloudBenchmarkDeployOptions,
+	progress *cloudBenchmarkProgress,
+	targetLocation string,
+) (verda.Volume, error) {
 	progress.detail("No reusable volume named %q in %s", opts.SourceOSVolumeName, targetLocation)
 	progress.detail("Building a golden volume with Packer")
 	keysFile, err := a.cloudBenchmarkAuthorizedKeysFile(ctx, client, workflowDir, opts.authorizedKeysFile, opts.SSHKeyIDs)
@@ -75,22 +98,25 @@ func (a *app) prepareCloudBenchmarkSourceVolume(
 	if err := a.runCloudBenchmarkCommand(ctx, packerDir, packerEnv, opts.packer, buildArgs...); err != nil {
 		return verda.Volume{}, err
 	}
+	return waitForCloudBenchmarkSourceVolume(ctx, client, opts.SourceOSVolumeName, targetLocation, opts.timeout, opts.pollInterval)
+}
 
-	deadline := time.Now().Add(opts.timeout)
+func waitForCloudBenchmarkSourceVolume(ctx context.Context, client cloudBenchmarkClient, name, location string, timeout, poll time.Duration) (verda.Volume, error) {
+	deadline := time.Now().Add(timeout)
 	for {
 		volumes, listErr := client.ListVolumes(ctx)
 		if listErr == nil {
-			if source, ok := reusableCloudBenchmarkSourceVolume(volumes, opts.SourceOSVolumeName, targetLocation); ok {
+			if source, ok := reusableCloudBenchmarkSourceVolume(volumes, name, location); ok {
 				return source, nil
 			}
 		}
 		if time.Now().After(deadline) {
 			if listErr != nil {
-				return verda.Volume{}, fmt.Errorf("wait for Packer OS volume %q in %s: %w", opts.SourceOSVolumeName, targetLocation, listErr)
+				return verda.Volume{}, fmt.Errorf("wait for Packer OS volume %q in %s: %w", name, location, listErr)
 			}
-			return verda.Volume{}, fmt.Errorf("packer completed but OS volume %q did not appear in %s", opts.SourceOSVolumeName, targetLocation)
+			return verda.Volume{}, fmt.Errorf("packer completed but OS volume %q did not appear in %s", name, location)
 		}
-		timer := time.NewTimer(opts.pollInterval)
+		timer := time.NewTimer(poll)
 		select {
 		case <-ctx.Done():
 			timer.Stop()

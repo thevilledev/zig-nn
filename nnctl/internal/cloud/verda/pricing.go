@@ -101,54 +101,74 @@ func InstancePriceMatchesFilters(price InstancePrice, filters PricingFilters) bo
 }
 
 func SortInstancePrices(prices []InstancePrice, sortBy string) {
-	sortBy = strings.TrimSpace(strings.ToLower(sortBy))
-	sort.SliceStable(prices, func(i, j int) bool {
-		left := prices[i]
-		right := prices[j]
-		switch sortBy {
-		case "instance-type", "type":
-			if !strings.EqualFold(left.InstanceType, right.InstanceType) {
-				return left.InstanceType < right.InstanceType
-			}
-			if left.LocationCode != right.LocationCode {
-				return left.LocationCode < right.LocationCode
-			}
-			return left.Market < right.Market
-		case "location", "location-code", "zone":
-			if left.LocationCode != right.LocationCode {
-				return left.LocationCode < right.LocationCode
-			}
-			if left.InstanceType != right.InstanceType {
-				return left.InstanceType < right.InstanceType
-			}
-			return left.Market < right.Market
-		case "market", "contract":
-			if left.Market != right.Market {
-				return left.Market < right.Market
-			}
-			if left.PriceKnown != right.PriceKnown {
-				return left.PriceKnown
-			}
-			if left.PriceKnown && left.PricePerHour != right.PricePerHour {
-				return left.PricePerHour < right.PricePerHour
-			}
-			return left.InstanceType < right.InstanceType
-		default:
-			if left.PriceKnown != right.PriceKnown {
-				return left.PriceKnown
-			}
-			if left.PriceKnown && left.PricePerHour != right.PricePerHour {
-				return left.PricePerHour < right.PricePerHour
-			}
-			if left.LocationCode != right.LocationCode {
-				return left.LocationCode < right.LocationCode
-			}
-			if left.InstanceType != right.InstanceType {
-				return left.InstanceType < right.InstanceType
-			}
-			return left.Market < right.Market
-		}
-	})
+	less := instancePriceLess(strings.TrimSpace(strings.ToLower(sortBy)))
+	sort.SliceStable(prices, func(i, j int) bool { return less(prices[i], prices[j]) })
+}
+
+func instancePriceLess(sortBy string) func(InstancePrice, InstancePrice) bool {
+	switch sortBy {
+	case "instance-type", "type":
+		return instancePriceByType
+	case "location", "location-code", "zone":
+		return instancePriceByLocation
+	case "market", "contract":
+		return instancePriceByMarket
+	default:
+		return instancePriceByPrice
+	}
+}
+
+func instancePriceByType(left, right InstancePrice) bool {
+	if !strings.EqualFold(left.InstanceType, right.InstanceType) {
+		return left.InstanceType < right.InstanceType
+	}
+	if left.LocationCode != right.LocationCode {
+		return left.LocationCode < right.LocationCode
+	}
+	return left.Market < right.Market
+}
+
+func instancePriceByLocation(left, right InstancePrice) bool {
+	if left.LocationCode != right.LocationCode {
+		return left.LocationCode < right.LocationCode
+	}
+	if left.InstanceType != right.InstanceType {
+		return left.InstanceType < right.InstanceType
+	}
+	return left.Market < right.Market
+}
+
+func instancePriceByMarket(left, right InstancePrice) bool {
+	if left.Market != right.Market {
+		return left.Market < right.Market
+	}
+	if less, decided := compareKnownPrices(left, right); decided {
+		return less
+	}
+	return left.InstanceType < right.InstanceType
+}
+
+func instancePriceByPrice(left, right InstancePrice) bool {
+	if less, decided := compareKnownPrices(left, right); decided {
+		return less
+	}
+	if left.LocationCode != right.LocationCode {
+		return left.LocationCode < right.LocationCode
+	}
+	if left.InstanceType != right.InstanceType {
+		return left.InstanceType < right.InstanceType
+	}
+	return left.Market < right.Market
+}
+
+func compareKnownPrices(left, right InstancePrice) (less, decided bool) {
+	if left.PriceKnown != right.PriceKnown {
+		return left.PriceKnown, true
+	}
+	if left.PriceKnown && left.PricePerHour != right.PricePerHour {
+		return left.PricePerHour < right.PricePerHour, true
+	}
+	return false, false
 }
 
 func pricingMarkets(market string) []string {

@@ -348,6 +348,14 @@ func (a *app) runCloudBenchmarkDeploy(ctx context.Context, opts cloudBenchmarkDe
 }
 
 func normalizeCloudBenchmarkDeployOptions(opts *cloudBenchmarkDeployOptions) error {
+	normalizeCloudBenchmarkStrings(opts)
+	if opts.SourceOSVolumeID == "" && opts.SourceOSVolumeName == "" {
+		opts.SourceOSVolumeName = defaultCloudBenchmarkSourceName
+	}
+	return validateCloudBenchmarkDeployOptions(*opts)
+}
+
+func normalizeCloudBenchmarkStrings(opts *cloudBenchmarkDeployOptions) {
 	opts.InstanceType = strings.TrimSpace(opts.InstanceType)
 	opts.SourceOSVolumeID = strings.TrimSpace(opts.SourceOSVolumeID)
 	opts.SourceOSVolumeName = strings.TrimSpace(opts.SourceOSVolumeName)
@@ -364,15 +372,14 @@ func normalizeCloudBenchmarkDeployOptions(opts *cloudBenchmarkDeployOptions) err
 	opts.git = strings.TrimSpace(opts.git)
 	opts.tar = strings.TrimSpace(opts.tar)
 	opts.docsPath = strings.TrimSpace(opts.docsPath)
+}
 
+func validateCloudBenchmarkDeployOptions(opts cloudBenchmarkDeployOptions) error {
 	if opts.InstanceType == "" {
 		return fmt.Errorf("instance type is required")
 	}
 	if opts.SourceOSVolumeID != "" && opts.SourceOSVolumeName != "" {
 		return fmt.Errorf("source OS volume ID and name cannot be combined")
-	}
-	if opts.SourceOSVolumeID == "" && opts.SourceOSVolumeName == "" {
-		opts.SourceOSVolumeName = defaultCloudBenchmarkSourceName
 	}
 	if opts.Market != verda.PricingMarketSpot && opts.Market != verda.PricingMarketOnDemand {
 		return fmt.Errorf("benchmark deploy market must be spot or on-demand")

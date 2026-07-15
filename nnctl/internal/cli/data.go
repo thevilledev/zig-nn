@@ -79,41 +79,14 @@ func (a *app) prepareSpeechCommands(ctx context.Context, url, dir string, force 
 	if err := os.MkdirAll(parent, 0o755); err != nil {
 		return fmt.Errorf("create data parent: %w", err)
 	}
-	archive, err := os.CreateTemp(parent, ".mini-speech-commands-*.zip")
-	if err != nil {
-		return fmt.Errorf("create temporary archive: %w", err)
-	}
-	archivePath := archive.Name()
-	archiveClosed := false
-	defer func() {
-		if !archiveClosed {
-			_ = archive.Close()
-		}
-		_ = os.Remove(archivePath)
-	}()
-
 	if _, err := fmt.Fprintln(a.stdout(), "download mini_speech_commands.zip"); err != nil {
 		return fmt.Errorf("report speech commands download: %w", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	archivePath, err := a.downloadSpeechCommandsArchive(ctx, url, parent)
 	if err != nil {
-		return fmt.Errorf("create speech commands request: %w", err)
+		return err
 	}
-	resp, err := a.http().Do(req)
-	if err != nil {
-		return fmt.Errorf("download %s: %w", url, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("download %s: %s", url, resp.Status)
-	}
-	if _, err := io.Copy(archive, resp.Body); err != nil {
-		return fmt.Errorf("write temporary speech commands archive: %w", err)
-	}
-	if err := archive.Close(); err != nil {
-		return fmt.Errorf("close temporary speech commands archive: %w", err)
-	}
-	archiveClosed = true
+	defer func() { _ = os.Remove(archivePath) }()
 
 	extracted, err := os.MkdirTemp(parent, ".mini-speech-commands-extract-*")
 	if err != nil {
@@ -135,6 +108,46 @@ func (a *app) prepareSpeechCommands(ctx context.Context, url, dir string, force 
 	return nil
 }
 
+func (a *app) downloadSpeechCommandsArchive(ctx context.Context, url, parent string) (string, error) {
+	archive, err := os.CreateTemp(parent, ".mini-speech-commands-*.zip")
+	if err != nil {
+		return "", fmt.Errorf("create temporary archive: %w", err)
+	}
+	archivePath := archive.Name()
+	archiveClosed := false
+	keepArchive := false
+	defer func() {
+		if !archiveClosed {
+			_ = archive.Close()
+		}
+		if !keepArchive {
+			_ = os.Remove(archivePath)
+		}
+	}()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", fmt.Errorf("create speech commands request: %w", err)
+	}
+	resp, err := a.http().Do(req)
+	if err != nil {
+		return "", fmt.Errorf("download %s: %w", url, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("download %s: %s", url, resp.Status)
+	}
+	if _, err := io.Copy(archive, resp.Body); err != nil {
+		return "", fmt.Errorf("write temporary speech commands archive: %w", err)
+	}
+	if err := archive.Close(); err != nil {
+		return "", fmt.Errorf("close temporary speech commands archive: %w", err)
+	}
+	archiveClosed = true
+	keepArchive = true
+	return archivePath, nil
+}
+
 func extractSpeechCommandsZip(archivePath, destination string) error {
 	reader, err := zip.OpenReader(archivePath)
 	if err != nil {
@@ -142,63 +155,79 @@ func extractSpeechCommandsZip(archivePath, destination string) error {
 	}
 	defer func() { _ = reader.Close() }()
 
-	const root = "mini_speech_commands/"
 	for _, file := range reader.File {
-		if strings.Contains(file.Name, "\\") {
-			return fmt.Errorf("unsafe zip entry %q", file.Name)
+		if err := extractSpeechCommandsEntry(file, destination); err != nil {
+			return err
 		}
-		clean := path.Clean(file.Name)
-		if clean == "__MACOSX" || strings.HasPrefix(clean, "__MACOSX/") {
-			continue
+	}
+	return nil
+}
+
+func extractSpeechCommandsEntry(file *zip.File, destination string) error {
+	target, skip, err := speechCommandsEntryTarget(file.Name, destination)
+	if err != nil || skip {
+		return err
+	}
+	if file.FileInfo().IsDir() {
+		if err := os.MkdirAll(target, 0o755); err != nil {
+			return fmt.Errorf("create extracted directory: %w", err)
 		}
-		if clean == "mini_speech_commands" {
-			continue
-		}
-		if path.IsAbs(clean) || strings.HasPrefix(clean, "../") || !strings.HasPrefix(clean, root) {
-			return fmt.Errorf("unsafe zip entry %q", file.Name)
-		}
-		relative := strings.TrimPrefix(clean, root)
-		if relative == "" {
-			continue
-		}
-		target := filepath.Join(destination, filepath.FromSlash(relative))
-		contained, err := filepath.Rel(destination, target)
-		if err != nil || contained == ".." || strings.HasPrefix(contained, ".."+string(filepath.Separator)) {
-			return fmt.Errorf("unsafe zip entry %q", file.Name)
-		}
-		if file.FileInfo().IsDir() {
-			if err := os.MkdirAll(target, 0o755); err != nil {
-				return fmt.Errorf("create extracted directory: %w", err)
-			}
-			continue
-		}
-		if !file.Mode().IsRegular() {
-			return fmt.Errorf("unsupported zip entry %q", file.Name)
-		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return fmt.Errorf("create extracted file parent: %w", err)
-		}
-		source, err := file.Open()
-		if err != nil {
-			return fmt.Errorf("open zip entry %q: %w", file.Name, err)
-		}
-		output, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
-		if err != nil {
-			_ = source.Close()
-			return fmt.Errorf("create extracted file %q: %w", target, err)
-		}
-		_, copyErr := io.Copy(output, source)
-		closeErr := output.Close()
-		sourceErr := source.Close()
-		if copyErr != nil {
-			return fmt.Errorf("extract %q: %w", file.Name, copyErr)
-		}
-		if closeErr != nil {
-			return fmt.Errorf("close %q: %w", target, closeErr)
-		}
-		if sourceErr != nil {
-			return fmt.Errorf("close zip entry %q: %w", file.Name, sourceErr)
-		}
+		return nil
+	}
+	if !file.Mode().IsRegular() {
+		return fmt.Errorf("unsupported zip entry %q", file.Name)
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return fmt.Errorf("create extracted file parent: %w", err)
+	}
+	return copySpeechCommandsEntry(file, target)
+}
+
+func speechCommandsEntryTarget(name, destination string) (target string, skip bool, err error) {
+	if strings.Contains(name, "\\") {
+		return "", false, fmt.Errorf("unsafe zip entry %q", name)
+	}
+	clean := path.Clean(name)
+	if clean == "__MACOSX" || strings.HasPrefix(clean, "__MACOSX/") || clean == "mini_speech_commands" {
+		return "", true, nil
+	}
+	const root = "mini_speech_commands/"
+	if path.IsAbs(clean) || strings.HasPrefix(clean, "../") || !strings.HasPrefix(clean, root) {
+		return "", false, fmt.Errorf("unsafe zip entry %q", name)
+	}
+	relative := strings.TrimPrefix(clean, root)
+	if relative == "" {
+		return "", true, nil
+	}
+	target = filepath.Join(destination, filepath.FromSlash(relative))
+	contained, relErr := filepath.Rel(destination, target)
+	if relErr != nil || contained == ".." || strings.HasPrefix(contained, ".."+string(filepath.Separator)) {
+		return "", false, fmt.Errorf("unsafe zip entry %q", name)
+	}
+	return target, false, nil
+}
+
+func copySpeechCommandsEntry(file *zip.File, target string) error {
+	source, err := file.Open()
+	if err != nil {
+		return fmt.Errorf("open zip entry %q: %w", file.Name, err)
+	}
+	output, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		_ = source.Close()
+		return fmt.Errorf("create extracted file %q: %w", target, err)
+	}
+	_, copyErr := io.Copy(output, source)
+	closeErr := output.Close()
+	sourceErr := source.Close()
+	if copyErr != nil {
+		return fmt.Errorf("extract %q: %w", file.Name, copyErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close %q: %w", target, closeErr)
+	}
+	if sourceErr != nil {
+		return fmt.Errorf("close zip entry %q: %w", file.Name, sourceErr)
 	}
 	return nil
 }

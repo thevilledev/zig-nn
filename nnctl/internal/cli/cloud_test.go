@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -631,6 +632,24 @@ func TestPrintCloudPricingJSON(t *testing.T) {
 	}
 	if len(prices) != 1 || prices[0].InstanceType != "1L40S.20V" || prices[0].LocationCode != "FIN-02" || prices[0].Market != "spot" {
 		t.Fatalf("unexpected prices: %#v", prices)
+	}
+}
+
+func TestPrintCloudDeployResultReportsOutputFailure(t *testing.T) {
+	wantErr := errors.New("output unavailable")
+	app := &app{stdoutWriter: testErrorWriter{err: wantErr}}
+	result := &verda.DeployResult{
+		DryRun: true,
+		Policy: verda.DeployPolicy{Market: verda.PricingMarketSpot},
+		Request: verda.CreateInstanceRequest{
+			InstanceType: "1L40S.20V",
+			Hostname:     "worker",
+		},
+	}
+
+	err := app.printCloudDeployResult(result, false)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("printCloudDeployResult() error = %v, want %v", err, wantErr)
 	}
 }
 

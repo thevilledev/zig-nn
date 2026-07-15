@@ -419,86 +419,98 @@ func (a *app) printCloudDeployResult(result *verda.DeployResult, jsonOutput bool
 		return enc.Encode(result)
 	}
 
+	out := newErrorWriter(a.stdout())
 	if result.DryRun {
-		location := result.Policy.LocationCode
-		if location == "" {
-			location = result.Policy.LocationSelection
-		}
-		fmt.Fprintf(a.stdout(), "dry run: would deploy %s as a %s instance in %s\n", result.Request.InstanceType, result.Policy.Market, location)
-		fmt.Fprintf(a.stdout(), "hostname: %s\n", result.Request.Hostname)
-		if result.Request.Image != "" {
-			fmt.Fprintf(a.stdout(), "image: %s\n", result.Request.Image)
-		}
-		if result.SourceOSVolumeID != "" {
-			fmt.Fprintf(a.stdout(), "source os volume: %s\n", result.SourceOSVolumeID)
-		}
-		if result.SourceOSVolumeName != "" {
-			fmt.Fprintf(a.stdout(), "source os volume name: %s\n", result.SourceOSVolumeName)
-		}
-		if result.Policy.SourceOSVolumeLocked {
-			if result.Policy.LocationCode == "" {
-				fmt.Fprintf(a.stdout(), "location locked by source os volume: resolved during deploy\n")
-			} else {
-				fmt.Fprintf(a.stdout(), "location locked by source os volume: %s\n", result.Policy.LocationCode)
-			}
-		}
-		if result.OSVolumeClone != nil {
-			if result.OSVolumeClone.Reused {
-				fmt.Fprintf(a.stdout(), "reused cloned os volume: %s\n", result.OSVolumeClone.VolumeID)
-			} else {
-				fmt.Fprintf(a.stdout(), "cloned os volume name: %s\n", result.OSVolumeClone.Name)
-			}
-		}
-		if result.StartupScript != nil {
-			fmt.Fprintf(a.stdout(), "startup script: embedded userdata\n")
-		} else {
-			fmt.Fprintf(a.stdout(), "startup script: none\n")
-		}
-		return nil
+		printCloudDeployDryRun(out, result)
+		return out.Err()
 	}
 
 	instance := result.Instance
 	if instance == nil {
 		return fmt.Errorf("deploy result did not include an instance")
 	}
-	fmt.Fprintf(a.stdout(), "created Verda instance %s\n", instance.ID)
-	fmt.Fprintf(a.stdout(), "hostname: %s\n", instance.Hostname)
-	fmt.Fprintf(a.stdout(), "status: %s\n", instance.Status)
-	fmt.Fprintf(a.stdout(), "instance type: %s\n", instance.InstanceType)
-	fmt.Fprintf(a.stdout(), "location: %s\n", result.Policy.LocationCode)
-	fmt.Fprintf(a.stdout(), "market: %s\n", result.Policy.Market)
+	printCloudDeployInstance(out, result, instance)
+	return out.Err()
+}
+
+func printCloudDeployDryRun(out *errorWriter, result *verda.DeployResult) {
+	location := firstNonEmpty(result.Policy.LocationCode, result.Policy.LocationSelection)
+	out.printf("dry run: would deploy %s as a %s instance in %s\n", result.Request.InstanceType, result.Policy.Market, location)
+	out.printf("hostname: %s\n", result.Request.Hostname)
+	if result.Request.Image != "" {
+		out.printf("image: %s\n", result.Request.Image)
+	}
+	if result.SourceOSVolumeID != "" {
+		out.printf("source os volume: %s\n", result.SourceOSVolumeID)
+	}
+	if result.SourceOSVolumeName != "" {
+		out.printf("source os volume name: %s\n", result.SourceOSVolumeName)
+	}
 	if result.Policy.SourceOSVolumeLocked {
-		fmt.Fprintf(a.stdout(), "location locked by source os volume: %s\n", result.Policy.LocationCode)
-	}
-	if result.Placement != nil && result.Placement.PriceKnown {
-		currency := result.Placement.Currency
-		if currency == "" {
-			currency = "unknown currency"
+		lockedLocation := result.Policy.LocationCode
+		if lockedLocation == "" {
+			lockedLocation = "resolved during deploy"
 		}
-		fmt.Fprintf(a.stdout(), "price: %.4f %s/hour\n", result.Placement.SpotPrice, currency)
-	}
-	fmt.Fprintf(a.stdout(), "spot: %t\n", instance.IsSpot)
-	if instance.IP != nil && *instance.IP != "" {
-		fmt.Fprintf(a.stdout(), "ip: %s\n", *instance.IP)
+		out.printf("location locked by source os volume: %s\n", lockedLocation)
 	}
 	if result.OSVolumeClone != nil {
-		fmt.Fprintf(a.stdout(), "source os volume: %s\n", result.OSVolumeClone.SourceVolumeID)
-		if result.SourceOSVolumeName != "" {
-			fmt.Fprintf(a.stdout(), "source os volume name: %s\n", result.SourceOSVolumeName)
-		}
-		if result.SourceOSVolume != nil {
-			fmt.Fprintf(a.stdout(), "source os volume location: %s\n", result.SourceOSVolume.Location)
-		}
 		if result.OSVolumeClone.Reused {
-			fmt.Fprintf(a.stdout(), "reused cloned os volume: %s\n", result.OSVolumeClone.VolumeID)
+			out.printf("reused cloned os volume: %s\n", result.OSVolumeClone.VolumeID)
 		} else {
-			fmt.Fprintf(a.stdout(), "cloned os volume: %s\n", result.OSVolumeClone.VolumeID)
+			out.printf("cloned os volume name: %s\n", result.OSVolumeClone.Name)
 		}
 	}
 	if result.StartupScript != nil {
-		fmt.Fprintf(a.stdout(), "startup script: %s\n", result.StartupScript.ID)
+		out.printf("startup script: embedded userdata\n")
+	} else {
+		out.printf("startup script: none\n")
 	}
-	return nil
+}
+
+func printCloudDeployInstance(out *errorWriter, result *verda.DeployResult, instance *verda.Instance) {
+	out.printf("created Verda instance %s\n", instance.ID)
+	out.printf("hostname: %s\n", instance.Hostname)
+	out.printf("status: %s\n", instance.Status)
+	out.printf("instance type: %s\n", instance.InstanceType)
+	out.printf("location: %s\n", result.Policy.LocationCode)
+	out.printf("market: %s\n", result.Policy.Market)
+	if result.Policy.SourceOSVolumeLocked {
+		out.printf("location locked by source os volume: %s\n", result.Policy.LocationCode)
+	}
+	printCloudDeployPrice(out, result.Placement)
+	out.printf("spot: %t\n", instance.IsSpot)
+	if instance.IP != nil && *instance.IP != "" {
+		out.printf("ip: %s\n", *instance.IP)
+	}
+	printCloudDeployVolume(out, result)
+	if result.StartupScript != nil {
+		out.printf("startup script: %s\n", result.StartupScript.ID)
+	}
+}
+
+func printCloudDeployPrice(out *errorWriter, placement *verda.SpotPlacement) {
+	if placement == nil || !placement.PriceKnown {
+		return
+	}
+	currency := firstNonEmpty(placement.Currency, "unknown currency")
+	out.printf("price: %.4f %s/hour\n", placement.SpotPrice, currency)
+}
+
+func printCloudDeployVolume(out *errorWriter, result *verda.DeployResult) {
+	if result.OSVolumeClone != nil {
+		out.printf("source os volume: %s\n", result.OSVolumeClone.SourceVolumeID)
+		if result.SourceOSVolumeName != "" {
+			out.printf("source os volume name: %s\n", result.SourceOSVolumeName)
+		}
+		if result.SourceOSVolume != nil {
+			out.printf("source os volume location: %s\n", result.SourceOSVolume.Location)
+		}
+		if result.OSVolumeClone.Reused {
+			out.printf("reused cloned os volume: %s\n", result.OSVolumeClone.VolumeID)
+		} else {
+			out.printf("cloned os volume: %s\n", result.OSVolumeClone.VolumeID)
+		}
+	}
 }
 
 func activeCloudInstances(instances []verda.Instance) []verda.Instance {
