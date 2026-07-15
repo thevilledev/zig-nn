@@ -22,6 +22,7 @@ const quantization_mod = @import("quantization.zig");
 const tensor_mod = @import("tensor.zig");
 const modules_mod = @import("modules.zig");
 const training_mod = @import("training.zig");
+const spatial_mod = @import("spatial.zig");
 const transformer_mod = @import("transformer.zig");
 
 /// Library usage example:
@@ -77,6 +78,7 @@ pub const ExecutionStats = tensor_mod.ExecutionStats;
 pub const BackendRuntimeStats = backend_mod.RuntimeStats;
 pub const Modules = modules_mod;
 pub const Training = training_mod;
+pub const Spatial = spatial_mod;
 pub const Transformer = transformer_mod;
 
 // Export backend interface types
