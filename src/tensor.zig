@@ -254,6 +254,51 @@ pub const AttentionGradients = struct {
     }
 };
 
+/// Owns both a dropout output and the inverted dropout mask required by the
+/// backward pass. The mask is device-resident after one explicit upload.
+pub const DropoutResult = struct {
+    output: Tensor,
+    mask: Tensor,
+
+    pub fn deinit(self: *DropoutResult) void {
+        self.output.deinit();
+        self.mask.deinit();
+        self.* = undefined;
+    }
+};
+
+/// Sparse class targets with a token-level mask. The gradient is computed on
+/// the selected device; `meanLoss` is an explicit reporting readback.
+pub const MaskedSparseCrossEntropy = struct {
+    probabilities: Tensor,
+    gradient: Tensor,
+    targets: []usize,
+    token_mask: []f32,
+    active_weight: f32,
+    classes: usize,
+    allocator: Allocator,
+
+    pub fn meanLoss(self: MaskedSparseCrossEntropy, context: *ExecutionContext) !f32 {
+        const values = try self.allocator.alloc(f32, self.probabilities.shape.len);
+        defer self.allocator.free(values);
+        try context.readback(self.probabilities, values);
+        var total: f32 = 0;
+        for (self.targets, self.token_mask, 0..) |target, weight, row| {
+            if (weight == 0) continue;
+            total -= weight * @log(@max(values[row * self.classes + target], 1.0e-12));
+        }
+        return total / self.active_weight;
+    }
+
+    pub fn deinit(self: *MaskedSparseCrossEntropy) void {
+        self.probabilities.deinit();
+        self.gradient.deinit();
+        self.allocator.free(self.targets);
+        self.allocator.free(self.token_mask);
+        self.* = undefined;
+    }
+};
+
 /// Explicit execution boundary for tensor construction, operations, readback,
 /// and instrumentation. Backend command batching can be implemented behind
 /// this API without another model-code migration.
@@ -299,6 +344,42 @@ pub const ExecutionContext = struct {
         return .{
             .matrix = matrix,
             .shape = try Shape.init(&.{ a.shape.dims[0], b.shape.dims[1] }),
+            .allocator = self.device.allocator,
+        };
+    }
+
+    /// Performs `[batch, rows, inner] x [batch, inner, cols]` matrix
+    /// multiplication. Transpose flags affect only each logical matrix, not
+    /// the batch dimension.
+    pub fn batchedMatmul(self: *ExecutionContext, a: Tensor, b: Tensor, transpose_a: bool, transpose_b: bool) !Tensor {
+        if (a.shape.rank != 3 or b.shape.rank != 3) return error.InvalidRank;
+        if (a.shape.dims[0] != b.shape.dims[0]) return error.DimensionMismatch;
+        if (a.backendType() != b.backendType()) return error.BackendMismatch;
+        const a_rows = a.shape.dims[1];
+        const a_cols = a.shape.dims[2];
+        const b_rows = b.shape.dims[1];
+        const b_cols = b.shape.dims[2];
+        const inner_a = if (transpose_a) a_rows else a_cols;
+        const inner_b = if (transpose_b) b_cols else b_rows;
+        if (inner_a != inner_b) return error.DimensionMismatch;
+        const output_rows = if (transpose_a) a_cols else a_rows;
+        const output_cols = if (transpose_b) b_rows else b_cols;
+
+        const matrix = try a.matrix.batchedDotProduct(
+            b.matrix,
+            self.device.allocator,
+            a.shape.dims[0],
+            a_rows,
+            a_cols,
+            b_rows,
+            b_cols,
+            transpose_a,
+            transpose_b,
+        );
+        self.stats.kernels += 1;
+        return .{
+            .matrix = matrix,
+            .shape = try Shape.init(&.{ a.shape.dims[0], output_rows, output_cols }),
             .allocator = self.device.allocator,
         };
     }
@@ -596,6 +677,147 @@ pub const ExecutionContext = struct {
         };
     }
 
+    /// Row-wise softmax over the final dimension. Zero mask entries receive
+    /// exactly zero probability, including rows where every entry is masked.
+    pub fn maskedSoftmax(self: *ExecutionContext, input: Tensor, mask: Tensor) !Tensor {
+        if (input.shape.rank < 2 or input.shape.rank > 3) return error.InvalidRank;
+        if (!input.shape.eql(mask.shape)) return error.DimensionMismatch;
+        if (input.backendType() != mask.backendType()) return error.BackendMismatch;
+
+        var ones = try self.createTensor(input.shape.slice());
+        defer ones.deinit();
+        ones.fill(1);
+        var mask_offset = try self.subtract(mask, ones);
+        defer mask_offset.deinit();
+        var penalty = try self.scale(mask_offset, 1.0e9);
+        defer penalty.deinit();
+        var masked_scores = try self.add(input, penalty);
+        defer masked_scores.deinit();
+        var matrix_view = masked_scores;
+        matrix_view.shape = try Shape.init(&.{ input.shape.len / input.shape.dims[input.shape.rank - 1], input.shape.dims[input.shape.rank - 1] });
+        var probabilities = try self.softmax(matrix_view);
+        errdefer probabilities.deinit();
+        probabilities.shape = input.shape;
+        const result = try self.multiply(probabilities, mask);
+        probabilities.deinit();
+        return result;
+    }
+
+    /// Jacobian-vector product for `maskedSoftmax`, evaluated entirely with
+    /// device tensor operations.
+    pub fn maskedSoftmaxBackward(self: *ExecutionContext, probabilities: Tensor, output_gradient: Tensor, mask: Tensor) !Tensor {
+        if (probabilities.shape.rank < 2 or probabilities.shape.rank > 3) return error.InvalidRank;
+        if (!probabilities.shape.eql(output_gradient.shape) or !probabilities.shape.eql(mask.shape)) return error.DimensionMismatch;
+        if (probabilities.backendType() != output_gradient.backendType() or probabilities.backendType() != mask.backendType()) return error.BackendMismatch;
+        const cols = probabilities.shape.dims[probabilities.shape.rank - 1];
+        const rows = probabilities.shape.len / cols;
+        var probabilities_view = probabilities;
+        probabilities_view.shape = try Shape.init(&.{ rows, cols });
+        var gradient_view = output_gradient;
+        gradient_view.shape = probabilities_view.shape;
+
+        var weighted = try self.multiply(probabilities_view, gradient_view);
+        defer weighted.deinit();
+        var weighted_t = try self.transpose(weighted);
+        defer weighted_t.deinit();
+        var row_sums_t = try self.sumRows(weighted_t);
+        defer row_sums_t.deinit();
+        var row_sums = try self.transpose(row_sums_t);
+        defer row_sums.deinit();
+        var ones = try self.createTensor(&.{ 1, cols });
+        defer ones.deinit();
+        ones.fill(1);
+        var broadcast_sums = try self.matmul(row_sums, ones);
+        defer broadcast_sums.deinit();
+        var centered = try self.subtract(gradient_view, broadcast_sums);
+        defer centered.deinit();
+        var jacobian_product = try self.multiply(probabilities_view, centered);
+        defer jacobian_product.deinit();
+        var mask_view = mask;
+        mask_view.shape = probabilities_view.shape;
+        var result = try self.multiply(jacobian_product, mask_view);
+        result.shape = probabilities.shape;
+        return result;
+    }
+
+    /// Applies inverted dropout. Supplying a seed makes the mask reproducible,
+    /// which keeps learning examples and gradient tests deterministic.
+    pub fn dropout(self: *ExecutionContext, input: Tensor, probability: f32, seed: u64, training: bool) !DropoutResult {
+        if (probability < 0 or probability >= 1) return error.InvalidProbability;
+        const values = try self.device.allocator.alloc(f32, input.shape.len);
+        defer self.device.allocator.free(values);
+        if (!training or probability == 0) {
+            @memset(values, 1);
+        } else {
+            var prng = std.Random.DefaultPrng.init(seed);
+            const random = prng.random();
+            const inverse_keep = 1.0 / (1.0 - probability);
+            for (values) |*value| {
+                value.* = if (random.float(f32) < probability) 0 else inverse_keep;
+            }
+        }
+        var mask = try self.upload(input.shape.slice(), values);
+        errdefer mask.deinit();
+        const output = try self.multiply(input, mask);
+        return .{ .output = output, .mask = mask };
+    }
+
+    pub fn dropoutBackward(self: *ExecutionContext, output_gradient: Tensor, mask: Tensor) !Tensor {
+        return self.multiply(output_gradient, mask);
+    }
+
+    /// Computes mean sparse cross-entropy over active tokens. Sparse target
+    /// indices are expanded once at the upload boundary; probabilities and the
+    /// training gradient remain device-resident.
+    pub fn maskedSparseCrossEntropy(self: *ExecutionContext, logits: Tensor, targets: []const usize, token_mask: []const f32) !MaskedSparseCrossEntropy {
+        if (logits.shape.rank < 2 or logits.shape.rank > 3) return error.InvalidRank;
+        const classes = logits.shape.dims[logits.shape.rank - 1];
+        const rows = logits.shape.len / classes;
+        if (targets.len != rows or token_mask.len != rows) return error.DimensionMismatch;
+
+        var active_weight: f32 = 0;
+        const dense_targets = try self.device.allocator.alloc(f32, logits.shape.len);
+        defer self.device.allocator.free(dense_targets);
+        @memset(dense_targets, 0);
+        const dense_mask = try self.device.allocator.alloc(f32, logits.shape.len);
+        defer self.device.allocator.free(dense_mask);
+        for (targets, token_mask, 0..) |target, weight, row| {
+            if (target >= classes or weight < 0) return error.InvalidTarget;
+            dense_targets[row * classes + target] = 1;
+            @memset(dense_mask[row * classes .. (row + 1) * classes], weight);
+            active_weight += weight;
+        }
+        if (active_weight <= 0) return error.EmptyMask;
+
+        const owned_targets = try self.device.allocator.dupe(usize, targets);
+        errdefer self.device.allocator.free(owned_targets);
+        const owned_mask = try self.device.allocator.dupe(f32, token_mask);
+        errdefer self.device.allocator.free(owned_mask);
+        var targets_tensor = try self.upload(logits.shape.slice(), dense_targets);
+        defer targets_tensor.deinit();
+        var mask_tensor = try self.upload(logits.shape.slice(), dense_mask);
+        defer mask_tensor.deinit();
+        var logits_view = logits;
+        logits_view.shape = try Shape.init(&.{ rows, classes });
+        var probabilities = try self.softmax(logits_view);
+        errdefer probabilities.deinit();
+        probabilities.shape = logits.shape;
+        var difference = try self.subtract(probabilities, targets_tensor);
+        defer difference.deinit();
+        var masked_gradient = try self.multiply(difference, mask_tensor);
+        defer masked_gradient.deinit();
+        const gradient = try self.scale(masked_gradient, 1.0 / active_weight);
+        return .{
+            .probabilities = probabilities,
+            .gradient = gradient,
+            .targets = owned_targets,
+            .token_mask = owned_mask,
+            .active_weight = active_weight,
+            .classes = classes,
+            .allocator = self.device.allocator,
+        };
+    }
+
     pub fn beginBatch(self: *ExecutionContext) !void {
         if (self.batch_active) return error.BatchAlreadyActive;
         try self.device.instance.beginBatch();
@@ -645,6 +867,23 @@ fn activationDerivativeFunction(kind: ActivationKind) *const fn (f64) f64 {
         .tanh => Activation.tanh_derivative,
         .gelu => Activation.gelu_derivative,
     };
+}
+
+fn referenceMaskedSoftmaxObjective(scores: []const f32, mask: []const f32, upstream: []const f32) f32 {
+    var max_score = -std.math.inf(f32);
+    for (scores, mask) |score, active| if (active != 0) {
+        max_score = @max(max_score, score);
+    };
+    var denominator: f32 = 0;
+    for (scores, mask) |score, active| if (active != 0) {
+        denominator += @exp(score - max_score);
+    };
+    if (denominator == 0) return 0;
+    var objective: f32 = 0;
+    for (scores, mask, upstream) |score, active, gradient| if (active != 0) {
+        objective += @exp(score - max_score) / denominator * gradient;
+    };
+    return objective;
 }
 
 fn referenceLayerNormObjective(input: []const f32, gamma: []const f32, beta: []const f32, output_gradient: []const f32, rows: usize, cols: usize, epsilon: f32) f32 {
@@ -738,6 +977,135 @@ test "execution context tracks tensor transfers and kernels" {
     try testing.expectEqual(@as(usize, 2), context.stats.uploads);
     try testing.expectEqual(@as(usize, 1), context.stats.readbacks);
     try testing.expectEqual(@as(usize, 1), context.stats.kernels);
+}
+
+test "batched matmul supports logical transposes on every available device" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+    const preferences = [_]DevicePreference{ .cpu, .metal, .cuda, .rocm };
+    for (preferences) |preference| {
+        var device = Device.init(allocator, preference) catch |err| switch (err) {
+            error.BackendUnavailable => continue,
+            else => return err,
+        };
+        defer device.deinit();
+        var context = ExecutionContext.init(&device);
+        var a = try context.upload(&.{ 2, 2, 3 }, &.{ 1, 2, 3, 4, 5, 6, 2, 0, 1, 1, 3, 2 });
+        defer a.deinit();
+        var b = try context.upload(&.{ 2, 2, 3 }, &.{ 1, 0, 1, 0, 1, 1, 1, 1, 0, 0, 1, 1 });
+        defer b.deinit();
+
+        context.resetStats();
+        var product = try context.batchedMatmul(a, b, false, true);
+        defer product.deinit();
+        try testing.expectEqualSlices(usize, &.{ 2, 2, 2 }, product.shape.slice());
+        try testing.expectEqual(@as(usize, 0), context.stats.readbacks);
+        var actual: [8]f32 = undefined;
+        try context.readback(product, &actual);
+        try testing.expectEqualSlices(f32, &.{ 4, 5, 10, 11, 2, 1, 4, 5 }, &actual);
+        if (device.backendType() != .CPU) {
+            try testing.expectEqual(@as(usize, 1), context.backendStats().kernel_launches);
+        }
+    }
+}
+
+test "masked softmax backward matches finite differences" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+    var device = try Device.init(allocator, .cpu);
+    defer device.deinit();
+    var context = ExecutionContext.init(&device);
+    const scores = [_]f32{ 0.2, -0.7, 1.1 };
+    const mask_values = [_]f32{ 1, 0, 1 };
+    const upstream_values = [_]f32{ 0.4, -0.2, 1.3 };
+    var input = try context.upload(&.{ 1, 3 }, &scores);
+    defer input.deinit();
+    var mask = try context.upload(&.{ 1, 3 }, &mask_values);
+    defer mask.deinit();
+    var upstream = try context.upload(&.{ 1, 3 }, &upstream_values);
+    defer upstream.deinit();
+    var probabilities = try context.maskedSoftmax(input, mask);
+    defer probabilities.deinit();
+    var gradient = try context.maskedSoftmaxBackward(probabilities, upstream, mask);
+    defer gradient.deinit();
+
+    var probability_values: [3]f32 = undefined;
+    var gradient_values: [3]f32 = undefined;
+    try context.readback(probabilities, &probability_values);
+    try context.readback(gradient, &gradient_values);
+    try testing.expectEqual(@as(f32, 0), probability_values[1]);
+    try testing.expectEqual(@as(f32, 0), gradient_values[1]);
+    try testing.expectApproxEqAbs(@as(f32, 1), probability_values[0] + probability_values[2], 1e-5);
+    const epsilon: f32 = 1e-3;
+    for (0..scores.len) |index| {
+        var plus = scores;
+        var minus = scores;
+        plus[index] += epsilon;
+        minus[index] -= epsilon;
+        const numerical = (referenceMaskedSoftmaxObjective(&plus, &mask_values, &upstream_values) -
+            referenceMaskedSoftmaxObjective(&minus, &mask_values, &upstream_values)) / (2 * epsilon);
+        try testing.expectApproxEqAbs(numerical, gradient_values[index], 2e-4);
+    }
+
+    var empty_mask = try context.upload(&.{ 1, 3 }, &.{ 0, 0, 0 });
+    defer empty_mask.deinit();
+    var empty = try context.maskedSoftmax(input, empty_mask);
+    defer empty.deinit();
+    var empty_values: [3]f32 = undefined;
+    try context.readback(empty, &empty_values);
+    try testing.expectEqualSlices(f32, &.{ 0, 0, 0 }, &empty_values);
+}
+
+test "seeded inverted dropout reuses its mask in backward" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+    var device = try Device.init(allocator, .cpu);
+    defer device.deinit();
+    var context = ExecutionContext.init(&device);
+    var input = try context.upload(&.{ 2, 4 }, &.{ 2, 2, 2, 2, 2, 2, 2, 2 });
+    defer input.deinit();
+    var first = try context.dropout(input, 0.5, 42, true);
+    defer first.deinit();
+    var second = try context.dropout(input, 0.5, 42, true);
+    defer second.deinit();
+    var output_gradient = try context.upload(&.{ 2, 4 }, &.{ 1, 1, 1, 1, 1, 1, 1, 1 });
+    defer output_gradient.deinit();
+    var input_gradient = try context.dropoutBackward(output_gradient, first.mask);
+    defer input_gradient.deinit();
+
+    var first_mask: [8]f32 = undefined;
+    var second_mask: [8]f32 = undefined;
+    var output: [8]f32 = undefined;
+    var gradient: [8]f32 = undefined;
+    try context.readback(first.mask, &first_mask);
+    try context.readback(second.mask, &second_mask);
+    try context.readback(first.output, &output);
+    try context.readback(input_gradient, &gradient);
+    try testing.expectEqualSlices(f32, &first_mask, &second_mask);
+    for (first_mask, output, gradient) |mask_value, output_value, gradient_value| {
+        try testing.expect(mask_value == 0 or mask_value == 2);
+        try testing.expectEqual(2 * mask_value, output_value);
+        try testing.expectEqual(mask_value, gradient_value);
+    }
+}
+
+test "masked sparse cross entropy ignores padding rows" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+    var device = try Device.init(allocator, .cpu);
+    defer device.deinit();
+    var context = ExecutionContext.init(&device);
+    var logits = try context.upload(&.{ 1, 3, 3 }, &.{ 2, 1, 0, 100, -100, 7, 0, 1, 2 });
+    defer logits.deinit();
+    var loss = try context.maskedSparseCrossEntropy(logits, &.{ 0, 1, 2 }, &.{ 1, 0, 1 });
+    defer loss.deinit();
+    try testing.expectEqualSlices(usize, logits.shape.slice(), loss.gradient.shape.slice());
+    var gradient: [9]f32 = undefined;
+    try context.readback(loss.gradient, &gradient);
+    try testing.expectEqualSlices(f32, &.{ 0, 0, 0 }, gradient[3..6]);
+    try testing.expectApproxEqAbs(@as(f32, 0), gradient[0] + gradient[1] + gradient[2], 1e-5);
+    try testing.expectApproxEqAbs(@as(f32, 0), gradient[6] + gradient[7] + gradient[8], 1e-5);
+    try testing.expectApproxEqAbs(@as(f32, 0.407606), try loss.meanLoss(&context), 1e-5);
 }
 
 test "tensor reshape preserves storage" {

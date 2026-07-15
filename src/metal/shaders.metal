@@ -27,6 +27,36 @@ kernel void matrix_multiply(
     C[position.y * B_cols + position.x] = sum;
 }
 
+kernel void batched_matrix_multiply(
+    device const float* A [[buffer(0)]],
+    device const float* B [[buffer(1)]],
+    device float* C [[buffer(2)]],
+    constant uint& batch [[buffer(3)]],
+    constant uint& A_rows [[buffer(4)]],
+    constant uint& A_cols [[buffer(5)]],
+    constant uint& B_rows [[buffer(6)]],
+    constant uint& B_cols [[buffer(7)]],
+    constant uint& transpose_a [[buffer(8)]],
+    constant uint& transpose_b [[buffer(9)]],
+    uint2 position [[thread_position_in_grid]]
+) {
+    const uint output_rows = transpose_a != 0 ? A_cols : A_rows;
+    const uint output_cols = transpose_b != 0 ? B_rows : B_cols;
+    if (position.x >= output_cols || position.y >= batch * output_rows) return;
+    const uint batch_index = position.y / output_rows;
+    const uint row = position.y % output_rows;
+    const uint inner_size = transpose_a != 0 ? A_rows : A_cols;
+    const uint a_offset = batch_index * A_rows * A_cols;
+    const uint b_offset = batch_index * B_rows * B_cols;
+    float sum = 0.0f;
+    for (uint inner = 0; inner < inner_size; inner++) {
+        const uint a_index = a_offset + (transpose_a != 0 ? inner * A_cols + row : row * A_cols + inner);
+        const uint b_index = b_offset + (transpose_b != 0 ? position.x * B_cols + inner : inner * B_cols + position.x);
+        sum += A[a_index] * B[b_index];
+    }
+    C[position.y * output_cols + position.x] = sum;
+}
+
 // Element-wise addition compute kernel
 // C = A + B
 kernel void matrix_add(

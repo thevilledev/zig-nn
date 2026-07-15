@@ -18,6 +18,37 @@ extern "C" __global__ void matrix_multiply(
     C[row * B_cols + col] = sum;
 }
 
+extern "C" __global__ void batched_matrix_multiply(
+    const float* A,
+    const float* B,
+    float* C,
+    unsigned int batch,
+    unsigned int A_rows,
+    unsigned int A_cols,
+    unsigned int B_rows,
+    unsigned int B_cols,
+    unsigned int transpose_a,
+    unsigned int transpose_b
+) {
+    unsigned int col = blockIdx.x * blockDim.x + threadIdx.x;
+    unsigned int flat_row = blockIdx.y * blockDim.y + threadIdx.y;
+    unsigned int output_rows = transpose_a ? A_cols : A_rows;
+    unsigned int output_cols = transpose_b ? B_rows : B_cols;
+    if (col >= output_cols || flat_row >= batch * output_rows) return;
+    unsigned int batch_index = flat_row / output_rows;
+    unsigned int row = flat_row % output_rows;
+    unsigned int inner_size = transpose_a ? A_rows : A_cols;
+    unsigned int a_offset = batch_index * A_rows * A_cols;
+    unsigned int b_offset = batch_index * B_rows * B_cols;
+    float sum = 0.0f;
+    for (unsigned int inner = 0; inner < inner_size; inner++) {
+        unsigned int a_index = a_offset + (transpose_a ? inner * A_cols + row : row * A_cols + inner);
+        unsigned int b_index = b_offset + (transpose_b ? col * B_cols + inner : inner * B_cols + col);
+        sum += A[a_index] * B[b_index];
+    }
+    C[flat_row * output_cols + col] = sum;
+}
+
 extern "C" __global__ void matrix_add(
     const float* A,
     const float* B,

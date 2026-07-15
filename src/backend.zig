@@ -315,6 +315,35 @@ pub const Matrix = struct {
         return self.backend.dotProduct(self, other, allocator);
     }
 
+    /// Multiplies equally sized batches of logical matrices. The physical
+    /// allocations remain flattened, while the dimensions describe each
+    /// matrix in the batch. Either operand may be transposed logically.
+    pub fn batchedDotProduct(
+        self: *const Matrix,
+        other: *const Matrix,
+        allocator: Allocator,
+        batch: usize,
+        a_rows: usize,
+        a_cols: usize,
+        b_rows: usize,
+        b_cols: usize,
+        transpose_a: bool,
+        transpose_b: bool,
+    ) !*Matrix {
+        return self.backend.batchedDotProduct(
+            self,
+            other,
+            allocator,
+            batch,
+            a_rows,
+            a_cols,
+            b_rows,
+            b_cols,
+            transpose_a,
+            transpose_b,
+        );
+    }
+
     /// Performs element-wise matrix addition: C = A + B
     pub fn add(self: *const Matrix, other: *const Matrix, allocator: Allocator) !*Matrix {
         return self.backend.add(self, other, allocator);

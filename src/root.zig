@@ -243,6 +243,28 @@ pub const BackendInstance = union(BackendType) {
         return self.attachBackend(matrix);
     }
 
+    pub fn batchedDotProduct(
+        self: BackendInstance,
+        a: *const BackendMatrix,
+        b: *const BackendMatrix,
+        allocator: std.mem.Allocator,
+        batch: usize,
+        a_rows: usize,
+        a_cols: usize,
+        b_rows: usize,
+        b_cols: usize,
+        transpose_a: bool,
+        transpose_b: bool,
+    ) !*BackendMatrix {
+        const matrix = try switch (self) {
+            .CPU => |ptr| CPUBackend.batchedDotProduct(ptr, a, b, allocator, batch, a_rows, a_cols, b_rows, b_cols, transpose_a, transpose_b),
+            .Metal => |ptr| MetalBackend.batchedDotProduct(ptr, a, b, allocator, batch, a_rows, a_cols, b_rows, b_cols, transpose_a, transpose_b),
+            .CUDA => |ptr| CUDABackend.batchedDotProduct(ptr, a, b, allocator, batch, a_rows, a_cols, b_rows, b_cols, transpose_a, transpose_b),
+            .ROCm => |ptr| ROCmBackend.batchedDotProduct(ptr, a, b, allocator, batch, a_rows, a_cols, b_rows, b_cols, transpose_a, transpose_b),
+        };
+        return self.attachBackend(matrix);
+    }
+
     pub fn add(self: BackendInstance, a: *const BackendMatrix, b: *const BackendMatrix, allocator: std.mem.Allocator) !*BackendMatrix {
         const matrix = try switch (self) {
             .CPU => |ptr| CPUBackend.add(ptr, a, b, allocator),

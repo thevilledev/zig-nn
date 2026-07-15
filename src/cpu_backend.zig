@@ -179,6 +179,61 @@ pub const CPUBackend = struct {
         return result;
     }
 
+    pub fn batchedDotProduct(
+        ptr: *anyopaque,
+        a: *const Matrix,
+        b: *const Matrix,
+        allocator: Allocator,
+        batch: usize,
+        a_rows: usize,
+        a_cols: usize,
+        b_rows: usize,
+        b_cols: usize,
+        transpose_a: bool,
+        transpose_b: bool,
+    ) error{ OutOfMemory, DimensionMismatch }!*Matrix {
+        const output_rows = if (transpose_a) a_cols else a_rows;
+        const inner_a = if (transpose_a) a_rows else a_cols;
+        const inner_b = if (transpose_b) b_cols else b_rows;
+        const output_cols = if (transpose_b) b_rows else b_cols;
+        if (batch == 0 or inner_a != inner_b or
+            a.rows * a.cols != batch * a_rows * a_cols or
+            b.rows * b.cols != batch * b_rows * b_cols)
+        {
+            return error.DimensionMismatch;
+        }
+
+        const result = try initMatrix(ptr, allocator, batch * output_rows, output_cols);
+        errdefer deinitMatrix(undefined, result);
+        const a_cpu = @as(*const CPUMatrix, @ptrCast(@alignCast(a.impl_data)));
+        const b_cpu = @as(*const CPUMatrix, @ptrCast(@alignCast(b.impl_data)));
+        const result_cpu = @as(*CPUMatrix, @ptrCast(@alignCast(result.impl_data)));
+
+        for (0..batch) |batch_index| {
+            const a_offset = batch_index * a_rows * a_cols;
+            const b_offset = batch_index * b_rows * b_cols;
+            const result_offset = batch_index * output_rows * output_cols;
+            for (0..output_rows) |row| {
+                for (0..output_cols) |col| {
+                    var sum: f32 = 0;
+                    for (0..inner_a) |inner| {
+                        const a_index = a_offset + if (transpose_a)
+                            inner * a_cols + row
+                        else
+                            row * a_cols + inner;
+                        const b_index = b_offset + if (transpose_b)
+                            col * b_cols + inner
+                        else
+                            inner * b_cols + col;
+                        sum += a_cpu.data[a_index] * b_cpu.data[b_index];
+                    }
+                    result_cpu.data[result_offset + row * output_cols + col] = sum;
+                }
+            }
+        }
+        return result;
+    }
+
     pub fn add(ptr: *anyopaque, a: *const Matrix, b: *const Matrix, allocator: Allocator) error{ OutOfMemory, DimensionMismatch }!*Matrix {
         if (a.rows != b.rows or a.cols != b.cols) {
             return error.DimensionMismatch;

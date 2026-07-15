@@ -18,6 +18,7 @@ typedef struct ZigNNROCmBackend {
     hipModule_t module;
     rocblas_handle rocblas;
     hipFunction_t matrix_multiply;
+    hipFunction_t batched_matrix_multiply;
     hipFunction_t matrix_add;
     hipFunction_t matrix_add_row_bias;
     hipFunction_t matrix_subtract;
@@ -191,6 +192,7 @@ static int rocm_get_function(hipModule_t module, hipFunction_t* function, const 
 
 static int rocm_load_functions(ZigNNROCmBackend* backend, char* error_buffer, unsigned long error_buffer_len) {
     return rocm_get_function(backend->module, &backend->matrix_multiply, "matrix_multiply", error_buffer, error_buffer_len) &&
+        rocm_get_function(backend->module, &backend->batched_matrix_multiply, "batched_matrix_multiply", error_buffer, error_buffer_len) &&
         rocm_get_function(backend->module, &backend->matrix_add, "matrix_add", error_buffer, error_buffer_len) &&
         rocm_get_function(backend->module, &backend->matrix_add_row_bias, "matrix_add_row_bias", error_buffer, error_buffer_len) &&
         rocm_get_function(backend->module, &backend->matrix_subtract, "matrix_subtract", error_buffer, error_buffer_len) &&
@@ -514,6 +516,21 @@ int rocm_launch_matrix_multiply(ROCmBackendRef backend_ref, ROCmBufferRef a_ref,
     void* raw_result = result->device_ptr;
     void* args[] = { &raw_a, &raw_b, &raw_result, &a_rows, &a_cols, &b_cols };
     return rocm_launch_2d(backend, backend->matrix_multiply, b_cols, a_rows, args);
+}
+
+int rocm_launch_batched_matrix_multiply(ROCmBackendRef backend_ref, ROCmBufferRef a_ref, ROCmBufferRef b_ref, ROCmBufferRef result_ref, unsigned int batch, unsigned int a_rows, unsigned int a_cols, unsigned int b_rows, unsigned int b_cols, unsigned int transpose_a, unsigned int transpose_b) {
+    ZigNNROCmBackend* backend = (ZigNNROCmBackend*)backend_ref;
+    ZigNNROCmBuffer* a = (ZigNNROCmBuffer*)a_ref;
+    ZigNNROCmBuffer* b = (ZigNNROCmBuffer*)b_ref;
+    ZigNNROCmBuffer* result = (ZigNNROCmBuffer*)result_ref;
+    if (backend == NULL || a == NULL || b == NULL || result == NULL) return 0;
+    void* raw_a = a->device_ptr;
+    void* raw_b = b->device_ptr;
+    void* raw_result = result->device_ptr;
+    unsigned int output_rows = transpose_a ? a_cols : a_rows;
+    unsigned int output_cols = transpose_b ? b_rows : b_cols;
+    void* args[] = { &raw_a, &raw_b, &raw_result, &batch, &a_rows, &a_cols, &b_rows, &b_cols, &transpose_a, &transpose_b };
+    return rocm_launch_2d(backend, backend->batched_matrix_multiply, output_cols, batch * output_rows, args);
 }
 
 int rocm_launch_binary_kernel(ROCmBackendRef backend_ref, int kernel_id, ROCmBufferRef a_ref, ROCmBufferRef b_ref, ROCmBufferRef result_ref, unsigned int rows, unsigned int cols) {

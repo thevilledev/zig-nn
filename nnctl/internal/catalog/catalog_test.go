@@ -45,6 +45,16 @@ func TestResolveTokenizerLabExample(t *testing.T) {
 	}
 }
 
+func TestResolvePaddingMasksExample(t *testing.T) {
+	example, ok := ResolveExample("padding_masks")
+	if !ok {
+		t.Fatal("expected padding_masks to resolve")
+	}
+	if example.Step != "run_padding_masks" || example.DefaultGPU != "auto" || !example.Quick {
+		t.Fatalf("unexpected padding masks example: %+v", example)
+	}
+}
+
 func TestResolveCNNExample(t *testing.T) {
 	example, ok := ResolveExample("cnn")
 	if !ok {

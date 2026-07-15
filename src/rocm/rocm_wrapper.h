@@ -40,6 +40,7 @@ int rocm_buffer_upload_f32(ROCmBackendRef backend_ref, ROCmBufferRef buffer_ref,
 int rocm_buffer_download_f32(ROCmBackendRef backend_ref, ROCmBufferRef buffer_ref, float* destination, unsigned long count);
 
 int rocm_launch_matrix_multiply(ROCmBackendRef backend_ref, ROCmBufferRef a_ref, ROCmBufferRef b_ref, ROCmBufferRef result_ref, unsigned int a_rows, unsigned int a_cols, unsigned int b_cols);
+int rocm_launch_batched_matrix_multiply(ROCmBackendRef backend_ref, ROCmBufferRef a_ref, ROCmBufferRef b_ref, ROCmBufferRef result_ref, unsigned int batch, unsigned int a_rows, unsigned int a_cols, unsigned int b_rows, unsigned int b_cols, unsigned int transpose_a, unsigned int transpose_b);
 int rocm_launch_binary_kernel(ROCmBackendRef backend_ref, int kernel_id, ROCmBufferRef a_ref, ROCmBufferRef b_ref, ROCmBufferRef result_ref, unsigned int rows, unsigned int cols);
 int rocm_launch_scale(ROCmBackendRef backend_ref, ROCmBufferRef input_ref, ROCmBufferRef result_ref, float scalar, unsigned int rows, unsigned int cols);
 int rocm_launch_optimizer_update(ROCmBackendRef backend_ref, ROCmBufferRef parameter_ref, ROCmBufferRef gradient_ref, ROCmBufferRef first_moment_ref, ROCmBufferRef second_moment_ref, ROCmBufferRef total_squares_ref, unsigned int kind, unsigned int size, float learning_rate, float beta1, float beta2, float epsilon, float weight_decay, float bias_correction1, float bias_correction2, float max_gradient_norm);

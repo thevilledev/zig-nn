@@ -341,6 +341,7 @@ pub const MetalBackend = struct {
 
     // Pipeline states for different operations
     matrix_multiply_pipeline: ?*Metal.ComputePipelineState,
+    batched_matrix_multiply_pipeline: ?*Metal.ComputePipelineState,
     element_wise_add_pipeline: ?*Metal.ComputePipelineState,
     add_row_bias_pipeline: ?*Metal.ComputePipelineState,
     element_wise_subtract_pipeline: ?*Metal.ComputePipelineState,
@@ -405,6 +406,7 @@ pub const MetalBackend = struct {
             .command_queue = null, // Initialize all fields to null
             .library = null,
             .matrix_multiply_pipeline = null,
+            .batched_matrix_multiply_pipeline = null,
             .element_wise_add_pipeline = null,
             .add_row_bias_pipeline = null,
             .element_wise_subtract_pipeline = null,
@@ -456,6 +458,7 @@ pub const MetalBackend = struct {
         self.batch_active = false;
         _ = self.synchronizeQueued();
         Metal.release(self.matrix_multiply_pipeline);
+        Metal.release(self.batched_matrix_multiply_pipeline);
         Metal.release(self.element_wise_add_pipeline);
         Metal.release(self.add_row_bias_pipeline);
         Metal.release(self.element_wise_subtract_pipeline);
@@ -499,6 +502,7 @@ pub const MetalBackend = struct {
 
     fn loadPipelines(self: *MetalBackend) !void {
         try self.loadPipeline(&self.matrix_multiply_pipeline, "matrix_multiply");
+        try self.loadPipeline(&self.batched_matrix_multiply_pipeline, "batched_matrix_multiply");
         try self.loadPipeline(&self.element_wise_add_pipeline, "matrix_add");
         try self.loadPipeline(&self.add_row_bias_pipeline, "matrix_add_row_bias");
         try self.loadPipeline(&self.element_wise_subtract_pipeline, "matrix_subtract");
@@ -667,6 +671,54 @@ pub const MetalBackend = struct {
         setU32(encoder, toU32(a.cols), 4);
         setU32(encoder, toU32(b.cols), 5);
         Metal.computeEncoderDispatchThreads(encoder, pipeline, b.cols, a.rows, 1);
+        Metal.computeEncoderEndEncoding(encoder);
+        Metal.commandBufferCommit(command_buffer);
+        if (!self.completeSubmittedKernel(command_buffer)) return false;
+        result_metal.markGPUModified();
+        return true;
+    }
+
+    fn dispatchBatchedMatrixMultiply(
+        self: *MetalBackend,
+        a: *const Matrix,
+        b: *const Matrix,
+        result: *Matrix,
+        batch: usize,
+        a_rows: usize,
+        a_cols: usize,
+        b_rows: usize,
+        b_cols: usize,
+        transpose_a: bool,
+        transpose_b: bool,
+    ) bool {
+        const pipeline = self.batched_matrix_multiply_pipeline orelse return false;
+        const command_queue = self.command_queue orelse return false;
+        const a_metal = getMetalMatrix(a);
+        const b_metal = getMetalMatrix(b);
+        const result_metal = getMetalMatrix(result);
+        if (!a_metal.syncToGPU() or !b_metal.syncToGPU()) return false;
+        const a_buffer = a_metal.buffer orelse return false;
+        const b_buffer = b_metal.buffer orelse return false;
+        const result_buffer = result_metal.buffer orelse return false;
+
+        const output_rows = if (transpose_a) a_cols else a_rows;
+        const output_cols = if (transpose_b) b_rows else b_cols;
+        const command_buffer = Metal.commandQueueCreateCommandBuffer(command_queue) orelse return false;
+        defer Metal.release(command_buffer);
+        const encoder = Metal.commandBufferCreateComputeCommandEncoder(command_buffer) orelse return false;
+        defer Metal.release(encoder);
+        Metal.computeEncoderSetPipelineState(encoder, pipeline);
+        Metal.computeEncoderSetBuffer(encoder, a_buffer, 0, 0);
+        Metal.computeEncoderSetBuffer(encoder, b_buffer, 0, 1);
+        Metal.computeEncoderSetBuffer(encoder, result_buffer, 0, 2);
+        setU32(encoder, toU32(batch), 3);
+        setU32(encoder, toU32(a_rows), 4);
+        setU32(encoder, toU32(a_cols), 5);
+        setU32(encoder, toU32(b_rows), 6);
+        setU32(encoder, toU32(b_cols), 7);
+        setU32(encoder, @intFromBool(transpose_a), 8);
+        setU32(encoder, @intFromBool(transpose_b), 9);
+        Metal.computeEncoderDispatchThreads(encoder, pipeline, output_cols, batch * output_rows, 1);
         Metal.computeEncoderEndEncoding(encoder);
         Metal.commandBufferCommit(command_buffer);
         if (!self.completeSubmittedKernel(command_buffer)) return false;
@@ -1350,6 +1402,61 @@ pub const MetalBackend = struct {
         }
         result_metal.markHostModified();
 
+        return result;
+    }
+
+    pub fn batchedDotProduct(
+        ptr: *anyopaque,
+        a: *const Matrix,
+        b: *const Matrix,
+        allocator: Allocator,
+        batch: usize,
+        a_rows: usize,
+        a_cols: usize,
+        b_rows: usize,
+        b_cols: usize,
+        transpose_a: bool,
+        transpose_b: bool,
+    ) error{ OutOfMemory, DimensionMismatch }!*Matrix {
+        const output_rows = if (transpose_a) a_cols else a_rows;
+        const inner_a = if (transpose_a) a_rows else a_cols;
+        const inner_b = if (transpose_b) b_cols else b_rows;
+        const output_cols = if (transpose_b) b_rows else b_cols;
+        if (batch == 0 or inner_a != inner_b or
+            a.rows * a.cols != batch * a_rows * a_cols or
+            b.rows * b.cols != batch * b_rows * b_cols)
+        {
+            return error.DimensionMismatch;
+        }
+
+        const self = @as(*MetalBackend, @ptrCast(@alignCast(ptr)));
+        const result = try initMatrix(ptr, allocator, batch * output_rows, output_cols);
+        const a_metal = getMetalMatrix(a);
+        const b_metal = getMetalMatrix(b);
+        const result_metal = getMetalMatrix(result);
+        if (self.dispatchBatchedMatrixMultiply(a, b, result, batch, a_rows, a_cols, b_rows, b_cols, transpose_a, transpose_b)) {
+            return result;
+        }
+
+        ensureHostData(a_metal);
+        ensureHostData(b_metal);
+        for (0..batch) |batch_index| {
+            const a_offset = batch_index * a_rows * a_cols;
+            const b_offset = batch_index * b_rows * b_cols;
+            const result_offset = batch_index * output_rows * output_cols;
+            for (0..output_rows) |row| {
+                for (0..output_cols) |col| {
+                    var sum: f32 = 0;
+                    for (0..inner_a) |inner| {
+                        const a_index = a_offset + if (transpose_a) inner * a_cols + row else row * a_cols + inner;
+                        const b_index = b_offset + if (transpose_b) col * b_cols + inner else inner * b_cols + col;
+                        sum += a_metal.host_data[a_index] * b_metal.host_data[b_index];
+                    }
+                    result_metal.host_data[result_offset + row * output_cols + col] = sum;
+                }
+            }
+        }
+        result_metal.markHostModified();
         return result;
     }
 

@@ -23,9 +23,11 @@ The examples are intentionally small enough to read beside the reusable code:
    the same MLP under SGD, momentum, and AdamW.
 3. Use CNN for spatial inductive bias, then Autoencoder for denoising and a
    learned bottleneck representation.
-4. Compare GRU Sequence with Transformer Encoder. The GRU carries state through
+4. Use Padding Masks to batch variable-length sequences without learning from
+   filler values.
+5. Compare GRU Sequence with Transformer Encoder. The GRU carries state through
    time; the encoder uses unmasked attention to retrieve context from any token.
-5. Finish with DQN to see how an MLP, replay memory, exploration, Bellman
+6. Finish with DQN to see how an MLP, replay memory, exploration, Bellman
    targets, and a target network fit into an agent-environment loop.
 
 The CNN uses the inspectable CPU-first spatial reference. The optimizer,
@@ -47,6 +49,7 @@ discrete action choice, and Bellman-target construction.
 | Backend demo | `zig build run_backend_demo` | `nnctl run backend-demo` | Basic matrix operations through the public API |
 | Backend training | `zig build run_backend_training` | `nnctl run backend-training` | Tiny supervised training loop through `BackendMatrix` |
 | Optimizer lab | `zig build run_optimizer_lab -Dgpu=auto` | `nnctl run optimizer-lab` | Device-resident MLP comparison of SGD, momentum, and AdamW |
+| Padding masks | `zig build run_padding_masks -Dgpu=auto` | `nnctl run padding-masks` | Batched matmul, masked softmax, dropout, and sparse loss for padded sequences |
 | CNN | `zig build run_cnn` | `nnctl run cnn` | Convolution, ReLU, max-pool, and softmax on synthetic image patterns |
 | Autoencoder | `zig build run_autoencoder -Dgpu=auto` | `nnctl run autoencoder` | Denoising and two-dimensional latent representations of tiny images |
 | GRU sequence | `zig build run_gru_sequence -Dgpu=auto` | `nnctl run gru-sequence` | Backpropagation through time on a selective-memory task |

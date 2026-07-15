@@ -122,6 +122,10 @@ const CUDA = if (enable_cuda) struct {
         };
     }
 
+    pub fn launchBatchedMatrixMultiply(backend_ref: *Backend, a: *Buffer, b: *Buffer, result: *Buffer, batch: u32, a_rows: u32, a_cols: u32, b_rows: u32, b_cols: u32, transpose_a: bool, transpose_b: bool) bool {
+        return c.cuda_launch_batched_matrix_multiply(toC(backend_ref), toC(a), toC(b), toC(result), batch, a_rows, a_cols, b_rows, b_cols, @intFromBool(transpose_a), @intFromBool(transpose_b)) != 0;
+    }
+
     pub fn launchBinaryKernel(backend_ref: *Backend, kernel_id: KernelId, a: *Buffer, b: *Buffer, result: *Buffer, rows: u32, cols: u32) bool {
         return c.cuda_launch_binary_kernel(toC(backend_ref), @intFromEnum(kernel_id), toC(a), toC(b), toC(result), rows, cols) != 0;
     }
@@ -250,6 +254,10 @@ const CUDA = if (enable_cuda) struct {
 
     pub fn launchMatrixMultiply(_: *Backend, _: *Buffer, _: *Buffer, _: *Buffer, _: u32, _: u32, _: u32) MatmulKind {
         return .failed;
+    }
+
+    pub fn launchBatchedMatrixMultiply(_: *Backend, _: *Buffer, _: *Buffer, _: *Buffer, _: u32, _: u32, _: u32, _: u32, _: u32, _: bool, _: bool) bool {
+        return false;
     }
 
     pub fn launchBinaryKernel(_: *Backend, _: KernelId, _: *Buffer, _: *Buffer, _: *Buffer, _: u32, _: u32) bool {
@@ -551,6 +559,21 @@ pub const CUDABackend = struct {
         if (kind == .failed) return false;
 
         if (kind == .vendor) self.stats.vendor_gemm_launches += 1;
+        if (!self.completeSubmittedKernel()) return false;
+        result_cuda.markGPUModified();
+        return true;
+    }
+
+    fn dispatchBatchedMatrixMultiply(self: *CUDABackend, a: *const Matrix, b: *const Matrix, result: *Matrix, batch: usize, a_rows: usize, a_cols: usize, b_rows: usize, b_cols: usize, transpose_a: bool, transpose_b: bool) bool {
+        const backend_ref = self.backend orelse return false;
+        const a_cuda = getCUDAMatrix(a);
+        const b_cuda = getCUDAMatrix(b);
+        const result_cuda = getCUDAMatrix(result);
+        if (!a_cuda.syncToGPU() or !b_cuda.syncToGPU()) return false;
+        const a_buffer = a_cuda.buffer orelse return false;
+        const b_buffer = b_cuda.buffer orelse return false;
+        const result_buffer = result_cuda.buffer orelse return false;
+        if (!CUDA.launchBatchedMatrixMultiply(backend_ref, a_buffer, b_buffer, result_buffer, toU32(batch), toU32(a_rows), toU32(a_cols), toU32(b_rows), toU32(b_cols), transpose_a, transpose_b)) return false;
         if (!self.completeSubmittedKernel()) return false;
         result_cuda.markGPUModified();
         return true;
@@ -1008,6 +1031,42 @@ pub const CUDABackend = struct {
                     sum += a_cuda.host_data[i * a.cols + k] * b_cuda.host_data[k * b.cols + j];
                 }
                 result_cuda.host_data[i * b.cols + j] = sum;
+            }
+        }
+        result_cuda.markHostModified();
+        return result;
+    }
+
+    pub fn batchedDotProduct(ptr: *anyopaque, a: *const Matrix, b: *const Matrix, allocator: Allocator, batch: usize, a_rows: usize, a_cols: usize, b_rows: usize, b_cols: usize, transpose_a: bool, transpose_b: bool) error{ OutOfMemory, DimensionMismatch }!*Matrix {
+        const output_rows = if (transpose_a) a_cols else a_rows;
+        const inner_a = if (transpose_a) a_rows else a_cols;
+        const inner_b = if (transpose_b) b_cols else b_rows;
+        const output_cols = if (transpose_b) b_rows else b_cols;
+        if (batch == 0 or inner_a != inner_b or a.rows * a.cols != batch * a_rows * a_cols or b.rows * b.cols != batch * b_rows * b_cols) return error.DimensionMismatch;
+
+        const self = @as(*CUDABackend, @ptrCast(@alignCast(ptr)));
+        const result = try initMatrix(ptr, allocator, batch * output_rows, output_cols);
+        const a_cuda = getCUDAMatrix(a);
+        const b_cuda = getCUDAMatrix(b);
+        const result_cuda = getCUDAMatrix(result);
+        if (self.dispatchBatchedMatrixMultiply(a, b, result, batch, a_rows, a_cols, b_rows, b_cols, transpose_a, transpose_b)) return result;
+
+        ensureHostData(a_cuda);
+        ensureHostData(b_cuda);
+        for (0..batch) |batch_index| {
+            const a_offset = batch_index * a_rows * a_cols;
+            const b_offset = batch_index * b_rows * b_cols;
+            const result_offset = batch_index * output_rows * output_cols;
+            for (0..output_rows) |row| {
+                for (0..output_cols) |col| {
+                    var sum: f32 = 0;
+                    for (0..inner_a) |inner| {
+                        const a_index = a_offset + if (transpose_a) inner * a_cols + row else row * a_cols + inner;
+                        const b_index = b_offset + if (transpose_b) col * b_cols + inner else inner * b_cols + col;
+                        sum += a_cuda.host_data[a_index] * b_cuda.host_data[b_index];
+                    }
+                    result_cuda.host_data[result_offset + row * output_cols + col] = sum;
+                }
             }
         }
         result_cuda.markHostModified();
