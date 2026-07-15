@@ -107,6 +107,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "optimizer_lab", .src = "examples/optimizer_lab/optimizer_lab.zig", .description = "Compare SGD, momentum, and AdamW on two-moons classification" },
         .{ .name = "tokenizer_lab", .src = "examples/tokenizer_lab/tokenizer_lab.zig", .description = "Compare byte and learned BPE tokenization" },
         .{ .name = "padding_masks", .src = "examples/padding_masks/padding_masks.zig", .description = "Learn batching and padding masks for variable-length sequences" },
+        .{ .name = "word2vec", .src = "examples/word2vec/word2vec.zig", .description = "Learn distributional word embeddings with skip-gram" },
         .{ .name = "cnn", .src = "examples/cnn/cnn.zig", .description = "Learn image patterns with convolution and max pooling" },
         .{ .name = "autoencoder", .src = "examples/autoencoder/autoencoder.zig", .description = "Learn denoising and latent representations with an autoencoder" },
         .{ .name = "gru_sequence", .src = "examples/gru_sequence/gru_sequence.zig", .description = "Learn selective sequence memory with a GRU" },
@@ -206,6 +207,7 @@ pub fn build(b: *std.Build) void {
     prev_step = addTestStep(b, test_step, "activation", "src/activation.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
     prev_step = addTestStep(b, test_step, "tensor", "src/tensor.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
     prev_step = addTestStep(b, test_step, "text", "src/text.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
+    prev_step = addTestStep(b, test_step, "embeddings", "src/embeddings.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
     prev_step = addTestStep(b, test_step, "modules", "src/modules.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
     prev_step = addTestStep(b, test_step, "training", "src/training.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
     prev_step = addTestStep(b, test_step, "spatial", "src/spatial.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
@@ -248,6 +250,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "optimizer_lab", .path = "examples/optimizer_lab/optimizer_lab.zig" },
         .{ .name = "tokenizer_lab", .path = "examples/tokenizer_lab/tokenizer_lab.zig" },
         .{ .name = "padding_masks", .path = "examples/padding_masks/padding_masks.zig" },
+        .{ .name = "word2vec", .path = "examples/word2vec/word2vec.zig" },
         .{ .name = "cnn", .path = "examples/cnn/cnn.zig" },
         .{ .name = "autoencoder", .path = "examples/autoencoder/autoencoder.zig" },
         .{ .name = "gru_sequence", .path = "examples/gru_sequence/gru_sequence.zig" },

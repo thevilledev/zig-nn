@@ -55,6 +55,16 @@ func TestResolvePaddingMasksExample(t *testing.T) {
 	}
 }
 
+func TestResolveWord2VecExample(t *testing.T) {
+	example, ok := ResolveExample("word2vec")
+	if !ok {
+		t.Fatal("expected word2vec to resolve")
+	}
+	if example.Step != "run_word2vec" || example.DefaultGPU != "auto" || example.Quick {
+		t.Fatalf("unexpected word2vec example: %+v", example)
+	}
+}
+
 func TestResolveCNNExample(t *testing.T) {
 	example, ok := ResolveExample("cnn")
 	if !ok {
