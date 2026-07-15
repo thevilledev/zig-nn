@@ -35,6 +35,16 @@ func TestResolveOptimizerLabExample(t *testing.T) {
 	}
 }
 
+func TestResolveTokenizerLabExample(t *testing.T) {
+	example, ok := ResolveExample("tokenizer_lab")
+	if !ok {
+		t.Fatal("expected tokenizer_lab to resolve")
+	}
+	if example.Step != "run_tokenizer_lab" || !example.Quick {
+		t.Fatalf("unexpected tokenizer lab example: %+v", example)
+	}
+}
+
 func TestResolveCNNExample(t *testing.T) {
 	example, ok := ResolveExample("cnn")
 	if !ok {
