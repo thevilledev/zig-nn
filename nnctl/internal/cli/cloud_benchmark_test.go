@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -59,6 +60,17 @@ func TestCloudBenchmarkProgressReportsNumberedPhases(t *testing.T) {
 `
 	if output.String() != want {
 		t.Fatalf("progress output:\n%s\nwant:\n%s", output.String(), want)
+	}
+}
+
+func TestCloudBenchmarkProgressReturnsWriteFailure(t *testing.T) {
+	wantErr := errors.New("progress unavailable")
+	progress := newCloudBenchmarkProgress(testErrorWriter{err: wantErr})
+	progress.phase(cloudBenchmarkPhasePrepare, "Prepare benchmark workflow")
+	progress.detail("Revision: abc123")
+
+	if err := progress.Err(); !errors.Is(err, wantErr) {
+		t.Fatalf("Err() = %v, want %v", err, wantErr)
 	}
 }
 

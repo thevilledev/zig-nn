@@ -169,8 +169,12 @@ func (a *app) runCloudPackerTemplate(outputDir string, opts cloudPackerTemplateO
 	if err != nil {
 		return err
 	}
+	output := newErrorWriter(a.stdout())
 	for _, path := range written {
-		fmt.Fprintf(a.stdout(), "wrote %s\n", path)
+		output.printf("wrote %s\n", path)
+	}
+	if err := output.Err(); err != nil {
+		return fmt.Errorf("write Packer template paths: %w", err)
 	}
 	return nil
 }
@@ -252,14 +256,20 @@ func (a *app) printCloudSSHKeys(keys []verda.SSHKey, jsonOutput bool) error {
 		return enc.Encode(keys)
 	}
 	if len(keys) == 0 {
-		fmt.Fprintln(a.stdout(), "no Verda SSH keys found")
+		if _, err := fmt.Fprintln(a.stdout(), "no Verda SSH keys found"); err != nil {
+			return fmt.Errorf("write Verda SSH keys: %w", err)
+		}
 		return nil
 	}
 
 	w := tabwriter.NewWriter(a.stdout(), 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "ID\tNAME\tFINGERPRINT")
+	output := newErrorWriter(w)
+	output.printf("ID\tNAME\tFINGERPRINT\n")
 	for _, key := range keys {
-		fmt.Fprintf(w, "%s\t%s\t%s\n", key.ID, key.Name, key.Fingerprint)
+		output.printf("%s\t%s\t%s\n", key.ID, key.Name, key.Fingerprint)
+	}
+	if err := output.Err(); err != nil {
+		return fmt.Errorf("write Verda SSH keys: %w", err)
 	}
 	return w.Flush()
 }
@@ -271,14 +281,17 @@ func (a *app) printCloudVolumes(volumes []verda.Volume, jsonOutput bool) error {
 		return enc.Encode(volumes)
 	}
 	if len(volumes) == 0 {
-		fmt.Fprintln(a.stdout(), "no Verda volumes found")
+		if _, err := fmt.Fprintln(a.stdout(), "no Verda volumes found"); err != nil {
+			return fmt.Errorf("write Verda volumes: %w", err)
+		}
 		return nil
 	}
 
 	w := tabwriter.NewWriter(a.stdout(), 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "ID\tNAME\tSTATUS\tTYPE\tSIZE\tLOCATION\tOS\tDELETED AT")
+	output := newErrorWriter(w)
+	output.printf("ID\tNAME\tSTATUS\tTYPE\tSIZE\tLOCATION\tOS\tDELETED AT\n")
 	for _, volume := range volumes {
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%t\t%s\n",
+		output.printf("%s\t%s\t%s\t%s\t%s\t%s\t%t\t%s\n",
 			volume.ID,
 			firstNonEmpty(volume.Name),
 			firstNonEmpty(volume.Status),
@@ -288,6 +301,9 @@ func (a *app) printCloudVolumes(volumes []verda.Volume, jsonOutput bool) error {
 			volume.IsOSVolume,
 			firstNonEmpty(volume.DeletedAt),
 		)
+	}
+	if err := output.Err(); err != nil {
+		return fmt.Errorf("write Verda volumes: %w", err)
 	}
 	return w.Flush()
 }
@@ -299,32 +315,33 @@ func (a *app) printCloudPurgeResult(result *verda.PurgeVolumesResult, jsonOutput
 		return enc.Encode(result)
 	}
 
+	output := newErrorWriter(a.stdout())
 	if result.Request.AllDeleted {
 		if result.DryRun {
-			fmt.Fprintln(a.stdout(), "dry run: would purge all deleted Verda volumes")
-			return nil
+			output.printf("dry run: would purge all deleted Verda volumes\n")
+			return cloudOutputError("purge result", output.Err())
 		}
 		if len(result.Results) == 0 {
-			fmt.Fprintln(a.stdout(), "no deleted Verda volumes found")
-			return nil
+			output.printf("no deleted Verda volumes found\n")
+			return cloudOutputError("purge result", output.Err())
 		}
-		fmt.Fprintln(a.stdout(), "purged all deleted Verda volumes")
+		output.printf("purged all deleted Verda volumes\n")
 		for _, actionResult := range result.Results {
-			fmt.Fprintf(a.stdout(), "%s: %s\n", actionResult.VolumeID, firstNonEmpty(actionResult.Status, "purged"))
+			output.printf("%s: %s\n", actionResult.VolumeID, firstNonEmpty(actionResult.Status, "purged"))
 		}
-		return nil
+		return cloudOutputError("purge result", output.Err())
 	}
 
 	ids := strings.Join(result.Request.VolumeIDs, ", ")
 	if result.DryRun {
-		fmt.Fprintf(a.stdout(), "dry run: would purge Verda volume%s %s\n", pluralSuffix(result.Request.VolumeIDs), ids)
-		return nil
+		output.printf("dry run: would purge Verda volume%s %s\n", pluralSuffix(result.Request.VolumeIDs), ids)
+		return cloudOutputError("purge result", output.Err())
 	}
-	fmt.Fprintf(a.stdout(), "purged Verda volume%s %s\n", pluralSuffix(result.Request.VolumeIDs), ids)
+	output.printf("purged Verda volume%s %s\n", pluralSuffix(result.Request.VolumeIDs), ids)
 	for _, actionResult := range result.Results {
-		fmt.Fprintf(a.stdout(), "%s: %s\n", actionResult.VolumeID, firstNonEmpty(actionResult.Status, "purged"))
+		output.printf("%s: %s\n", actionResult.VolumeID, firstNonEmpty(actionResult.Status, "purged"))
 	}
-	return nil
+	return cloudOutputError("purge result", output.Err())
 }
 
 func (a *app) printCloudDestroyResult(result *verda.DestroyResult, jsonOutput bool) error {
@@ -334,23 +351,24 @@ func (a *app) printCloudDestroyResult(result *verda.DestroyResult, jsonOutput bo
 		return enc.Encode(result)
 	}
 
+	output := newErrorWriter(a.stdout())
 	ids := strings.Join(result.Request.InstanceIDs, ", ")
 	if result.DryRun {
-		fmt.Fprintf(a.stdout(), "dry run: would destroy Verda instance%s %s\n", pluralSuffix(result.Request.InstanceIDs), ids)
+		output.printf("dry run: would destroy Verda instance%s %s\n", pluralSuffix(result.Request.InstanceIDs), ids)
 	} else {
-		fmt.Fprintf(a.stdout(), "destroy requested for Verda instance%s %s\n", pluralSuffix(result.Request.InstanceIDs), ids)
+		output.printf("destroy requested for Verda instance%s %s\n", pluralSuffix(result.Request.InstanceIDs), ids)
 	}
-	fmt.Fprintf(a.stdout(), "delete permanently: %t\n", result.Request.DeletePermanently)
+	output.printf("delete permanently: %t\n", result.Request.DeletePermanently)
 	if result.SourceOSVolumeID != "" {
-		fmt.Fprintf(a.stdout(), "protected source os volume: %s\n", result.SourceOSVolumeID)
+		output.printf("protected source os volume: %s\n", result.SourceOSVolumeID)
 	}
 	if len(result.Request.VolumeIDs) > 0 {
-		fmt.Fprintf(a.stdout(), "volume ids: %s\n", strings.Join(result.Request.VolumeIDs, ", "))
+		output.printf("volume ids: %s\n", strings.Join(result.Request.VolumeIDs, ", "))
 	}
 	for _, actionResult := range result.Results {
-		fmt.Fprintf(a.stdout(), "%s: %s\n", actionResult.InstanceID, firstNonEmpty(actionResult.Status, "accepted"))
+		output.printf("%s: %s\n", actionResult.InstanceID, firstNonEmpty(actionResult.Status, "accepted"))
 	}
-	return nil
+	return cloudOutputError("destroy result", output.Err())
 }
 
 func (a *app) printCloudInstances(instances []verda.Instance, jsonOutput bool) error {
@@ -360,18 +378,19 @@ func (a *app) printCloudInstances(instances []verda.Instance, jsonOutput bool) e
 		return enc.Encode(instances)
 	}
 	if len(instances) == 0 {
-		fmt.Fprintln(a.stdout(), "no Verda instances found")
-		return nil
+		_, err := fmt.Fprintln(a.stdout(), "no Verda instances found")
+		return cloudOutputError("instances", err)
 	}
 
 	w := tabwriter.NewWriter(a.stdout(), 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "ID\tHOSTNAME\tSTATUS\tTYPE\tLOCATION\tSPOT\tIP")
+	output := newErrorWriter(w)
+	output.printf("ID\tHOSTNAME\tSTATUS\tTYPE\tLOCATION\tSPOT\tIP\n")
 	for _, instance := range instances {
 		ip := ""
 		if instance.IP != nil {
 			ip = *instance.IP
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%t\t%s\n",
+		output.printf("%s\t%s\t%s\t%s\t%s\t%t\t%s\n",
 			instance.ID,
 			instance.Hostname,
 			instance.Status,
@@ -380,6 +399,9 @@ func (a *app) printCloudInstances(instances []verda.Instance, jsonOutput bool) e
 			instance.IsSpot,
 			ip,
 		)
+	}
+	if err := cloudOutputError("instances", output.Err()); err != nil {
+		return err
 	}
 	return w.Flush()
 }
@@ -391,14 +413,15 @@ func (a *app) printCloudPricing(prices []verda.InstancePrice, jsonOutput bool) e
 		return enc.Encode(prices)
 	}
 	if len(prices) == 0 {
-		fmt.Fprintln(a.stdout(), "no Verda prices matched")
-		return nil
+		_, err := fmt.Fprintln(a.stdout(), "no Verda prices matched")
+		return cloudOutputError("prices", err)
 	}
 
 	w := tabwriter.NewWriter(a.stdout(), 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "LOCATION\tMARKET\tINSTANCE TYPE\tGPUS\tMODEL\tPRICE/H\tCURRENCY\tAVAILABLE")
+	output := newErrorWriter(w)
+	output.printf("LOCATION\tMARKET\tINSTANCE TYPE\tGPUS\tMODEL\tPRICE/H\tCURRENCY\tAVAILABLE\n")
 	for _, price := range prices {
-		fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\t%s\t%s\t%t\n",
+		output.printf("%s\t%s\t%s\t%d\t%s\t%s\t%s\t%t\n",
 			price.LocationCode,
 			price.Market,
 			price.InstanceType,
@@ -409,7 +432,17 @@ func (a *app) printCloudPricing(prices []verda.InstancePrice, jsonOutput bool) e
 			price.Available,
 		)
 	}
+	if err := cloudOutputError("prices", output.Err()); err != nil {
+		return err
+	}
 	return w.Flush()
+}
+
+func cloudOutputError(name string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("write Verda %s: %w", name, err)
 }
 
 func (a *app) printCloudDeployResult(result *verda.DeployResult, jsonOutput bool) error {

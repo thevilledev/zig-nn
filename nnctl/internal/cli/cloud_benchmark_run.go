@@ -124,6 +124,9 @@ func (a *app) runCloudBenchmarkDeploy(ctx context.Context, opts cloudBenchmarkDe
 func (r *cloudBenchmarkRun) prepare() error {
 	r.progress.phase(cloudBenchmarkPhasePrepare, "Prepare benchmark workflow")
 	r.progress.detail("Checking git state and resolving %s", r.opts.ref)
+	if err := r.progress.Err(); err != nil {
+		return err
+	}
 	if !r.opts.ignoreDirty {
 		status, err := r.ops.gitStatus(r.ctx, r.opts.git)
 		if err != nil {
@@ -144,17 +147,22 @@ func (r *cloudBenchmarkRun) prepare() error {
 	if r.opts.authorizedKeysFile != "" {
 		r.opts.authorizedKeysFile = resolveRepoPath(r.app.repoRoot, r.opts.authorizedKeysFile)
 	}
-	return nil
+	return r.progress.Err()
 }
 
 func (r *cloudBenchmarkRun) resolveSourceVolume() (runErr error) {
 	r.progress.phase(cloudBenchmarkPhaseImage, "Resolve golden OS volume")
+	if err := r.progress.Err(); err != nil {
+		return err
+	}
 	r.packerDir = resolveRepoPath(r.app.repoRoot, r.opts.packerDir)
 	written, err := r.ops.ensurePackerTemplate(r.packerDir, r.opts.refreshPackerTemplate)
 	if err != nil {
 		return err
 	}
-	r.reportPackerTemplate(written)
+	if err := r.reportPackerTemplate(written); err != nil {
+		return err
+	}
 
 	r.client, r.credentials, err = r.ops.newClient(r.ctx, r.opts.BaseURL)
 	if err != nil {
@@ -189,21 +197,25 @@ func (r *cloudBenchmarkRun) resolveSourceVolume() (runErr error) {
 	r.opts.SourceOSVolumeName = ""
 	r.opts.LocationCode = r.sourceVolume.Location
 	r.progress.detail("Using volume: %s (%s in %s)", r.sourceVolume.ID, r.sourceVolume.Name, r.sourceVolume.Location)
-	return nil
+	return r.progress.Err()
 }
 
-func (r *cloudBenchmarkRun) reportPackerTemplate(written []string) {
+func (r *cloudBenchmarkRun) reportPackerTemplate(written []string) error {
 	for _, path := range written {
 		r.progress.detail("Wrote Packer file: %s", path)
 	}
 	if len(written) == 0 {
 		r.progress.detail("Packer template: %s", r.packerDir)
 	}
+	return r.progress.Err()
 }
 
 func (r *cloudBenchmarkRun) deployWorker() error {
 	r.progress.phase(cloudBenchmarkPhaseDeploy, "Deploy cloud worker")
 	r.progress.detail("Instance: %s, market: %s, location: %s", r.opts.InstanceType, r.opts.Market, r.opts.LocationCode)
+	if err := r.progress.Err(); err != nil {
+		return err
+	}
 	result, err := r.ops.deploy(r.ctx, r.client, r.opts.DeployOptions)
 	if err != nil {
 		return err
@@ -217,12 +229,15 @@ func (r *cloudBenchmarkRun) deployWorker() error {
 		r.cloneID = result.OSVolumeClone.VolumeID
 	}
 	r.progress.detail("Worker: %s, cloned volume: %s", r.instanceID, r.cloneID)
-	return nil
+	return r.progress.Err()
 }
 
 func (r *cloudBenchmarkRun) waitForWorker() error {
 	r.progress.phase(cloudBenchmarkPhaseReady, "Wait for worker readiness")
 	r.progress.detail("Waiting for an IP address and SSH access")
+	if err := r.progress.Err(); err != nil {
+		return err
+	}
 	instance, err := r.ops.waitInstance(r.ctx, r.client, r.instanceID, r.opts.timeout, r.opts.pollInterval)
 	if err != nil {
 		return err
@@ -234,7 +249,7 @@ func (r *cloudBenchmarkRun) waitForWorker() error {
 		return err
 	}
 	r.progress.detail("Worker ready: %s", r.host)
-	return nil
+	return r.progress.Err()
 }
 
 func (r *cloudBenchmarkRun) uploadSource() error {
@@ -253,6 +268,9 @@ func (r *cloudBenchmarkRun) uploadSource() error {
 	deployOpts.rsync = r.opts.rsync
 	r.progress.phase(cloudBenchmarkPhaseUpload, "Upload source snapshot")
 	r.progress.detail("%s -> %s", r.opts.ref, deployOpts.target)
+	if err := r.progress.Err(); err != nil {
+		return err
+	}
 	return r.ops.upload(r.ctx, deployOpts)
 }
 
@@ -266,20 +284,23 @@ func (r *cloudBenchmarkRun) defaultRemoteDir() string {
 
 func (r *cloudBenchmarkRun) runSmokeBenchmark() error {
 	r.progress.phase(cloudBenchmarkPhaseSmoke, "Run quick smoke benchmark")
+	if err := r.progress.Err(); err != nil {
+		return err
+	}
 	if r.opts.quick {
 		r.progress.detail("Skipped because --quick makes the captured run smoke-sized")
-		return nil
+		return r.progress.Err()
 	}
 	if r.opts.skipSmoke {
 		r.progress.detail("Skipped because --skip-smoke was set")
-		return nil
+		return r.progress.Err()
 	}
 	command := remoteBenchmarkCommand(r.remoteDir, r.opts.backend, "", true)
 	if err := r.ops.runSSH(r.ctx, r.opts.ssh, r.sshArgs, r.host, command, r.app.stdout()); err != nil {
 		return fmt.Errorf("remote quick benchmark failed: %w", err)
 	}
 	r.progress.detail("Smoke benchmark passed")
-	return nil
+	return r.progress.Err()
 }
 
 func (r *cloudBenchmarkRun) runCapturedBenchmark() error {
@@ -288,6 +309,9 @@ func (r *cloudBenchmarkRun) runCapturedBenchmark() error {
 		r.progress.detail("Backend: %s, filter: %s, quick: %t", r.opts.backend, r.opts.filter, r.opts.quick)
 	} else {
 		r.progress.detail("Backend: %s, filter: all default suites, quick: %t", r.opts.backend, r.opts.quick)
+	}
+	if err := r.progress.Err(); err != nil {
+		return err
 	}
 	command := remoteBenchmarkCommand(r.remoteDir, r.opts.backend, r.opts.filter, r.opts.quick)
 	output, err := r.ops.captureSSH(r.ctx, r.opts.ssh, r.sshArgs, r.host, command)
@@ -300,13 +324,18 @@ func (r *cloudBenchmarkRun) runCapturedBenchmark() error {
 
 func (r *cloudBenchmarkRun) collectResults() error {
 	r.progress.phase(cloudBenchmarkPhaseResults, "Collect and save results")
+	if err := r.progress.Err(); err != nil {
+		return err
+	}
 	rows, err := parseBenchmarkCSV(r.benchmarkOutput)
 	if err != nil {
 		return err
 	}
 	r.rows = rows
 	r.metadata = r.buildMetadata()
-	r.collectRemoteMetadata()
+	if err := r.collectRemoteMetadata(); err != nil {
+		return err
+	}
 
 	outputPath := strings.TrimSpace(r.opts.output)
 	if outputPath == "" {
@@ -318,18 +347,22 @@ func (r *cloudBenchmarkRun) collectResults() error {
 		return err
 	}
 	r.progress.detail("CSV: %s", outputPath)
-	fmt.Fprintf(r.app.stdout(), "benchmark CSV: %s\n", outputPath)
+	if _, err := fmt.Fprintf(r.app.stdout(), "benchmark CSV: %s\n", outputPath); err != nil {
+		return fmt.Errorf("write benchmark CSV path: %w", err)
+	}
 
 	if !r.opts.updateDocs {
-		return nil
+		return r.progress.Err()
 	}
 	docsPath := resolveRepoPath(r.app.repoRoot, r.opts.docsPath)
 	if err := updateCloudBenchmarkDocs(docsPath, outputPath, r.metadata, r.rows); err != nil {
 		return err
 	}
 	r.progress.detail("Docs: %s", docsPath)
-	fmt.Fprintf(r.app.stdout(), "updated benchmark docs: %s\n", docsPath)
-	return nil
+	if _, err := fmt.Fprintf(r.app.stdout(), "updated benchmark docs: %s\n", docsPath); err != nil {
+		return fmt.Errorf("write benchmark docs path: %w", err)
+	}
+	return r.progress.Err()
 }
 
 func (r *cloudBenchmarkRun) buildMetadata() cloudBenchmarkMetadata {
@@ -356,33 +389,36 @@ func (r *cloudBenchmarkRun) buildMetadata() cloudBenchmarkMetadata {
 	return metadata
 }
 
-func (r *cloudBenchmarkRun) collectRemoteMetadata() {
+func (r *cloudBenchmarkRun) collectRemoteMetadata() error {
 	command := remoteBenchmarkMetadataCommand()
 	metadata, err := r.ops.captureSSH(r.ctx, r.opts.ssh, r.sshArgs, r.host, command)
 	if err != nil {
 		r.progress.detail("Warning: remote metadata could not be collected: %v", err)
-		return
+		return r.progress.Err()
 	}
 	mergeCloudBenchmarkRemoteMetadata(&r.metadata, metadata)
+	return nil
 }
 
 func (r *cloudBenchmarkRun) cleanupResources() error {
 	r.progress.phase(cloudBenchmarkPhaseCleanup, "Clean up cloud resources")
+	progressErr := r.progress.Err()
 	if r.opts.keepInstance {
 		r.progress.detail("Skipped because --keep-instance was set")
 		r.progress.detail("Worker: %s, cloned volume: %s", r.instanceID, r.cloneID)
-		return nil
+		return errors.Join(progressErr, r.progress.Err())
 	}
 	r.progress.detail("Destroying worker %s and cloned volume %s", r.instanceID, r.cloneID)
+	progressErr = errors.Join(progressErr, r.progress.Err())
 	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(r.ctx), 5*time.Minute)
 	defer cancel()
 	err := r.ops.cleanup(cleanupCtx, r.client, r.opts.BaseURL, r.instanceID, r.cloneID, r.sourceVolume.ID)
 	if err != nil {
 		r.progress.detail("Cleanup failed: %v", err)
-		return err
+		return errors.Join(progressErr, err, r.progress.Err())
 	}
 	r.progress.detail("Cleanup complete")
-	return nil
+	return errors.Join(progressErr, r.progress.Err())
 }
 
 func (r *cloudBenchmarkRun) removeWorkflowDir() error {

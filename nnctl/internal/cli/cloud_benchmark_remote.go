@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/csv"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -116,7 +117,9 @@ func remoteBenchmarkMetadataCommand() string {
 
 func (a *app) runCloudBenchmarkSSH(ctx context.Context, ssh string, baseArgs []string, host, remoteCommand string, stdout io.Writer) error {
 	args := append(append([]string{}, baseArgs...), host, remoteCommand)
-	fmt.Fprintf(a.stderr(), "==> %s\n", zig.CommandString(ssh, args))
+	if _, err := fmt.Fprintf(a.stderr(), "==> %s\n", zig.CommandString(ssh, args)); err != nil {
+		return fmt.Errorf("write SSH command: %w", err)
+	}
 	cmd := exec.CommandContext(ctx, ssh, args...)
 	cmd.Stdin = a.stdin()
 	cmd.Stdout = stdout
@@ -129,21 +132,28 @@ func (a *app) runCloudBenchmarkSSH(ctx context.Context, ssh string, baseArgs []s
 
 func (a *app) captureCloudBenchmarkSSH(ctx context.Context, ssh string, baseArgs []string, host, remoteCommand string) ([]byte, error) {
 	args := append(append([]string{}, baseArgs...), host, remoteCommand)
-	fmt.Fprintf(a.stderr(), "==> %s\n", zig.CommandString(ssh, args))
+	if _, err := fmt.Fprintf(a.stderr(), "==> %s\n", zig.CommandString(ssh, args)); err != nil {
+		return nil, fmt.Errorf("write SSH command: %w", err)
+	}
 	cmd := exec.CommandContext(ctx, ssh, args...)
 	cmd.Stdin = a.stdin()
 	output, err := cmd.CombinedOutput()
 	if err != nil {
+		runErr := fmt.Errorf("%s failed: %w", ssh, err)
 		if len(output) > 0 {
-			fmt.Fprint(a.stderr(), string(output))
+			if writeErr := writeBenchmarkOutput(a.stderr(), output); writeErr != nil {
+				return nil, errors.Join(runErr, writeErr)
+			}
 		}
-		return nil, fmt.Errorf("%s failed: %w", ssh, err)
+		return nil, runErr
 	}
 	return output, nil
 }
 
 func (a *app) runCloudBenchmarkCommand(ctx context.Context, dir string, env []string, name string, args ...string) error {
-	fmt.Fprintf(a.stderr(), "==> %s\n", zig.CommandString(name, args))
+	if _, err := fmt.Fprintf(a.stderr(), "==> %s\n", zig.CommandString(name, args)); err != nil {
+		return fmt.Errorf("write benchmark command: %w", err)
+	}
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
 	cmd.Env = env
@@ -176,7 +186,9 @@ func writeCloudBenchmarkCSV(path string, metadata cloudBenchmarkMetadata, output
 		return fmt.Errorf("create benchmark CSV directory: %w", err)
 	}
 	var content bytes.Buffer
-	writeCloudBenchmarkMetadata(&content, metadata)
+	if err := writeCloudBenchmarkMetadata(&content, metadata); err != nil {
+		return err
+	}
 	content.Write(output)
 	if content.Len() > 0 && content.Bytes()[content.Len()-1] != '\n' {
 		content.WriteByte('\n')
@@ -187,7 +199,7 @@ func writeCloudBenchmarkCSV(path string, metadata cloudBenchmarkMetadata, output
 	return nil
 }
 
-func writeCloudBenchmarkMetadata(dst io.Writer, metadata cloudBenchmarkMetadata) {
+func writeCloudBenchmarkMetadata(dst io.Writer, metadata cloudBenchmarkMetadata) error {
 	values := []struct {
 		name  string
 		value string
@@ -209,11 +221,16 @@ func writeCloudBenchmarkMetadata(dst io.Writer, metadata cloudBenchmarkMetadata)
 		{"compute", metadata.ComputeCapability},
 		{"driver", metadata.Driver},
 	}
+	output := newErrorWriter(dst)
 	for _, item := range values {
 		if strings.TrimSpace(item.value) != "" {
-			fmt.Fprintf(dst, "# %s=%s\n", item.name, strings.TrimSpace(item.value))
+			output.printf("# %s=%s\n", item.name, strings.TrimSpace(item.value))
 		}
 	}
+	if err := output.Err(); err != nil {
+		return fmt.Errorf("write benchmark metadata: %w", err)
+	}
+	return nil
 }
 
 func mergeCloudBenchmarkRemoteMetadata(metadata *cloudBenchmarkMetadata, output []byte) {

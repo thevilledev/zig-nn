@@ -92,19 +92,23 @@ func (a *app) runExperiment(ctx context.Context, name string, passthrough []stri
 	return a.runZig(ctx, zig.RunArgs(experiment.Step, opts, passthrough)...)
 }
 
-func (a *app) listExperiments() {
+func (a *app) listExperiments() error {
+	output := newErrorWriter(a.stdout())
 	for _, experiment := range catalog.SortedExperiments() {
 		if experiment.Hidden {
 			continue
 		}
-		fmt.Fprintf(a.stdout(), "%-24s %s\n", experiment.Name, experiment.Description)
+		output.printf("%-24s %s\n", experiment.Name, experiment.Description)
 	}
+	return output.Err()
 }
 
-func (a *app) listTests() {
+func (a *app) listTests() error {
+	output := newErrorWriter(a.stdout())
 	for _, test := range catalog.Tests() {
-		fmt.Fprintln(a.stdout(), test)
+		output.printf("%s\n", test)
 	}
+	return output.Err()
 }
 
 func (a *app) runFormat(ctx context.Context, check bool) error {
@@ -124,31 +128,45 @@ func (a *app) runClean(includeTool bool) error {
 		if err := os.RemoveAll(path); err != nil {
 			return fmt.Errorf("remove %s: %w", rel, err)
 		}
-		fmt.Fprintf(a.stdout(), "removed %s\n", rel)
+		if _, err := fmt.Fprintf(a.stdout(), "removed %s\n", rel); err != nil {
+			return fmt.Errorf("write clean result: %w", err)
+		}
 	}
 	return nil
 }
 
 func (a *app) runDoctor(ctx context.Context) error {
-	fmt.Fprintf(a.stdout(), "repo: %s\n", a.repoRoot)
-	fmt.Fprintf(a.stdout(), "nnctl: %s\n", runtime.Version())
-	fmt.Fprintf(a.stdout(), "platform: %s/%s\n", runtime.GOOS, runtime.GOARCH)
-	a.printToolVersion(ctx, "go", "version")
-	a.printToolVersion(ctx, a.zig, "version")
-	a.printBackendDoctor()
-	return nil
+	output := newErrorWriter(a.stdout())
+	output.printf("repo: %s\n", a.repoRoot)
+	output.printf("nnctl: %s\n", runtime.Version())
+	output.printf("platform: %s/%s\n", runtime.GOOS, runtime.GOARCH)
+	if err := output.Err(); err != nil {
+		return fmt.Errorf("write doctor environment: %w", err)
+	}
+	if err := a.printToolVersion(ctx, "go", "version"); err != nil {
+		return err
+	}
+	if err := a.printToolVersion(ctx, a.zig, "version"); err != nil {
+		return err
+	}
+	return a.printBackendDoctor()
 }
 
-func (a *app) printBackendDoctor() {
+func (a *app) printBackendDoctor() error {
 	cudaPath := getenvDefault("CUDA_PATH", "/usr/local/cuda")
 	rocmPath := getenvDefault("ROCM_PATH", "/opt/rocm")
-	fmt.Fprintf(a.stdout(), "metal: %s\n", metalDoctorStatus(runtime.GOOS))
-	fmt.Fprintf(a.stdout(), "cuda: %s\n", cudaDoctorStatus(runtime.GOOS, cudaPath, pathExists))
-	fmt.Fprintf(a.stdout(), "rocm: %s\n", rocmDoctorStatus(runtime.GOOS, rocmPath, pathExists))
-	fmt.Fprintf(a.stdout(), "verify metal: zig build -Dgpu=metal test-metal_backend --summary all\n")
-	fmt.Fprintf(a.stdout(), "verify cuda: zig build -Dgpu=cuda -Dcuda-path=%s test-cuda_backend --summary all\n", cudaPath)
-	fmt.Fprintf(a.stdout(), "verify rocm: zig build -Dgpu=rocm -Drocm-path=%s test-rocm_backend --summary all\n", rocmPath)
-	fmt.Fprintf(a.stdout(), "benchmark gpu: nnctl benchmark --gpu auto --quick\n")
+	output := newErrorWriter(a.stdout())
+	output.printf("metal: %s\n", metalDoctorStatus(runtime.GOOS))
+	output.printf("cuda: %s\n", cudaDoctorStatus(runtime.GOOS, cudaPath, pathExists))
+	output.printf("rocm: %s\n", rocmDoctorStatus(runtime.GOOS, rocmPath, pathExists))
+	output.printf("verify metal: zig build -Dgpu=metal test-metal_backend --summary all\n")
+	output.printf("verify cuda: zig build -Dgpu=cuda -Dcuda-path=%s test-cuda_backend --summary all\n", cudaPath)
+	output.printf("verify rocm: zig build -Dgpu=rocm -Drocm-path=%s test-rocm_backend --summary all\n", rocmPath)
+	output.printf("benchmark gpu: nnctl benchmark --gpu auto --quick\n")
+	if err := output.Err(); err != nil {
+		return fmt.Errorf("write doctor backends: %w", err)
+	}
+	return nil
 }
 
 func metalDoctorStatus(goos string) string {
@@ -183,20 +201,29 @@ func pathExists(path string) bool {
 	return err == nil
 }
 
-func (a *app) printToolVersion(ctx context.Context, name string, args ...string) {
+func (a *app) printToolVersion(ctx context.Context, name string, args ...string) error {
 	path, err := exec.LookPath(name)
 	if err != nil {
-		fmt.Fprintf(a.stdout(), "%s: missing\n", name)
-		return
+		_, writeErr := fmt.Fprintf(a.stdout(), "%s: missing\n", name)
+		if writeErr != nil {
+			return fmt.Errorf("write %s version: %w", name, writeErr)
+		}
+		return nil
 	}
 	cmd := exec.CommandContext(ctx, path, args...)
 	cmd.Dir = a.repoRoot
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		fmt.Fprintf(a.stdout(), "%s: %s (%v)\n", name, strings.TrimSpace(string(out)), err)
-		return
+		_, writeErr := fmt.Fprintf(a.stdout(), "%s: %s (%v)\n", name, strings.TrimSpace(string(out)), err)
+		if writeErr != nil {
+			return fmt.Errorf("write %s version: %w", name, writeErr)
+		}
+		return nil
 	}
-	fmt.Fprintf(a.stdout(), "%s: %s\n", name, strings.TrimSpace(string(out)))
+	if _, err := fmt.Fprintf(a.stdout(), "%s: %s\n", name, strings.TrimSpace(string(out))); err != nil {
+		return fmt.Errorf("write %s version: %w", name, err)
+	}
+	return nil
 }
 
 func (a *app) runZig(ctx context.Context, args ...string) error {
@@ -204,7 +231,9 @@ func (a *app) runZig(ctx context.Context, args ...string) error {
 }
 
 func (a *app) run(ctx context.Context, dir, name string, args ...string) error {
-	fmt.Fprintf(a.stderr(), "==> %s\n", zig.CommandString(name, args))
+	if _, err := fmt.Fprintf(a.stderr(), "==> %s\n", zig.CommandString(name, args)); err != nil {
+		return fmt.Errorf("write command: %w", err)
+	}
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
 	cmd.Stdin = a.stdin()

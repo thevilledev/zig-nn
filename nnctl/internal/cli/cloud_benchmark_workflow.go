@@ -89,24 +89,31 @@ type cloudBenchmarkMetadata struct {
 }
 
 type cloudBenchmarkProgress struct {
-	dst     io.Writer
+	output  *errorWriter
 	started bool
 }
 
 func newCloudBenchmarkProgress(dst io.Writer) *cloudBenchmarkProgress {
-	return &cloudBenchmarkProgress{dst: dst}
+	return &cloudBenchmarkProgress{output: newErrorWriter(dst)}
 }
 
 func (p *cloudBenchmarkProgress) phase(number int, title string) {
 	if p.started {
-		fmt.Fprintln(p.dst)
+		p.output.printf("\n")
 	}
-	fmt.Fprintf(p.dst, "[%d/%d] %s\n", number, cloudBenchmarkPhaseCount, title)
+	p.output.printf("[%d/%d] %s\n", number, cloudBenchmarkPhaseCount, title)
 	p.started = true
 }
 
 func (p *cloudBenchmarkProgress) detail(format string, args ...any) {
-	fmt.Fprintf(p.dst, "      "+format+"\n", args...)
+	p.output.printf("      "+format+"\n", args...)
+}
+
+func (p *cloudBenchmarkProgress) Err() error {
+	if err := p.output.Err(); err != nil {
+		return fmt.Errorf("write cloud benchmark progress: %w", err)
+	}
+	return nil
 }
 
 func defaultCloudBenchmarkDeployOptions() cloudBenchmarkDeployOptions {

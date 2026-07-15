@@ -47,25 +47,9 @@ func defaultChatOptions() chatOptions {
 }
 
 func (a *app) runChat(ctx context.Context, opts chatOptions) error {
-	if opts.modelPath == "" && !opts.allowUntrained {
-		return fmt.Errorf("chat requires --model <checkpoint> or --allow-untrained")
-	}
-	if opts.port <= 0 || opts.port > 65535 {
-		return fmt.Errorf("--port must be between 1 and 65535")
-	}
-	if opts.apiPort <= 0 || opts.apiPort > 65535 {
-		return fmt.Errorf("--api-port must be between 1 and 65535")
-	}
-	if opts.maxTokens < 0 {
-		return fmt.Errorf("--max-tokens must be non-negative")
-	}
-	if opts.topK < 0 {
-		return fmt.Errorf("--top-k must be non-negative")
-	}
-
-	readyTimeout, err := time.ParseDuration(opts.readyTimeoutText)
+	readyTimeout, err := validateChatOptions(opts)
 	if err != nil {
-		return fmt.Errorf("parse --ready-timeout: %w", err)
+		return err
 	}
 
 	apiBaseURL := "http://" + net.JoinHostPort(opts.apiHost, strconv.Itoa(opts.apiPort))
@@ -84,7 +68,9 @@ func (a *app) runChat(ctx context.Context, opts chatOptions) error {
 	}
 
 	runArgs := zig.RunArgs("run_tiny_gpt_openai", zig.Options{Optimize: opts.mode}, serverArgs)
-	fmt.Fprintf(a.stderr(), "==> %s\n", zig.CommandString(a.zig, runArgs))
+	if _, err := fmt.Fprintf(a.stderr(), "==> %s\n", zig.CommandString(a.zig, runArgs)); err != nil {
+		return fmt.Errorf("write inference command: %w", err)
+	}
 	serverCmd := exec.CommandContext(ctx, a.zig, runArgs...)
 	serverCmd.Dir = a.repoRoot
 	serverCmd.Stdin = a.stdin()
@@ -126,12 +112,17 @@ func (a *app) runChat(ctx context.Context, opts chatOptions) error {
 	}
 
 	httpDone := make(chan error, 1)
+	output := newErrorWriter(a.stdout())
+	output.printf("chat app: http://%s\n", chatAddr)
+	output.printf("inference: %s\n", apiBaseURL)
+	if err := output.Err(); err != nil {
+		_ = serverCmd.Process.Kill()
+		<-childDone
+		return fmt.Errorf("write chat endpoints: %w", err)
+	}
 	go func() {
 		httpDone <- chatServer.ListenAndServe()
 	}()
-
-	fmt.Fprintf(a.stdout(), "chat app: http://%s\n", chatAddr)
-	fmt.Fprintf(a.stdout(), "inference: %s\n", apiBaseURL)
 
 	select {
 	case err := <-childDone:
@@ -153,6 +144,30 @@ func (a *app) runChat(ctx context.Context, opts chatOptions) error {
 		<-childDone
 		return ctx.Err()
 	}
+}
+
+func validateChatOptions(opts chatOptions) (time.Duration, error) {
+	if opts.modelPath == "" && !opts.allowUntrained {
+		return 0, fmt.Errorf("chat requires --model <checkpoint> or --allow-untrained")
+	}
+	if opts.port <= 0 || opts.port > 65535 {
+		return 0, fmt.Errorf("--port must be between 1 and 65535")
+	}
+	if opts.apiPort <= 0 || opts.apiPort > 65535 {
+		return 0, fmt.Errorf("--api-port must be between 1 and 65535")
+	}
+	if opts.maxTokens < 0 {
+		return 0, fmt.Errorf("--max-tokens must be non-negative")
+	}
+	if opts.topK < 0 {
+		return 0, fmt.Errorf("--top-k must be non-negative")
+	}
+
+	readyTimeout, err := time.ParseDuration(opts.readyTimeoutText)
+	if err != nil {
+		return 0, fmt.Errorf("parse --ready-timeout: %w", err)
+	}
+	return readyTimeout, nil
 }
 
 type chatProxy struct {

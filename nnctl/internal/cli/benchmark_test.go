@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -37,7 +38,9 @@ func TestPrintBenchmarkReportShowsDiffsAndSkips(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	printBenchmarkReport(&out, rows)
+	if err := printBenchmarkReport(&out, rows); err != nil {
+		t.Fatalf("printBenchmarkReport() error = %v", err)
+	}
 	report := out.String()
 
 	for _, want := range []string{
@@ -77,7 +80,9 @@ func TestPrintBenchmarkComparisonShowsBaselineDeltas(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	printBenchmarkComparison(&out, current, baseline)
+	if err := printBenchmarkComparison(&out, current, baseline); err != nil {
+		t.Fatalf("printBenchmarkComparison() error = %v", err)
+	}
 	report := out.String()
 
 	for _, want := range []string{
@@ -97,5 +102,13 @@ func TestPrintBenchmarkComparisonShowsBaselineDeltas(t *testing.T) {
 		if !strings.Contains(report, want) {
 			t.Fatalf("comparison missing %q:\n%s", want, report)
 		}
+	}
+}
+
+func TestPrintBenchmarkReportReturnsWriteFailure(t *testing.T) {
+	wantErr := errors.New("report unavailable")
+	err := printBenchmarkReport(testErrorWriter{err: wantErr}, []benchmarkRow{{Mode: "ReleaseFast"}})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("printBenchmarkReport() error = %v, want %v", err, wantErr)
 	}
 }

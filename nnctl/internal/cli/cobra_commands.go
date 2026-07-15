@@ -199,13 +199,12 @@ func (a *app) newListCommand(root *cobra.Command) *cobra.Command {
 			case "tasks", "commands":
 				return root.Help()
 			case "experiments", "experiment", "examples", "example":
-				a.listExperiments()
+				return a.listExperiments()
 			case "tests", "test":
-				a.listTests()
+				return a.listTests()
 			default:
 				return fmt.Errorf("unknown list topic %q", topic)
 			}
-			return nil
 		},
 	}
 }
@@ -359,8 +358,11 @@ func newVersionCommand(a *app) *cobra.Command {
 		Use:   "version",
 		Short: "Print nnctl version",
 		Args:  cobra.NoArgs,
-		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Fprintf(a.stdout(), "nnctl dev (%s)\n", runtime.Version())
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if _, err := fmt.Fprintf(a.stdout(), "nnctl dev (%s)\n", runtime.Version()); err != nil {
+				return fmt.Errorf("write nnctl version: %w", err)
+			}
+			return nil
 		},
 	}
 }

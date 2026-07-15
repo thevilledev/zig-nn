@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/csv"
+	"errors"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"os/exec"
@@ -64,28 +66,34 @@ func (a *app) runBenchmark(ctx context.Context, opts benchmarkOptions) error {
 	}
 
 	args := zig.RunArgs(step, zig.Options{GPU: opts.gpu}, passthrough)
-	fmt.Fprintf(a.stderr(), "==> %s\n", zig.CommandString(a.zig, args))
+	if _, err := fmt.Fprintf(a.stderr(), "==> %s\n", zig.CommandString(a.zig, args)); err != nil {
+		return fmt.Errorf("write benchmark command: %w", err)
+	}
 
 	cmd := exec.CommandContext(ctx, a.zig, args...)
 	cmd.Dir = a.repoRoot
 	cmd.Stdin = a.stdin()
 	output, err := cmd.CombinedOutput()
 	if err != nil {
+		runErr := fmt.Errorf("%s failed: %w", a.zig, err)
 		if len(output) > 0 {
-			fmt.Fprint(a.stderr(), string(output))
+			if writeErr := writeBenchmarkOutput(a.stderr(), output); writeErr != nil {
+				return errors.Join(runErr, writeErr)
+			}
 		}
-		return fmt.Errorf("%s failed: %w", a.zig, err)
+		return runErr
 	}
 
 	if opts.csv {
-		fmt.Fprint(a.stdout(), string(output))
-		return nil
+		return writeBenchmarkOutput(a.stdout(), output)
 	}
 
 	rows, err := parseBenchmarkCSV(output)
 	if err != nil {
 		if len(output) > 0 {
-			fmt.Fprint(a.stderr(), string(output))
+			if writeErr := writeBenchmarkOutput(a.stderr(), output); writeErr != nil {
+				return errors.Join(err, writeErr)
+			}
 		}
 		return err
 	}
@@ -99,11 +107,16 @@ func (a *app) runBenchmark(ctx context.Context, opts benchmarkOptions) error {
 		if err != nil {
 			return fmt.Errorf("parse benchmark baseline: %w", err)
 		}
-		printBenchmarkComparison(a.stdout(), rows, baselineRows)
-		return nil
+		return printBenchmarkComparison(a.stdout(), rows, baselineRows)
 	}
 
-	printBenchmarkReport(a.stdout(), rows)
+	return printBenchmarkReport(a.stdout(), rows)
+}
+
+func writeBenchmarkOutput(dst io.Writer, output []byte) error {
+	if _, err := io.Copy(dst, bytes.NewReader(output)); err != nil {
+		return fmt.Errorf("write benchmark output: %w", err)
+	}
 	return nil
 }
 
@@ -198,12 +211,13 @@ func parseBenchmarkRecord(record []string) (benchmarkRow, error) {
 	}, nil
 }
 
-func printBenchmarkReport(dst interface{ Write([]byte) (int, error) }, rows []benchmarkRow) {
-	fmt.Fprintf(dst, "Benchmark report\n")
+func printBenchmarkReport(dst io.Writer, rows []benchmarkRow) error {
+	output := newErrorWriter(dst)
+	output.printf("Benchmark report\n")
 	if len(rows) > 0 {
-		fmt.Fprintf(dst, "Mode: %s\n", rows[0].Mode)
+		output.printf("Mode: %s\n", rows[0].Mode)
 	}
-	fmt.Fprintf(dst, "\n")
+	output.printf("\n")
 
 	type pair struct {
 		cpu   *benchmarkRow
@@ -240,14 +254,14 @@ func printBenchmarkReport(dst interface{ Write([]byte) (int, error) }, rows []be
 	}
 
 	for _, suite := range suiteOrder {
-		fmt.Fprintf(dst, "%s\n", suite)
+		output.printf("%s\n", suite)
 		var table bytes.Buffer
 		tw := tabwriter.NewWriter(&table, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(tw, "case\tcpu avg\tmetal avg\tmetal diff\tmetal speedup\tcuda avg\tcuda diff\tcuda speedup\trocm avg\trocm diff\trocm speedup\terror\tstatus")
+		tableOutput := newErrorWriter(tw)
+		tableOutput.printf("case\tcpu avg\tmetal avg\tmetal diff\tmetal speedup\tcuda avg\tcuda diff\tcuda speedup\trocm avg\trocm diff\trocm speedup\terror\tstatus\n")
 		for _, caseName := range caseOrder[suite] {
 			pair := pairs[suite][caseName]
-			fmt.Fprintf(
-				tw,
+			tableOutput.printf(
 				"%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 				caseName,
 				formatBenchmarkTime(pair.cpu),
@@ -264,10 +278,18 @@ func printBenchmarkReport(dst interface{ Write([]byte) (int, error) }, rows []be
 				formatBenchmarkStatus(pair.cpu, pair.metal, pair.cuda, pair.rocm),
 			)
 		}
-		_ = tw.Flush()
-		fmt.Fprint(dst, table.String())
-		fmt.Fprintln(dst)
+		if err := tableOutput.Err(); err != nil {
+			return fmt.Errorf("format benchmark report: %w", err)
+		}
+		if err := tw.Flush(); err != nil {
+			return fmt.Errorf("format benchmark report: %w", err)
+		}
+		output.printf("%s\n", table.String())
 	}
+	if err := output.Err(); err != nil {
+		return fmt.Errorf("write benchmark report: %w", err)
+	}
+	return nil
 }
 
 func formatBenchmarkTime(row *benchmarkRow) string {
@@ -363,12 +385,13 @@ func comparableBenchmarkRows(cpu, metal *benchmarkRow) bool {
 		!math.IsNaN(metal.AverageNS)
 }
 
-func printBenchmarkComparison(dst interface{ Write([]byte) (int, error) }, current, baseline []benchmarkRow) {
-	fmt.Fprintf(dst, "Benchmark comparison\n")
+func printBenchmarkComparison(dst io.Writer, current, baseline []benchmarkRow) error {
+	output := newErrorWriter(dst)
+	output.printf("Benchmark comparison\n")
 	if len(current) > 0 {
-		fmt.Fprintf(dst, "Mode: %s\n", current[0].Mode)
+		output.printf("Mode: %s\n", current[0].Mode)
 	}
-	fmt.Fprintf(dst, "\n")
+	output.printf("\n")
 
 	baselineByKey := make(map[string]*benchmarkRow, len(baseline))
 	for i := range baseline {
@@ -379,15 +402,15 @@ func printBenchmarkComparison(dst interface{ Write([]byte) (int, error) }, curre
 	seen := make(map[string]bool, len(current))
 	var table bytes.Buffer
 	tw := tabwriter.NewWriter(&table, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "suite\tcase\tbackend\tcurrent\tbaseline\tdelta\tstatus")
+	tableOutput := newErrorWriter(tw)
+	tableOutput.printf("suite\tcase\tbackend\tcurrent\tbaseline\tdelta\tstatus\n")
 
 	for i := range current {
 		row := &current[i]
 		key := benchmarkRowKey(*row)
 		seen[key] = true
 		base := baselineByKey[key]
-		fmt.Fprintf(
-			tw,
+		tableOutput.printf(
 			"%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			row.Suite,
 			row.Case,
@@ -405,8 +428,7 @@ func printBenchmarkComparison(dst interface{ Write([]byte) (int, error) }, curre
 		if seen[key] {
 			continue
 		}
-		fmt.Fprintf(
-			tw,
+		tableOutput.printf(
 			"%s\t%s\t%s\t-\t%s\t-\tmissing_current\n",
 			row.Suite,
 			row.Case,
@@ -415,8 +437,17 @@ func printBenchmarkComparison(dst interface{ Write([]byte) (int, error) }, curre
 		)
 	}
 
-	_ = tw.Flush()
-	fmt.Fprint(dst, table.String())
+	if err := tableOutput.Err(); err != nil {
+		return fmt.Errorf("format benchmark comparison: %w", err)
+	}
+	if err := tw.Flush(); err != nil {
+		return fmt.Errorf("format benchmark comparison: %w", err)
+	}
+	output.printf("%s", table.String())
+	if err := output.Err(); err != nil {
+		return fmt.Errorf("write benchmark comparison: %w", err)
+	}
+	return nil
 }
 
 func benchmarkRowKey(row benchmarkRow) string {

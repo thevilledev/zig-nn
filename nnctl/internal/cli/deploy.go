@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -30,7 +31,7 @@ func defaultDeployOptions() deployOptions {
 	}
 }
 
-func (a *app) runDeploy(ctx context.Context, opts deployOptions) error {
+func (a *app) runDeploy(ctx context.Context, opts deployOptions) (runErr error) {
 	if strings.TrimSpace(opts.target) == "" {
 		return fmt.Errorf("deploy target is required")
 	}
@@ -55,7 +56,11 @@ func (a *app) runDeploy(ctx context.Context, opts deployOptions) error {
 	if err != nil {
 		return fmt.Errorf("create deploy snapshot dir: %w", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() {
+		if err := os.RemoveAll(tmpDir); err != nil {
+			runErr = errors.Join(runErr, fmt.Errorf("remove deploy snapshot dir: %w", err))
+		}
+	}()
 
 	snapshotDir := filepath.Join(tmpDir, "snapshot")
 	if err := os.Mkdir(snapshotDir, 0o755); err != nil {
@@ -74,10 +79,14 @@ func (a *app) runDeploy(ctx context.Context, opts deployOptions) error {
 	}
 
 	if opts.dryRun {
-		fmt.Fprintf(a.stdout(), "dry run complete for git snapshot %s to %s\n", opts.ref, opts.target)
+		if _, err := fmt.Fprintf(a.stdout(), "dry run complete for git snapshot %s to %s\n", opts.ref, opts.target); err != nil {
+			return fmt.Errorf("write deploy result: %w", err)
+		}
 		return nil
 	}
-	fmt.Fprintf(a.stdout(), "deployed git snapshot %s to %s\n", opts.ref, opts.target)
+	if _, err := fmt.Fprintf(a.stdout(), "deployed git snapshot %s to %s\n", opts.ref, opts.target); err != nil {
+		return fmt.Errorf("write deploy result: %w", err)
+	}
 	return nil
 }
 

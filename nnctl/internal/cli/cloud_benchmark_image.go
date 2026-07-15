@@ -79,6 +79,9 @@ func (a *app) buildCloudBenchmarkSourceVolume(
 ) (verda.Volume, error) {
 	progress.detail("No reusable volume named %q in %s", opts.SourceOSVolumeName, targetLocation)
 	progress.detail("Building a golden volume with Packer")
+	if err := progress.Err(); err != nil {
+		return verda.Volume{}, err
+	}
 	keysFile, err := a.cloudBenchmarkAuthorizedKeysFile(ctx, client, workflowDir, opts.authorizedKeysFile, opts.SSHKeyIDs)
 	if err != nil {
 		return verda.Volume{}, err
