@@ -68,7 +68,7 @@ func (a *App) newRootCommand() *cobra.Command {
 		a.newTestCommand(withRepo),
 		a.newBenchmarkCommand(withRepo),
 		a.newDeployCommand(withRepo),
-		a.newCloudCommand(),
+		a.newCloudCommand(withRepo),
 		a.newExamplesCommand(withRepo),
 		a.newRunCommand(withRepo),
 		a.newTrainCommand(withRepo),
@@ -231,7 +231,7 @@ changes, so remote benchmark runs can be tied back to a specific git ref.`,
 	return cmd
 }
 
-func (a *App) newCloudCommand() *cobra.Command {
+func (a *App) newCloudCommand(withRepo repoRunner) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "cloud <command>",
 		Short: "Deploy cloud benchmark workers",
@@ -241,6 +241,7 @@ func (a *App) newCloudCommand() *cobra.Command {
 		},
 	}
 	cmd.AddCommand(
+		a.newCloudBenchmarkDeployCommand(withRepo),
 		a.newCloudDeployCommand(),
 		a.newCloudVolumeCommand(),
 		a.newCloudDestroyCommand(),
@@ -249,6 +250,69 @@ func (a *App) newCloudCommand() *cobra.Command {
 		a.newCloudPricingCommand(),
 		a.newCloudSSHKeysCommand(),
 	)
+	return cmd
+}
+
+func (a *App) newCloudBenchmarkDeployCommand(withRepo repoRunner) *cobra.Command {
+	opts := defaultCloudBenchmarkDeployOptions()
+	cmd := &cobra.Command{
+		Use:     "benchmark-deploy",
+		Aliases: []string{"benchmark"},
+		Short:   "Provision a worker and capture a cloud benchmark",
+		Long: `Runs the complete Verda benchmark workflow with one command. It writes the
+embedded Packer template, reuses a matching golden OS volume or builds one when
+needed, clones the volume, deploys a spot or on-demand worker, waits for SSH,
+deploys a clean git snapshot, runs the benchmark, and saves a local CSV.
+
+The worker and cloned OS volume are destroyed after the CSV is captured, even
+when a later workflow step fails. The golden source volume is always retained.
+Use --keep-instance to retain the worker and clone. Packer is only required when
+no reusable source OS volume is available.`,
+		Example: `  nnctl cloud benchmark-deploy --instance-type 1A100.22V --ssh-key-id ssh_key_id
+  nnctl cloud benchmark-deploy --instance-type 1H200.141S.44V --market on-demand --location-code FIN-02 --ssh-key-id ssh_key_id
+  nnctl cloud benchmark-deploy --instance-type 1A100.22V --filter gpu_peak --output a100-peak.csv --update-docs
+  nnctl cloud benchmark --instance-type 1A100.22V --source-os-volume-id volume_id --skip-smoke`,
+		Args: cobra.NoArgs,
+		RunE: withRepo(func(ctx context.Context, cmd *cobra.Command, args []string) error {
+			return a.runCloudBenchmarkDeploy(ctx, opts)
+		}),
+	}
+	cmd.Flags().StringVar(&opts.InstanceType, "instance-type", opts.InstanceType, "Verda benchmark worker instance type")
+	cmd.Flags().StringVar(&opts.SourceOSVolumeID, "source-os-volume-id", opts.SourceOSVolumeID, "existing golden source OS volume ID; skips name lookup and Packer")
+	cmd.Flags().StringVar(&opts.SourceOSVolumeName, "source-os-volume-name", opts.SourceOSVolumeName, "golden source OS volume name; defaults to "+defaultCloudBenchmarkSourceName)
+	cmd.Flags().StringVar(&opts.SourceOSVolumeName, "source-volume-name", opts.SourceOSVolumeName, "alias for --source-os-volume-name")
+	cmd.Flags().StringVar(&opts.Market, "market", opts.Market, "worker market: spot or on-demand")
+	cmd.Flags().StringVar(&opts.LocationCode, "location-code", opts.LocationCode, "Verda location; defaults to the cheapest available location with a reusable source volume")
+	cmd.Flags().StringVar(&opts.Image, "image", opts.Image, "base Verda image used only when Packer must build the golden volume")
+	cmd.Flags().StringVar(&opts.Hostname, "hostname", opts.Hostname, "benchmark worker hostname")
+	cmd.Flags().StringVar(&opts.Description, "description", opts.Description, "benchmark worker description")
+	cmd.Flags().StringArrayVar(&opts.SSHKeyIDs, "ssh-key-id", opts.SSHKeyIDs, "Verda SSH key ID to attach and bake into a new golden volume (repeatable)")
+	cmd.Flags().StringVar(&opts.BaseURL, "base-url", opts.BaseURL, "Verda API base URL")
+	cmd.Flags().StringVar(&opts.packerDir, "packer-dir", opts.packerDir, "directory for the generated Packer template")
+	cmd.Flags().StringVar(&opts.packer, "packer", opts.packer, "Packer executable")
+	cmd.Flags().StringVar(&opts.packerInstanceType, "packer-instance-type", opts.packerInstanceType, "instance type used to build a missing golden volume")
+	cmd.Flags().StringVar(&opts.authorizedKeysFile, "authorized-keys-file", opts.authorizedKeysFile, "authorized_keys file to bake when Packer builds a golden volume")
+	cmd.Flags().BoolVar(&opts.refreshPackerTemplate, "refresh-packer-template", opts.refreshPackerTemplate, "overwrite existing Packer template files with the embedded versions")
+	cmd.Flags().StringVar(&opts.backend, "gpu", opts.backend, "remote benchmark GPU backend: cuda, rocm, or none")
+	cmd.Flags().StringVar(&opts.filter, "filter", opts.filter, "benchmark suite filter")
+	cmd.Flags().BoolVar(&opts.quick, "quick", opts.quick, "capture only the smoke-sized benchmark subset")
+	cmd.Flags().BoolVar(&opts.skipSmoke, "skip-smoke", opts.skipSmoke, "skip the quick preflight before a full benchmark")
+	cmd.Flags().StringVar(&opts.ref, "ref", opts.ref, "git ref or tree-ish to deploy")
+	cmd.Flags().BoolVar(&opts.ignoreDirty, "ignore-dirty", opts.ignoreDirty, "deploy --ref even when the working tree has uncommitted changes")
+	cmd.Flags().StringVar(&opts.remoteDir, "remote-dir", opts.remoteDir, "remote snapshot directory; defaults to a unique path")
+	cmd.Flags().StringVar(&opts.sshUser, "ssh-user", opts.sshUser, "SSH user for the benchmark worker")
+	cmd.Flags().StringVar(&opts.ssh, "ssh", opts.ssh, "SSH executable")
+	cmd.Flags().StringVar(&opts.rsync, "rsync", opts.rsync, "rsync executable")
+	cmd.Flags().StringVar(&opts.git, "git", opts.git, "Git executable")
+	cmd.Flags().StringVar(&opts.tar, "tar", opts.tar, "tar executable")
+	cmd.Flags().StringVar(&opts.output, "output", opts.output, "local CSV path; defaults to a metadata-based filename in the repository root")
+	cmd.Flags().BoolVar(&opts.updateDocs, "update-docs", opts.updateDocs, "add or update a generated benchmark result in the benchmark docs")
+	cmd.Flags().StringVar(&opts.docsPath, "docs", opts.docsPath, "benchmark Markdown file used by --update-docs")
+	cmd.Flags().BoolVar(&opts.keepInstance, "keep-instance", opts.keepInstance, "keep the worker and cloned OS volume after the run")
+	cmd.Flags().DurationVar(&opts.timeout, "timeout", opts.timeout, "timeout for image, instance, and SSH readiness")
+	cmd.Flags().DurationVar(&opts.pollInterval, "poll-interval", opts.pollInterval, "interval between readiness checks")
+	cmd.Flags().SortFlags = false
+	_ = cmd.MarkFlagRequired("instance-type")
 	return cmd
 }
 

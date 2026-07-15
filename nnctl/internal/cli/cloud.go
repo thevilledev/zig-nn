@@ -59,18 +59,23 @@ type cloudPricingOptions struct {
 }
 
 func (a *App) newVerdaSDKClient(ctx context.Context, baseURL string) (*verdacloud.SDKClient, error) {
+	client, _, err := a.newVerdaSDKClientWithCredentials(ctx, baseURL)
+	return client, err
+}
+
+func (a *App) newVerdaSDKClientWithCredentials(ctx context.Context, baseURL string) (*verdacloud.SDKClient, verdacloud.Credentials, error) {
 	creds, err := (verdacloud.KeyringCredentialStore{}).Credentials(ctx)
 	if err != nil {
-		return nil, err
+		return nil, verdacloud.Credentials{}, err
 	}
 	client, err := verdacloud.NewSDKClient(creds, verdacloud.ClientOptions{
 		BaseURL:   baseURL,
 		UserAgent: "nnctl",
 	})
 	if err != nil {
-		return nil, fmt.Errorf("create Verda client: %w", err)
+		return nil, verdacloud.Credentials{}, fmt.Errorf("create Verda client: %w", err)
 	}
-	return client, nil
+	return client, creds, nil
 }
 
 func (a *App) runCloudDeploy(ctx context.Context, opts cloudDeployOptions) error {

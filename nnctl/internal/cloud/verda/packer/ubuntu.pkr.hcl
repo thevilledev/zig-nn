@@ -27,20 +27,54 @@ variable "hostname" {
   default = "packer-verda-zig-nn"
 }
 
+variable "base_url" {
+  type        = string
+  default     = ""
+  description = "Optional Verda API base URL."
+}
+
+variable "build_location_code" {
+  type    = string
+  default = "FIN-01"
+}
+
+variable "build_market" {
+  type    = string
+  default = "spot"
+
+  validation {
+    condition     = contains(["spot", "on-demand"], var.build_market)
+    error_message = "Build market must be spot or on-demand."
+  }
+}
+
+variable "artifact_volume_name" {
+  type    = string
+  default = "packer-verda-zig-nn-volume-root"
+}
+
+variable "artifact_volume_location_codes" {
+  type    = list(string)
+  default = ["FIN-02"]
+}
+
 source "verda-instance" "ubuntu" {
   instance_type = var.instance_type
   image         = var.image
   hostname      = var.hostname
 
+  base_url = var.base_url
+
   ssh_username              = "root"
   ssh_clear_authorized_keys = true
 
-  location_code = "FIN-01"
-  contract      = "SPOT"
+  location_code = var.build_location_code
+  contract      = var.build_market == "spot" ? "SPOT" : "PAY_AS_YOU_GO"
+  is_spot       = var.build_market == "spot"
 
   artifact_type                  = "os_volume"
-  artifact_volume_name           = "packer-verda-zig-nn-volume-root"
-  artifact_volume_location_codes = ["FIN-02"]
+  artifact_volume_name           = var.artifact_volume_name
+  artifact_volume_location_codes = var.artifact_volume_location_codes
 }
 
 build {

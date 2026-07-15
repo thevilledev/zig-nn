@@ -109,6 +109,28 @@ run tied to a reproducible source snapshot, deploy only one worker at a time,
 and destroy the worker plus any cloned OS volume as soon as the benchmark is
 captured.
 
+The one-command Verda workflow is:
+
+```bash
+./bin/nnctl cloud benchmark-deploy \
+  --instance-type 1A100.22V \
+  --ssh-key-id <verda-ssh-key-id>
+```
+
+`benchmark-deploy` writes the embedded Packer template, reuses a matching
+golden OS volume or builds one when missing, clones the golden volume, deploys
+the worker, waits for SSH, transfers a clean `HEAD` snapshot, runs a quick
+smoke followed by the full CUDA benchmark, and saves a metadata-prefixed CSV in
+the repository root. It then permanently deletes the worker and cloned volume;
+the golden source volume is retained. Use `--market on-demand` to opt out of
+the default spot market, `--filter gpu_peak` to capture one suite,
+`--update-docs` to add a generated result section below, or `--keep-instance`
+to retain the worker and clone for debugging. Packer is only invoked when a
+reusable source OS volume is unavailable.
+
+The detailed steps below remain useful for diagnosing or manually recovering a
+run.
+
 ### NVIDIA Verda Spot Workers
 
 Use `nnctl cloud deploy` for NVIDIA CUDA benchmarks. Prefer spot capacity, then
