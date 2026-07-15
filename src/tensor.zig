@@ -17,6 +17,15 @@ pub const DType = enum {
     f32,
 };
 
+/// Element-wise activations available to device-resident Tensor models.
+pub const ActivationKind = enum {
+    linear,
+    relu,
+    sigmoid,
+    tanh,
+    gelu,
+};
+
 /// User-facing backend selection policy.
 pub const DevicePreference = enum {
     cpu,
@@ -382,8 +391,9 @@ pub const ExecutionContext = struct {
         return self.addRowBias(projected, bias);
     }
 
-    pub fn gelu(self: *ExecutionContext, input: Tensor) !Tensor {
-        const matrix = try input.matrix.applyActivation(Activation.gelu, self.device.allocator);
+    pub fn activate(self: *ExecutionContext, input: Tensor, kind: ActivationKind) !Tensor {
+        const function = activationFunction(kind);
+        const matrix = try input.matrix.applyActivation(function, self.device.allocator);
         self.stats.kernels += 1;
         return .{
             .matrix = matrix,
@@ -392,14 +402,23 @@ pub const ExecutionContext = struct {
         };
     }
 
-    pub fn geluDerivative(self: *ExecutionContext, input: Tensor) !Tensor {
-        const matrix = try input.matrix.applyActivation(Activation.gelu_derivative, self.device.allocator);
+    pub fn activationDerivative(self: *ExecutionContext, input: Tensor, kind: ActivationKind) !Tensor {
+        const function = activationDerivativeFunction(kind);
+        const matrix = try input.matrix.applyActivation(function, self.device.allocator);
         self.stats.kernels += 1;
         return .{
             .matrix = matrix,
             .shape = input.shape,
             .allocator = self.device.allocator,
         };
+    }
+
+    pub fn gelu(self: *ExecutionContext, input: Tensor) !Tensor {
+        return self.activate(input, .gelu);
+    }
+
+    pub fn geluDerivative(self: *ExecutionContext, input: Tensor) !Tensor {
+        return self.activationDerivative(input, .gelu);
     }
 
     pub fn layerNorm(self: *ExecutionContext, input: Tensor, gamma: Tensor, beta: Tensor, epsilon: f32) !Tensor {
@@ -555,6 +574,26 @@ pub const ExecutionContext = struct {
         return self.device.runtimeStats();
     }
 };
+
+fn activationFunction(kind: ActivationKind) *const fn (f64) f64 {
+    return switch (kind) {
+        .linear => Activation.linear,
+        .relu => Activation.relu,
+        .sigmoid => Activation.sigmoid,
+        .tanh => Activation.tanh,
+        .gelu => Activation.gelu,
+    };
+}
+
+fn activationDerivativeFunction(kind: ActivationKind) *const fn (f64) f64 {
+    return switch (kind) {
+        .linear => Activation.linear_derivative,
+        .relu => Activation.relu_derivative,
+        .sigmoid => Activation.sigmoid_derivative,
+        .tanh => Activation.tanh_derivative,
+        .gelu => Activation.gelu_derivative,
+    };
+}
 
 fn referenceLayerNormObjective(input: []const f32, gamma: []const f32, beta: []const f32, output_gradient: []const f32, rows: usize, cols: usize, epsilon: f32) f32 {
     var objective: f32 = 0;
@@ -803,6 +842,42 @@ test "transformer tensor primitives match expected values" {
     var activated_values: [4]f32 = undefined;
     try context.readback(activated, &activated_values);
     try testing.expectApproxEqAbs(@as(f32, @floatCast(Activation.gelu(1.0))), activated_values[0], 1e-5);
+}
+
+test "tensor activation kinds match scalar references" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var device = try Device.init(allocator, .cpu);
+    defer device.deinit();
+    var context = ExecutionContext.init(&device);
+    var input = try context.upload(&.{ 1, 3 }, &.{ -1, 0, 1 });
+    defer input.deinit();
+
+    const kinds = [_]ActivationKind{ .linear, .relu, .sigmoid, .tanh, .gelu };
+    for (kinds) |kind| {
+        var output = try context.activate(input, kind);
+        defer output.deinit();
+        var derivative = try context.activationDerivative(input, kind);
+        defer derivative.deinit();
+
+        var output_values: [3]f32 = undefined;
+        var derivative_values: [3]f32 = undefined;
+        try context.readback(output, &output_values);
+        try context.readback(derivative, &derivative_values);
+        for ([_]f64{ -1, 0, 1 }, 0..) |value, index| {
+            try testing.expectApproxEqAbs(
+                @as(f32, @floatCast(activationFunction(kind)(value))),
+                output_values[index],
+                1e-5,
+            );
+            try testing.expectApproxEqAbs(
+                @as(f32, @floatCast(activationDerivativeFunction(kind)(value))),
+                derivative_values[index],
+                1e-5,
+            );
+        }
+    }
 }
 
 test "transformer pipeline stays device resident within a batch" {

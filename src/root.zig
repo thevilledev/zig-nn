@@ -68,6 +68,7 @@ pub const Quantization = quantization_mod;
 pub const Tensor = tensor_mod.Tensor;
 pub const TensorShape = tensor_mod.Shape;
 pub const TensorDType = tensor_mod.DType;
+pub const TensorActivation = tensor_mod.ActivationKind;
 pub const Device = tensor_mod.Device;
 pub const DevicePreference = tensor_mod.DevicePreference;
 pub const ExecutionContext = tensor_mod.ExecutionContext;
