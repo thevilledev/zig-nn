@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: avrea-ubuntu-latest-2-vcpu
     name: Test
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -24,7 +24,7 @@ jobs:
       - run: zig build test-acceptance
 
   metal-test:
-    runs-on: macos-latest
+    runs-on: avrea-macos-latest-8-vcpu
     name: Metal Test
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
