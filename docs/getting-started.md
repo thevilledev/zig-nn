@@ -72,6 +72,11 @@ Individual test steps are also available:
 zig build test-matrix
 zig build test-activation
 zig build test-tensor
+zig build test-text
+zig build test-embeddings
+zig build test-structured
+zig build test-decoding
+zig build test-retrieval
 zig build test-modules
 zig build test-training
 zig build test-spatial

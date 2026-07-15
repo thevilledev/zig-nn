@@ -23,30 +23,35 @@ The examples are intentionally small enough to read beside the reusable code:
    the same MLP under SGD, momentum, and AdamW.
 3. Use CNN for spatial inductive bias, then Autoencoder for denoising and a
    learned bottleneck representation.
-4. Use Padding Masks to batch variable-length sequences without learning from
+4. Run Tokenizer Lab to compare raw bytes with learned BPE merges and inspect
+   the compression-versus-vocabulary tradeoff.
+5. Use Padding Masks to batch variable-length sequences without learning from
    filler values.
-5. Run Word2Vec to see how a prediction objective turns co-occurrence into
+6. Run Word2Vec to see how a prediction objective turns co-occurrence into
    geometric neighborhoods.
-6. Use Text Classifier to combine learned embeddings, padding masks, multi-head
+7. Use Text Classifier to combine learned embeddings, padding masks, multi-head
    attention, pooling, and sparse cross-entropy.
-7. Use Sequence Tagging to compare independent token decisions with globally
+8. Use Sequence Tagging to compare independent token decisions with globally
    normalized CRF and Viterbi decoding.
-8. Run Decoding Lab to contrast greedy choice, fixed top-k truncation, adaptive
+9. Run Decoding Lab to contrast greedy choice, fixed top-k truncation, adaptive
    nucleus top-p truncation, and repetition penalties.
-9. Use Seq2Seq to see decoder queries learn an alignment over separate encoder
+10. Use Seq2Seq to see decoder queries learn an alignment over separate encoder
    memory while translating and reordering tokens.
-10. Run Semantic Search to train two vocabularies into a shared embedding space
+11. Run Semantic Search to train two vocabularies into a shared embedding space
     with symmetric InfoNCE and rank documents by cosine similarity.
-11. Compare GRU Sequence with Transformer Encoder. The GRU carries state through
-   time; the encoder uses unmasked attention to retrieve context from any token.
-12. Finish with DQN to see how an MLP, replay memory, exploration, Bellman
+12. Compare GRU Sequence with Transformer Encoder. The GRU carries state through
+    time; the encoder uses unmasked attention to retrieve context from any token.
+13. Finish with DQN to see how an MLP, replay memory, exploration, Bellman
    targets, and a target network fit into an agent-environment loop.
 
-The CNN uses the inspectable CPU-first spatial reference. The optimizer,
+The CNN and CRF tagging examples use inspectable CPU-first references. The
+optimizer, padding-mask, Word2Vec, text-classifier, Seq2Seq, semantic-search,
 autoencoder, GRU, Transformer encoder, and DQN models accept `--backend`; use
 `nnctl` for automatic backend flags or pass `-Dgpu=auto` to direct Zig runs.
 DQN intentionally crosses the host boundary for environment interaction,
-discrete action choice, and Bellman-target construction.
+discrete action choice, and Bellman-target construction. Semantic Search reads
+final embeddings back once for exact cosine ranking; its InfoNCE training stays
+on the selected device.
 
 ## Catalog
 
@@ -61,6 +66,7 @@ discrete action choice, and Bellman-target construction.
 | Backend demo | `zig build run_backend_demo` | `nnctl run backend-demo` | Basic matrix operations through the public API |
 | Backend training | `zig build run_backend_training` | `nnctl run backend-training` | Tiny supervised training loop through `BackendMatrix` |
 | Optimizer lab | `zig build run_optimizer_lab -Dgpu=auto` | `nnctl run optimizer-lab` | Device-resident MLP comparison of SGD, momentum, and AdamW |
+| Tokenizer lab | `zig build run_tokenizer_lab` | `nnctl run tokenizer-lab` | Byte fallback, learned BPE merges, vocabulary growth, and round trips |
 | Padding masks | `zig build run_padding_masks -Dgpu=auto` | `nnctl run padding-masks` | Batched matmul, masked softmax, dropout, and sparse loss for padded sequences |
 | Word2Vec | `zig build run_word2vec -Dgpu=auto` | `nnctl run word2vec` | Skip-gram pairs, unigram negative sampling, and learned embedding neighborhoods |
 | Text classifier | `zig build run_text_classifier -Dgpu=auto` | `nnctl run text-classifier` | Padding-aware multi-head encoder trained on contextual sentiment phrases |

@@ -93,8 +93,27 @@ snapshot inference checks, and benchmark rows for the target machine.
   explicit backpropagation through time
 - Causal multi-head decoder attention and KV-cache support
 - Single-head unmasked self-attention composed from tensor primitives
+- Padding-aware batched multi-head encoder attention with explicit token and
+  attention masks
+- Encoder-decoder cross-attention with separate query/memory gradients and
+  inspectable alignment probabilities
 - Pre-normalized encoder and decoder blocks with residual connections and GELU
   feed-forward networks
+
+### Text, Embeddings, And Structured Prediction (`text.zig`, `embeddings.zig`, `structured.zig`)
+
+- Byte-level tokenization and learned byte-pair merges with exact byte fallback
+- Skip-gram pair generation, unigram negative sampling, device-backed embedding
+  training, and host-side cosine evaluation
+- Linear-chain CRF partition functions, marginal-based gradients, and Viterbi
+  decoding for structured sequence labels
+
+### Decoding And Retrieval (`decoding.zig`, `retrieval.zig`)
+
+- Deterministic greedy decoding plus temperature, top-k, nucleus top-p, and
+  repetition-penalty sampling
+- Device-resident symmetric InfoNCE over paired embedding batches
+- Exact host-side cosine top-k with deterministic tie-breaking
 
 ### Reinforcement Learning (`reinforcement.zig`)
 
@@ -148,14 +167,16 @@ Using Zig's error union types for handling:
    - Metal compute kernels for backend matrix operations on macOS
    - CUDA kernels for backend matrix operations on Linux with NVIDIA GPUs
    - ROCm HIP kernels for backend matrix operations on Linux with AMD GPUs
-   - CPU fallback when a requested GPU backend is unavailable
+   - Low-level backend probing can fall back to CPU; explicit tensor-device GPU
+     requests reject that fallback
 
 ## Future Considerations
 
 Areas for potential improvement:
 1. SIMD optimizations
 2. Mixed-precision tensor training
-3. Batched recurrent and attention sequences
-4. Multi-head unmasked encoder attention
+3. Batched recurrent sequences and dynamic sequence bucketing
+4. Teacher-forced encoder-decoder stacks and beam search
 5. Distributed training support
-6. Quantized network inference and KV-cache experiments
+6. Approximate nearest-neighbor indexing
+7. Quantized network inference and KV-cache experiments

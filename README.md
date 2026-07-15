@@ -8,9 +8,10 @@ This is for learning neural-network fundamentals by building the pieces
 directly: matrix math, layers, training loops, small examples, focused
 experiments, and a CPU-first path with separate backend-aware matrix operations
 plus a device-resident f32 tensor path for CPU, Metal, CUDA, and ROCm. The
-learning path now spans optimization, convolution, representation learning,
-recurrent and Transformer sequence models, and reinforcement learning. Each
-reusable learning feature in `src/` has a matching runnable example.
+learning path now spans optimization, convolution, tokenization, embeddings,
+structured prediction, encoder/decoder Transformers, semantic retrieval,
+recurrent sequence models, and reinforcement learning. Each reusable learning
+feature in `src/` has a matching runnable example.
 It is not trying to be a production ML framework.
 
 ## Start Here
@@ -32,6 +33,14 @@ Try a specific example or workflow:
 ```bash
 nnctl run simple-xor
 nnctl run optimizer-lab
+nnctl run tokenizer-lab
+nnctl run padding-masks
+nnctl run word2vec
+nnctl run text-classifier
+nnctl run sequence-tagging
+nnctl run decoding-lab
+nnctl run seq2seq
+nnctl run semantic-search
 nnctl run cnn
 nnctl run autoencoder
 nnctl run gru-sequence
@@ -58,6 +67,8 @@ checks, see [Development Environment](docs/development.md). GPU details are in
   and full-repository checks
 - [Examples](docs/examples.md) - runnable demos and what each one is meant to
   show
+- [NLP and Adjacent Roadmap](docs/nlp-roadmap.md) - the NLP learning ladder,
+  GPU boundaries, and the next example-backed feature set
 - [Benchmarks](docs/benchmarks.md) - repeatable CPU, GPU, and release-mode
   benchmark commands
 - [Experiments](docs/experiments.md) - research-style probes, metrics, and
@@ -76,10 +87,12 @@ checks, see [Development Environment](docs/development.md). GPU details are in
 Start with [Examples](docs/examples.md) when you want a guided path through the
 code. Read `src/matrix.zig`, `src/layer.zig`, and `src/network.zig` for the
 original CPU fundamentals. Continue with `src/tensor.zig`, `src/modules.zig`,
-and `src/training.zig` for device-backed models, then inspect `src/spatial.zig`,
-`src/recurrent.zig`, `src/transformer.zig`, or `src/reinforcement.zig` beside
-their matching examples. Use [GPU and Backend Notes](docs/gpu.md) for current
-backend boundaries, and `nnctl/` only when changing the helper CLI.
+and `src/training.zig` for device-backed models. For text work, continue with
+`src/text.zig`, `src/embeddings.zig`, `src/structured.zig`,
+`src/decoding.zig`, `src/transformer.zig`, and `src/retrieval.zig` beside their
+matching examples. The spatial, recurrent, and reinforcement paths live in
+their correspondingly named source files. Use [GPU and Backend Notes](docs/gpu.md)
+for current backend boundaries, and `nnctl/` only when changing the helper CLI.
 
 ## License
 

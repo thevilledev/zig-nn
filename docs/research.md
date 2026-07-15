@@ -57,6 +57,23 @@ A reference list for topics covered by this repository's
 - [TinyStories dataset](https://huggingface.co/datasets/roneneldan/TinyStories)
   - Dataset card and files.
 
+## NLP, Structured Prediction, And Retrieval
+
+- [Neural Machine Translation by Jointly Learning to Align and Translate](https://arxiv.org/abs/1409.0473)
+  - Encoder-decoder attention and learned alignments.
+- [Efficient Estimation of Word Representations in Vector Space](https://arxiv.org/abs/1301.3781)
+  - Skip-gram Word2Vec.
+- [Distributed Representations of Words and Phrases and their Compositionality](https://arxiv.org/abs/1310.4546)
+  - Negative sampling and subsampling for word representations.
+- [Conditional Random Fields: Probabilistic Models for Segmenting and Labeling Sequence Data](https://repository.upenn.edu/cis_papers/159/)
+  - Linear-chain conditional random fields.
+- [Neural Machine Translation of Rare Words with Subword Units](https://arxiv.org/abs/1508.07909)
+  - Byte-pair encoding for subword tokenization.
+- [The Curious Case of Neural Text Degeneration](https://arxiv.org/abs/1904.09751)
+  - Nucleus top-p sampling.
+- [Learning Transferable Visual Models From Natural Language Supervision](https://arxiv.org/abs/2103.00020)
+  - Symmetric contrastive learning across paired encoders.
+
 ## Quantization
 
 - [TurboQuant: Online Vector Quantization with Near-optimal Distortion Rate](https://arxiv.org/abs/2504.19874)

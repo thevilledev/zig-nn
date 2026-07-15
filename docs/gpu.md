@@ -1,7 +1,9 @@
 # GPU And Backend Notes
 
-The project currently has a CPU-first learning path and a separate
-backend-aware matrix path.
+The project has three execution layers: a CPU-first educational `Matrix` path,
+a backend-aware `BackendMatrix` path, and a rank-aware f32 `Tensor` runtime.
+Only the latter two can select a GPU. A value having type `Tensor` makes its
+operations backend-neutral; it does not by itself prove that a GPU was selected.
 
 ## Current Backend Boundary
 
@@ -35,9 +37,17 @@ backend-aware matrix path.
 - `Modules.Mlp` and `Training.Optimizer` keep forward/backward tensors,
   optimizer moments, gradient accumulation, clipping, and parameter updates on
   the selected backend.
-- The autoencoder, optimizer lab, GRU sequence, and Transformer encoder lessons
-  use that device path. GRU backpropagation and unmasked encoder attention are
-  composed from the same tensor primitives and run on each enabled backend.
+- The optimizer, padding-mask, Word2Vec, text-classifier, autoencoder, GRU,
+  Transformer encoder, Seq2Seq, semantic-search, and DQN lessons use that device
+  path. Their examples report training-time readbacks so unintended host
+  boundaries remain visible.
+- Batched matmul, masked softmax and its backward pass, split/merge-head
+  transforms, embedding gradients, cross-attention, and symmetric InfoNCE are
+  composed through the tensor runtime. Native Metal, CUDA, and ROCm kernels or
+  vendor GEMM paths execute them when that backend is enabled and selected.
+- Tokenization, BPE merge learning, CRF inference/training, and next-token
+  sampling are discrete host algorithms. Semantic-search top-k ranking also
+  runs on the host after one explicit embedding readback.
 - `Spatial.Conv2d` and max pooling are intentionally CPU-first reference
   implementations. Their matching CNN lesson prioritizes readable indexing and
   gradients over accelerator kernels.
@@ -46,7 +56,7 @@ backend-aware matrix path.
   The example reports this boundary instead of presenting it as device-resident.
 - `Transformer.Decoder` keeps embeddings, decoder blocks, optimizer updates,
   and KV caches on one backend. Linear/GELU/layer-normalization, causal
-  attention, their backward passes, and embedding gradients have native Metal
+  attention, their backward passes, and embedding gradients have native Metal,
   CUDA, and ROCm kernels.
 - `ExecutionContext.beginBatch` and `endBatch` form an explicit synchronization
   boundary. Runtime telemetry reports allocations, transfers, kernels, vendor
@@ -150,8 +160,9 @@ zig build test --summary all
 zig build test-acceptance --summary all
 ```
 
-If a GPU backend is requested on a platform where it is unavailable, generic
-backend creation falls back to CPU.
+The low-level generic backend factory can fall back to CPU while probing.
+`Tensor.Device` rejects that fallback for explicit `metal`, `cuda`, and `rocm`
+preferences; only `auto` accepts it.
 
 ## Working On Backends
 
@@ -166,7 +177,7 @@ Use `BackendMatrix` when testing backend behavior directly. Use
 backend-aware network execution. Use `Matrix`, `Network.forward`, and the
 default training methods when working on the learning-oriented CPU path.
 
-The next backend optimization targets are mixed precision, batched sequences,
-and tiled/reduction-optimized attention and spatial kernels.
+The next backend optimization targets are mixed precision, dynamic sequence
+batches, fused/tiled attention, accelerator-native top-k, and spatial kernels.
 The current kernels prioritize explicit, testable semantics over peak hardware
 throughput.

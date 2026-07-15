@@ -14,6 +14,38 @@ The convention in this repo is:
 
 ## Current Experiments
 
+The complete NLP progression—from BPE through CRFs, decoding,
+encoder-decoder alignment, and contrastive retrieval—is summarized in the
+[NLP and Adjacent Learning Roadmap](nlp-roadmap.md).
+
+### Seq2Seq Cross-Attention
+
+Location: [examples/seq2seq](../examples/seq2seq/seq2seq.zig)
+
+Run:
+
+```bash
+nnctl run seq2seq
+```
+
+This trains decoder queries to translate and reverse short color sequences.
+It reports held-out token/exact-sequence accuracy, verifies zero training
+readbacks, and prints the target-to-source attention matrix.
+
+### Contrastive Semantic Search
+
+Location: [examples/semantic_search](../examples/semantic_search/semantic_search.zig)
+
+Run:
+
+```bash
+nnctl run semantic-search
+```
+
+This trains separate query and document encoders with symmetric InfoNCE. It
+reports loss, recall@1, mean reciprocal rank, device telemetry, and an exact
+top-k cosine ranking for held-out query wording.
+
 ### DQN LineWorld
 
 Location: [examples/dqn](../examples/dqn/dqn.zig)
