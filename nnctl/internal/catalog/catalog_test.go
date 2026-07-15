@@ -64,3 +64,13 @@ func TestResolveGRUSequenceExample(t *testing.T) {
 		t.Fatalf("unexpected gru sequence example: %+v", example)
 	}
 }
+
+func TestResolveTransformerEncoderExample(t *testing.T) {
+	example, ok := ResolveExample("transformer_encoder")
+	if !ok {
+		t.Fatal("expected transformer_encoder to resolve")
+	}
+	if example.Step != "run_transformer_encoder" || example.DefaultGPU != "auto" || example.Quick {
+		t.Fatalf("unexpected transformer encoder example: %+v", example)
+	}
+}
