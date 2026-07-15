@@ -379,7 +379,7 @@ locks placement to that source volume location and clones it as the instance
 image. When --source-os-volume-name is set, nnctl chooses a matching source OS
 volume in an available market location. Without a source volume, nnctl boots
 --image and applies the embedded userdata script from
-nnctl/internal/cloud/verda/bootstrap.sh.`,
+nnctl/internal/cloud/verda/packer/bootstrap.sh.`,
 		Example: `  nnctl cloud deploy --instance-type 1V100.6V --source-os-volume-name golden-ubuntu --ssh-key-id ssh_key_id
   nnctl cloud deploy --instance-type 1V100.6V --source-os-volume-id volume_id --ssh-key-id ssh_key_id
   nnctl cloud deploy --instance-type 1H200.141S.44V --market on-demand --location-code FIN-02 --ssh-key-id ssh_key_id

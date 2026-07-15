@@ -10,12 +10,12 @@ import (
 )
 
 func TestDefaultUserDataScriptMatchesBootstrap(t *testing.T) {
-	bootstrap, err := os.ReadFile("bootstrap.sh")
+	bootstrap, err := os.ReadFile("packer/bootstrap.sh")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if DefaultUserDataScript != string(bootstrap) {
-		t.Fatal("DefaultUserDataScript must match bootstrap.sh")
+		t.Fatal("DefaultUserDataScript must match packer/bootstrap.sh")
 	}
 }
 
