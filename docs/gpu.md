@@ -32,6 +32,18 @@ backend-aware matrix path.
 - `Device`, `Tensor`, and `ExecutionContext` provide the backend-neutral f32
   runtime for rank-aware model code. Explicit `metal`, `cuda`, and `rocm`
   selections fail when unavailable; only `auto` may fall back to CPU.
+- `Modules.Mlp` and `Training.Optimizer` keep forward/backward tensors,
+  optimizer moments, gradient accumulation, clipping, and parameter updates on
+  the selected backend.
+- The autoencoder, optimizer lab, GRU sequence, and Transformer encoder lessons
+  use that device path. GRU backpropagation and unmasked encoder attention are
+  composed from the same tensor primitives and run on each enabled backend.
+- `Spatial.Conv2d` and max pooling are intentionally CPU-first reference
+  implementations. Their matching CNN lesson prioritizes readable indexing and
+  gradients over accelerator kernels.
+- DQN runs its MLP updates on the selected backend but intentionally reads Q
+  values to the host for environment actions and Bellman-target construction.
+  The example reports this boundary instead of presenting it as device-resident.
 - `Transformer.Decoder` keeps embeddings, decoder blocks, optimizer updates,
   and KV caches on one backend. Linear/GELU/layer-normalization, causal
   attention, their backward passes, and embedding gradients have native Metal
@@ -154,7 +166,7 @@ Use `BackendMatrix` when testing backend behavior directly. Use
 backend-aware network execution. Use `Matrix`, `Network.forward`, and the
 default training methods when working on the learning-oriented CPU path.
 
-The next backend optimization targets are fused optimizer kernels, mixed
-precision, batched sequences, and tiled/reduction-optimized attention kernels.
+The next backend optimization targets are mixed precision, batched sequences,
+and tiled/reduction-optimized attention and spatial kernels.
 The current kernels prioritize explicit, testable semantics over peak hardware
 throughput.

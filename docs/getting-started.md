@@ -71,6 +71,13 @@ Individual test steps are also available:
 ```bash
 zig build test-matrix
 zig build test-activation
+zig build test-tensor
+zig build test-modules
+zig build test-training
+zig build test-spatial
+zig build test-recurrent
+zig build test-reinforcement
+zig build test-transformer
 zig build test-layer
 zig build test-network
 zig build test-inference_service

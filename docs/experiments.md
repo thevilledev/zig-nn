@@ -14,6 +14,38 @@ The convention in this repo is:
 
 ## Current Experiments
 
+### DQN LineWorld
+
+Location: [examples/dqn](../examples/dqn/dqn.zig)
+
+Run:
+
+```bash
+nnctl run dqn
+```
+
+This trains a small Q-network to navigate a five-state world. It exposes the
+full DQN loop: epsilon-greedy exploration, a bounded replay buffer, sampled TD
+updates, a separate target network, and one-step Bellman targets. It reports
+greedy success, path length, the learned Q-table view, replay/update counts,
+and the readbacks used at the host reinforcement-learning boundary.
+
+### Transformer Encoder Context
+
+Location: [examples/transformer_encoder](../examples/transformer_encoder/transformer_encoder.zig)
+
+Run:
+
+```bash
+nnctl run transformer-encoder
+```
+
+This trains a pre-normalized encoder block to predict the final bit from the
+first token. Only the first-token loss contributes a gradient, so successful
+classification demonstrates bidirectional context rather than a shortcut at
+the final position. It reports held-out accuracy and verifies that the training
+path stays device-resident.
+
 ### GRU Selective Memory
 
 Location: [examples/gru_sequence](../examples/gru_sequence/gru_sequence.zig)
@@ -58,6 +90,20 @@ This trains identically initialized MLPs on a deterministic two-moons dataset
 with SGD, momentum, and AdamW. It reports loss reduction, held-out accuracy,
 kernel counts, and any training-time readbacks. Learning rates are
 optimizer-specific so the comparison also makes tuning part of the lesson.
+
+### CNN Pattern Classifier
+
+Location: [examples/cnn](../examples/cnn/cnn.zig)
+
+Run:
+
+```bash
+nnctl run cnn
+```
+
+This uses the CPU-first convolution and max-pooling reference to distinguish
+synthetic horizontal and vertical patterns. The small data makes kernels,
+pooling choices, gradient flow, and the learned spatial bias easy to inspect.
 
 ### TurboQuant
 

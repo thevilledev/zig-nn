@@ -7,8 +7,10 @@ A small neural-network playground written in Zig.
 This is for learning neural-network fundamentals by building the pieces
 directly: matrix math, layers, training loops, small examples, focused
 experiments, and a CPU-first path with separate backend-aware matrix operations
-plus a device-resident f32 tensor and Transformer path for CPU, Metal, CUDA,
-and ROCm.
+plus a device-resident f32 tensor path for CPU, Metal, CUDA, and ROCm. The
+learning path now spans optimization, convolution, representation learning,
+recurrent and Transformer sequence models, and reinforcement learning. Each
+reusable learning feature in `src/` has a matching runnable example.
 It is not trying to be a production ML framework.
 
 ## Start Here
@@ -29,6 +31,12 @@ Try a specific example or workflow:
 
 ```bash
 nnctl run simple-xor
+nnctl run optimizer-lab
+nnctl run cnn
+nnctl run autoencoder
+nnctl run gru-sequence
+nnctl run transformer-encoder
+nnctl run dqn
 nnctl run tiny-gpt
 nnctl run backend-training
 nnctl data mnist
@@ -65,10 +73,13 @@ checks, see [Development Environment](docs/development.md). GPU details are in
 
 ## Where To Look
 
-Start with `examples/` when you want to see the code run. Read `src/matrix.zig`,
-`src/layer.zig`, and `src/network.zig` for the core learning path. Use
-[GPU and Backend Notes](docs/gpu.md) when you need the current backend
-boundaries, and `nnctl/` only when you are changing the helper CLI.
+Start with [Examples](docs/examples.md) when you want a guided path through the
+code. Read `src/matrix.zig`, `src/layer.zig`, and `src/network.zig` for the
+original CPU fundamentals. Continue with `src/tensor.zig`, `src/modules.zig`,
+and `src/training.zig` for device-backed models, then inspect `src/spatial.zig`,
+`src/recurrent.zig`, `src/transformer.zig`, or `src/reinforcement.zig` beside
+their matching examples. Use [GPU and Backend Notes](docs/gpu.md) for current
+backend boundaries, and `nnctl/` only when changing the helper CLI.
 
 ## License
 

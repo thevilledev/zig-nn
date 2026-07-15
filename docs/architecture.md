@@ -38,6 +38,17 @@ Two main layer types:
   - Binary Cross Entropy
 - Mini-batch training capabilities
 
+### Tensor Runtime And Modules (`tensor.zig`, `modules.zig`, `training.zig`)
+
+- Rank-aware f32 tensors backed by the selected CPU, Metal, CUDA, or ROCm
+  backend
+- Explicit execution batches and transfer/kernel telemetry
+- Reusable device-resident `Linear` and configurable `Mlp` modules with
+  forward caches and parameter gradients
+- Ordered optimizer bindings for SGD, momentum, and AdamW
+- Gradient accumulation, global-norm clipping, weight decay, and fused backend
+  parameter updates
+
 ### Backends (`backend.zig`, `cpu_backend.zig`, `metal_backend.zig`, `cuda_backend.zig`, `rocm_backend.zig`)
 - `BackendMatrix` provides a separate backend-aware matrix API
 - CPU backend implements all backend matrix operations
@@ -75,6 +86,23 @@ snapshot inference checks, and benchmark rows for the target machine.
 - CPU-first `Conv2d` reference over flattened NHWC image batches
 - Explicit input, weight, and bias gradients for studying backpropagation
 - Max-pool forward and backward operations with inspectable gradient routing
+
+### Sequence Models (`recurrent.zig`, `transformer.zig`)
+
+- Device-backed GRU cell with input, recurrent, and parameter gradients for
+  explicit backpropagation through time
+- Causal multi-head decoder attention and KV-cache support
+- Single-head unmasked self-attention composed from tensor primitives
+- Pre-normalized encoder and decoder blocks with residual connections and GELU
+  feed-forward networks
+
+### Reinforcement Learning (`reinforcement.zig`)
+
+- Fixed-capacity transition replay with seeded minibatch sampling
+- Linear epsilon-greedy exploration schedule
+- Terminal-aware one-step Bellman targets
+- Environment-specific interaction remains in examples rather than the core
+  library
 
 ## Memory Management
 
@@ -126,9 +154,8 @@ Using Zig's error union types for handling:
 
 Areas for potential improvement:
 1. SIMD optimizations
-2. Optimizer state support for backend trainers
-3. Distributed training support
-4. Additional layer types:
-   - Residual connections
-5. Backend-aware Tiny GPT inference and training experiments
+2. Mixed-precision tensor training
+3. Batched recurrent and attention sequences
+4. Multi-head unmasked encoder attention
+5. Distributed training support
 6. Quantized network inference and KV-cache experiments

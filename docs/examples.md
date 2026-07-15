@@ -13,6 +13,27 @@ nnctl run quick
 This command runs the quick examples. On machines without the relevant GPU
 toolchain, prefer the individual CPU examples below.
 
+## Suggested Learning Path
+
+The examples are intentionally small enough to read beside the reusable code:
+
+1. Start with Simple XOR, XOR training, classification, and regression for
+   forward passes, losses, and backpropagation.
+2. Run Optimizer Lab beside `src/modules.zig` and `src/training.zig` to compare
+   the same MLP under SGD, momentum, and AdamW.
+3. Use CNN for spatial inductive bias, then Autoencoder for denoising and a
+   learned bottleneck representation.
+4. Compare GRU Sequence with Transformer Encoder. The GRU carries state through
+   time; the encoder uses unmasked attention to retrieve context from any token.
+5. Finish with DQN to see how an MLP, replay memory, exploration, Bellman
+   targets, and a target network fit into an agent-environment loop.
+
+The CNN uses the inspectable CPU-first spatial reference. The optimizer,
+autoencoder, GRU, Transformer encoder, and DQN models accept `--backend`; use
+`nnctl` for automatic backend flags or pass `-Dgpu=auto` to direct Zig runs.
+DQN intentionally crosses the host boundary for environment interaction,
+discrete action choice, and Bellman-target construction.
+
 ## Catalog
 
 | Example | Zig step | nnctl command | Purpose |
@@ -29,6 +50,8 @@ toolchain, prefer the individual CPU examples below.
 | CNN | `zig build run_cnn` | `nnctl run cnn` | Convolution, ReLU, max-pool, and softmax on synthetic image patterns |
 | Autoencoder | `zig build run_autoencoder -Dgpu=auto` | `nnctl run autoencoder` | Denoising and two-dimensional latent representations of tiny images |
 | GRU sequence | `zig build run_gru_sequence -Dgpu=auto` | `nnctl run gru-sequence` | Backpropagation through time on a selective-memory task |
+| Transformer encoder | `zig build run_transformer_encoder -Dgpu=auto` | `nnctl run transformer-encoder` | Unmasked attention retrieves a final-token value from the first position |
+| DQN | `zig build run_dqn -Dgpu=auto` | `nnctl run dqn` | Replay-based value learning and epsilon-greedy control in LineWorld |
 | GPU demo | `zig build run_gpu -Dgpu=auto` | `nnctl run gpu` | Backend matrix operations on Metal, CUDA, or ROCm |
 | GPU benchmark | `zig build run_gpu_benchmark -Dgpu=auto -Doptimize=ReleaseFast` | `nnctl run gpu-benchmark` | CPU vs GPU matrix multiplication timing |
 | TurboQuant | `zig build run_turboquant` | `nnctl run turboquant` | Quantization experiment with comparable metrics |
