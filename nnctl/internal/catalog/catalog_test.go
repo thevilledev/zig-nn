@@ -95,6 +95,16 @@ func TestResolveDecodingLabExample(t *testing.T) {
 	}
 }
 
+func TestResolveSeq2SeqExample(t *testing.T) {
+	example, ok := ResolveExample("seq2seq")
+	if !ok {
+		t.Fatal("expected seq2seq to resolve")
+	}
+	if example.Step != "run_seq2seq" || example.DefaultGPU != "auto" || example.Quick {
+		t.Fatalf("unexpected seq2seq example: %+v", example)
+	}
+}
+
 func TestResolveCNNExample(t *testing.T) {
 	example, ok := ResolveExample("cnn")
 	if !ok {

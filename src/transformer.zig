@@ -83,6 +83,13 @@ pub const Sgd = struct {
         try self.stepLinear(context, &attention.output, .{ .input = gradients.input, .weights = gradients.output_weights, .bias = gradients.output_bias });
     }
 
+    pub fn stepCrossAttention(self: Sgd, context: *ExecutionContext, attention: *CrossAttention, gradients: CrossAttentionGradients) !void {
+        try self.stepLinear(context, &attention.query, .{ .input = gradients.query_input, .weights = gradients.query_weights, .bias = gradients.query_bias });
+        try self.stepLinear(context, &attention.key, .{ .input = gradients.memory_input, .weights = gradients.key_weights, .bias = gradients.key_bias });
+        try self.stepLinear(context, &attention.value, .{ .input = gradients.memory_input, .weights = gradients.value_weights, .bias = gradients.value_bias });
+        try self.stepLinear(context, &attention.output, .{ .input = gradients.query_input, .weights = gradients.output_weights, .bias = gradients.output_bias });
+    }
+
     pub fn stepBlock(self: Sgd, context: *ExecutionContext, block: *Block, gradients: BlockGradients) !void {
         try self.stepLayerNorm(context, &block.attention_norm, gradients.attention_norm);
         try self.stepAttention(context, &block.attention, gradients.attention);
@@ -536,6 +543,256 @@ pub const FullSelfAttention = struct {
         {
             return error.DimensionMismatch;
         }
+    }
+};
+
+/// Encoder-decoder attention: decoder queries attend to a separate encoder
+/// memory. The returned attention matrix has shape
+/// `[decoder_tokens, encoder_tokens]`, which makes learned alignments directly
+/// inspectable in teaching examples.
+pub const CrossAttention = struct {
+    query: Linear,
+    key: Linear,
+    value: Linear,
+    output: Linear,
+    ones: Tensor,
+    memory_tokens: usize,
+    channels: usize,
+
+    pub fn init(
+        context: *ExecutionContext,
+        memory_tokens: usize,
+        channels: usize,
+        random: std.Random,
+    ) !CrossAttention {
+        if (memory_tokens == 0 or channels == 0) return error.InvalidDimension;
+        var query = try Linear.init(context, channels, channels, random);
+        errdefer query.deinit();
+        var key = try Linear.init(context, channels, channels, random);
+        errdefer key.deinit();
+        var value = try Linear.init(context, channels, channels, random);
+        errdefer value.deinit();
+        var output = try Linear.init(context, channels, channels, random);
+        errdefer output.deinit();
+        var ones = try context.createTensor(&.{ 1, memory_tokens });
+        ones.fill(1);
+        return .{
+            .query = query,
+            .key = key,
+            .value = value,
+            .output = output,
+            .ones = ones,
+            .memory_tokens = memory_tokens,
+            .channels = channels,
+        };
+    }
+
+    pub fn deinit(self: *CrossAttention) void {
+        self.query.deinit();
+        self.key.deinit();
+        self.value.deinit();
+        self.output.deinit();
+        self.ones.deinit();
+        self.* = undefined;
+    }
+
+    pub fn attentionWeights(
+        self: *const CrossAttention,
+        context: *ExecutionContext,
+        decoder_queries: Tensor,
+        encoder_memory: Tensor,
+    ) !Tensor {
+        try self.validateInputs(decoder_queries, encoder_memory);
+        var query = try self.query.forward(context, decoder_queries);
+        defer query.deinit();
+        var key = try self.key.forward(context, encoder_memory);
+        defer key.deinit();
+        var key_transpose = try context.transpose(key);
+        defer key_transpose.deinit();
+        var scores = try context.matmul(query, key_transpose);
+        defer scores.deinit();
+        var scaled_scores = try context.scale(
+            scores,
+            1.0 / @sqrt(@as(f32, @floatFromInt(self.channels))),
+        );
+        defer scaled_scores.deinit();
+        return context.softmax(scaled_scores);
+    }
+
+    pub fn forward(
+        self: *const CrossAttention,
+        context: *ExecutionContext,
+        decoder_queries: Tensor,
+        encoder_memory: Tensor,
+    ) !Tensor {
+        try self.validateInputs(decoder_queries, encoder_memory);
+        var probabilities = try self.attentionWeights(context, decoder_queries, encoder_memory);
+        defer probabilities.deinit();
+        var value = try self.value.forward(context, encoder_memory);
+        defer value.deinit();
+        var attended = try context.matmul(probabilities, value);
+        defer attended.deinit();
+        return self.output.forward(context, attended);
+    }
+
+    pub fn backward(
+        self: *const CrossAttention,
+        context: *ExecutionContext,
+        decoder_queries: Tensor,
+        encoder_memory: Tensor,
+        output_gradient: Tensor,
+    ) !CrossAttentionGradients {
+        try self.validateInputs(decoder_queries, encoder_memory);
+        if (!decoder_queries.shape.eql(output_gradient.shape)) return error.DimensionMismatch;
+        var query = try self.query.forward(context, decoder_queries);
+        defer query.deinit();
+        var key = try self.key.forward(context, encoder_memory);
+        defer key.deinit();
+        var value = try self.value.forward(context, encoder_memory);
+        defer value.deinit();
+        var key_transpose = try context.transpose(key);
+        defer key_transpose.deinit();
+        var scores = try context.matmul(query, key_transpose);
+        defer scores.deinit();
+        const attention_scale = 1.0 / @sqrt(@as(f32, @floatFromInt(self.channels)));
+        var scaled_scores = try context.scale(scores, attention_scale);
+        defer scaled_scores.deinit();
+        var probabilities = try context.softmax(scaled_scores);
+        defer probabilities.deinit();
+        var attended = try context.matmul(probabilities, value);
+        defer attended.deinit();
+
+        var output_gradients = try self.output.backward(context, attended, output_gradient);
+        errdefer output_gradients.deinit();
+        var value_transpose = try context.transpose(value);
+        defer value_transpose.deinit();
+        var probability_gradient = try context.matmul(output_gradients.input, value_transpose);
+        defer probability_gradient.deinit();
+        var weighted_probability_gradient = try context.multiply(probabilities, probability_gradient);
+        defer weighted_probability_gradient.deinit();
+        var weighted_transpose = try context.transpose(weighted_probability_gradient);
+        defer weighted_transpose.deinit();
+        var row_sums_transpose = try context.sumRows(weighted_transpose);
+        defer row_sums_transpose.deinit();
+        var row_sums = try context.transpose(row_sums_transpose);
+        defer row_sums.deinit();
+        var broadcast_row_sums = try context.matmul(row_sums, self.ones);
+        defer broadcast_row_sums.deinit();
+        var centered_probability_gradient = try context.subtract(probability_gradient, broadcast_row_sums);
+        defer centered_probability_gradient.deinit();
+        var unscaled_score_gradient = try context.multiply(probabilities, centered_probability_gradient);
+        defer unscaled_score_gradient.deinit();
+        var score_gradient = try context.scale(unscaled_score_gradient, attention_scale);
+        defer score_gradient.deinit();
+
+        var query_gradient = try context.matmul(score_gradient, key);
+        defer query_gradient.deinit();
+        var score_gradient_transpose = try context.transpose(score_gradient);
+        defer score_gradient_transpose.deinit();
+        var key_gradient = try context.matmul(score_gradient_transpose, query);
+        defer key_gradient.deinit();
+        var probabilities_transpose = try context.transpose(probabilities);
+        defer probabilities_transpose.deinit();
+        var value_gradient = try context.matmul(probabilities_transpose, output_gradients.input);
+        defer value_gradient.deinit();
+
+        var query_gradients = try self.query.backward(context, decoder_queries, query_gradient);
+        errdefer query_gradients.deinit();
+        var key_gradients = try self.key.backward(context, encoder_memory, key_gradient);
+        errdefer key_gradients.deinit();
+        var value_gradients = try self.value.backward(context, encoder_memory, value_gradient);
+        errdefer value_gradients.deinit();
+        const memory_input = try context.add(key_gradients.input, value_gradients.input);
+
+        output_gradients.input.deinit();
+        key_gradients.input.deinit();
+        value_gradients.input.deinit();
+        return .{
+            .query_input = query_gradients.input,
+            .memory_input = memory_input,
+            .query_weights = query_gradients.weights,
+            .query_bias = query_gradients.bias,
+            .key_weights = key_gradients.weights,
+            .key_bias = key_gradients.bias,
+            .value_weights = value_gradients.weights,
+            .value_bias = value_gradients.bias,
+            .output_weights = output_gradients.weights,
+            .output_bias = output_gradients.bias,
+        };
+    }
+
+    pub fn parameterTensorCount(_: CrossAttention) usize {
+        return 8;
+    }
+
+    pub fn parameterCount(self: CrossAttention) usize {
+        return self.query.parameterCount() + self.key.parameterCount() +
+            self.value.parameterCount() + self.output.parameterCount();
+    }
+
+    pub fn parameters(self: *CrossAttention, output: []*Tensor) ![]*Tensor {
+        if (output.len < self.parameterTensorCount()) return error.InsufficientBuffer;
+        output[0] = &self.query.weights;
+        output[1] = &self.query.bias;
+        output[2] = &self.key.weights;
+        output[3] = &self.key.bias;
+        output[4] = &self.value.weights;
+        output[5] = &self.value.bias;
+        output[6] = &self.output.weights;
+        output[7] = &self.output.bias;
+        return output[0..8];
+    }
+
+    fn validateInputs(self: CrossAttention, decoder_queries: Tensor, encoder_memory: Tensor) !void {
+        if (decoder_queries.shape.rank != 2 or decoder_queries.shape.dims[0] == 0 or decoder_queries.shape.dims[1] != self.channels or
+            encoder_memory.shape.rank != 2 or encoder_memory.shape.dims[0] != self.memory_tokens or encoder_memory.shape.dims[1] != self.channels)
+        {
+            return error.DimensionMismatch;
+        }
+    }
+};
+
+pub const CrossAttentionGradients = struct {
+    query_input: Tensor,
+    memory_input: Tensor,
+    query_weights: Tensor,
+    query_bias: Tensor,
+    key_weights: Tensor,
+    key_bias: Tensor,
+    value_weights: Tensor,
+    value_bias: Tensor,
+    output_weights: Tensor,
+    output_bias: Tensor,
+
+    pub fn deinit(self: *CrossAttentionGradients) void {
+        self.query_input.deinit();
+        self.memory_input.deinit();
+        self.query_weights.deinit();
+        self.query_bias.deinit();
+        self.key_weights.deinit();
+        self.key_bias.deinit();
+        self.value_weights.deinit();
+        self.value_bias.deinit();
+        self.output_weights.deinit();
+        self.output_bias.deinit();
+        self.* = undefined;
+    }
+
+    pub fn parameterTensorCount(_: CrossAttentionGradients) usize {
+        return 8;
+    }
+
+    pub fn parameterGradients(self: CrossAttentionGradients, output: []Tensor) ![]Tensor {
+        if (output.len < self.parameterTensorCount()) return error.InsufficientBuffer;
+        output[0] = self.query_weights;
+        output[1] = self.query_bias;
+        output[2] = self.key_weights;
+        output[3] = self.key_bias;
+        output[4] = self.value_weights;
+        output[5] = self.value_bias;
+        output[6] = self.output_weights;
+        output[7] = self.output_bias;
+        return output[0..8];
     }
 };
 
@@ -1724,6 +1981,119 @@ test "unmasked attention input gradients match finite differences" {
         const minus_sum = minus_result[0] + minus_result[1] + minus_result[2] + minus_result[3];
         const numerical = (plus_sum - minus_sum) / (2 * epsilon);
         try testing.expectApproxEqAbs(numerical, analytical[input_index], 3e-3);
+    }
+}
+
+test "cross attention exposes decoder-to-encoder alignment" {
+    const testing = std.testing;
+    const preferences = [_]tensor.DevicePreference{ .cpu, .metal, .cuda, .rocm };
+    for (preferences) |preference| {
+        var device = tensor.Device.init(testing.allocator, preference) catch |err| switch (err) {
+            error.BackendUnavailable => continue,
+            else => return err,
+        };
+        defer device.deinit();
+        var context = ExecutionContext.init(&device);
+        var prng = std.Random.DefaultPrng.init(31);
+        var attention = try CrossAttention.init(&context, 3, 2, prng.random());
+        defer attention.deinit();
+        try setIdentityLinear2(&attention.query);
+        try setIdentityLinear2(&attention.key);
+        try setIdentityLinear2(&attention.value);
+        try setIdentityLinear2(&attention.output);
+
+        var queries = try context.upload(&.{ 2, 2 }, &.{ 6, 0, 0, 6 });
+        defer queries.deinit();
+        var memory = try context.upload(&.{ 3, 2 }, &.{ 1, 0, 0, 1, -1, 0 });
+        defer memory.deinit();
+        context.resetStats();
+        var weights = try attention.attentionWeights(&context, queries, memory);
+        defer weights.deinit();
+        var output = try attention.forward(&context, queries, memory);
+        defer output.deinit();
+        try testing.expectEqual(@as(usize, 0), context.stats.readbacks);
+
+        var weight_values: [6]f32 = undefined;
+        var output_values: [4]f32 = undefined;
+        try context.readback(weights, &weight_values);
+        try context.readback(output, &output_values);
+        try testing.expectEqualSlices(usize, &.{ 2, 3 }, weights.shape.slice());
+        try testing.expect(weight_values[0] > 0.95);
+        try testing.expect(weight_values[4] > 0.95);
+        try testing.expect(output_values[0] > 0.9);
+        try testing.expect(output_values[3] > 0.9);
+    }
+}
+
+test "cross attention query and memory gradients match finite differences" {
+    const testing = std.testing;
+    var device = try tensor.Device.init(testing.allocator, .cpu);
+    defer device.deinit();
+    var context = ExecutionContext.init(&device);
+    var prng = std.Random.DefaultPrng.init(37);
+    var attention = try CrossAttention.init(&context, 2, 2, prng.random());
+    defer attention.deinit();
+    const query_values = [_]f32{ 0.2, -0.35, 0.5, 0.1 };
+    const memory_values = [_]f32{ -0.4, 0.3, 0.6, -0.2 };
+    var queries = try context.upload(&.{ 2, 2 }, &query_values);
+    defer queries.deinit();
+    var memory = try context.upload(&.{ 2, 2 }, &memory_values);
+    defer memory.deinit();
+    var output_gradient = try context.upload(&.{ 2, 2 }, &.{ 1, 1, 1, 1 });
+    defer output_gradient.deinit();
+    var gradients = try attention.backward(&context, queries, memory, output_gradient);
+    defer gradients.deinit();
+    var query_analytical: [4]f32 = undefined;
+    var memory_analytical: [4]f32 = undefined;
+    try context.readback(gradients.query_input, &query_analytical);
+    try context.readback(gradients.memory_input, &memory_analytical);
+
+    const epsilon: f32 = 1e-3;
+    for (0..query_values.len) |input_index| {
+        var plus = query_values;
+        plus[input_index] += epsilon;
+        var plus_input = try context.upload(&.{ 2, 2 }, &plus);
+        defer plus_input.deinit();
+        var plus_output = try attention.forward(&context, plus_input, memory);
+        defer plus_output.deinit();
+        var plus_result: [4]f32 = undefined;
+        try context.readback(plus_output, &plus_result);
+        var minus = query_values;
+        minus[input_index] -= epsilon;
+        var minus_input = try context.upload(&.{ 2, 2 }, &minus);
+        defer minus_input.deinit();
+        var minus_output = try attention.forward(&context, minus_input, memory);
+        defer minus_output.deinit();
+        var minus_result: [4]f32 = undefined;
+        try context.readback(minus_output, &minus_result);
+        var plus_sum: f32 = 0;
+        var minus_sum: f32 = 0;
+        for (plus_result) |value| plus_sum += value;
+        for (minus_result) |value| minus_sum += value;
+        try testing.expectApproxEqAbs((plus_sum - minus_sum) / (2 * epsilon), query_analytical[input_index], 5e-3);
+    }
+    for (0..memory_values.len) |input_index| {
+        var plus = memory_values;
+        plus[input_index] += epsilon;
+        var plus_input = try context.upload(&.{ 2, 2 }, &plus);
+        defer plus_input.deinit();
+        var plus_output = try attention.forward(&context, queries, plus_input);
+        defer plus_output.deinit();
+        var plus_result: [4]f32 = undefined;
+        try context.readback(plus_output, &plus_result);
+        var minus = memory_values;
+        minus[input_index] -= epsilon;
+        var minus_input = try context.upload(&.{ 2, 2 }, &minus);
+        defer minus_input.deinit();
+        var minus_output = try attention.forward(&context, queries, minus_input);
+        defer minus_output.deinit();
+        var minus_result: [4]f32 = undefined;
+        try context.readback(minus_output, &minus_result);
+        var plus_sum: f32 = 0;
+        var minus_sum: f32 = 0;
+        for (plus_result) |value| plus_sum += value;
+        for (minus_result) |value| minus_sum += value;
+        try testing.expectApproxEqAbs((plus_sum - minus_sum) / (2 * epsilon), memory_analytical[input_index], 5e-3);
     }
 }
 

@@ -33,9 +33,11 @@ The examples are intentionally small enough to read beside the reusable code:
    normalized CRF and Viterbi decoding.
 8. Run Decoding Lab to contrast greedy choice, fixed top-k truncation, adaptive
    nucleus top-p truncation, and repetition penalties.
-9. Compare GRU Sequence with Transformer Encoder. The GRU carries state through
+9. Use Seq2Seq to see decoder queries learn an alignment over separate encoder
+   memory while translating and reordering tokens.
+10. Compare GRU Sequence with Transformer Encoder. The GRU carries state through
    time; the encoder uses unmasked attention to retrieve context from any token.
-10. Finish with DQN to see how an MLP, replay memory, exploration, Bellman
+11. Finish with DQN to see how an MLP, replay memory, exploration, Bellman
    targets, and a target network fit into an agent-environment loop.
 
 The CNN uses the inspectable CPU-first spatial reference. The optimizer,
@@ -62,6 +64,7 @@ discrete action choice, and Bellman-target construction.
 | Text classifier | `zig build run_text_classifier -Dgpu=auto` | `nnctl run text-classifier` | Padding-aware multi-head encoder trained on contextual sentiment phrases |
 | Sequence tagging | `zig build run_sequence_tagging` | `nnctl run sequence-tagging` | Forward-backward CRF training and Viterbi decoding for BIO tags |
 | Decoding lab | `zig build run_decoding_lab` | `nnctl run decoding-lab` | Greedy, top-k, nucleus top-p, repetition penalties, and seeded sampling |
+| Seq2Seq | `zig build run_seq2seq -Dgpu=auto` | `nnctl run seq2seq` | Cross-attention learns translation, reordering, and target-to-source alignment |
 | CNN | `zig build run_cnn` | `nnctl run cnn` | Convolution, ReLU, max-pool, and softmax on synthetic image patterns |
 | Autoencoder | `zig build run_autoencoder -Dgpu=auto` | `nnctl run autoencoder` | Denoising and two-dimensional latent representations of tiny images |
 | GRU sequence | `zig build run_gru_sequence -Dgpu=auto` | `nnctl run gru-sequence` | Backpropagation through time on a selective-memory task |
