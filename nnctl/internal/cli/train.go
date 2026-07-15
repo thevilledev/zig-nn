@@ -155,7 +155,7 @@ func prepareTinyGPTResumeOptions(opts *tinyGPTTrainOptions, changed func(string)
 	return nil
 }
 
-func (a *App) runTrainTinyGPT(ctx context.Context, opts tinyGPTTrainOptions) error {
+func (a *app) runTrainTinyGPT(ctx context.Context, opts tinyGPTTrainOptions) error {
 	trainArgs, err := tinyGPTTrainArgs(opts)
 	if err != nil {
 		return err
@@ -234,7 +234,7 @@ func tinyGPTTrainArgs(opts tinyGPTTrainOptions) ([]string, error) {
 	return args, nil
 }
 
-func (a *App) runTrainSpeechCommands(ctx context.Context, opts speechCommandsTrainOptions) error {
+func (a *app) runTrainSpeechCommands(ctx context.Context, opts speechCommandsTrainOptions) error {
 	trainArgs, err := speechCommandsTrainArgs(opts)
 	if err != nil {
 		return err

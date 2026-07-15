@@ -1,4 +1,4 @@
-package verdacloud
+package verda
 
 type SSHKey struct {
 	ID          string `json:"id"`

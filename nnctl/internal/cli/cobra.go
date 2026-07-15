@@ -9,11 +9,11 @@ import (
 	"github.com/spf13/cobra"
 
 	"nnctl/internal/catalog"
-	verdacloud "nnctl/internal/cloud/verda"
+	"nnctl/internal/cloud/verda"
 	"nnctl/internal/repo"
 )
 
-func (a *App) newRootCommand() *cobra.Command {
+func (a *app) newRootCommand() *cobra.Command {
 	repoRoot := ""
 	zigPath := getenvDefault("ZIG", "zig")
 	configured := false
@@ -85,7 +85,7 @@ func (a *App) newRootCommand() *cobra.Command {
 	return root
 }
 
-func (a *App) newAllCommand(withRepo repoRunner) *cobra.Command {
+func (a *app) newAllCommand(withRepo repoRunner) *cobra.Command {
 	opts := buildOptions{
 		mode: getenvDefault("NNCTL_OPTIMIZE", getenvDefault("BUILD_MODE", defaultBuildMode)),
 	}
@@ -103,7 +103,7 @@ func (a *App) newAllCommand(withRepo repoRunner) *cobra.Command {
 	return cmd
 }
 
-func (a *App) newBuildCommand(withRepo repoRunner) *cobra.Command {
+func (a *app) newBuildCommand(withRepo repoRunner) *cobra.Command {
 	opts := buildOptions{
 		mode: getenvDefault("NNCTL_OPTIMIZE", getenvDefault("BUILD_MODE", defaultBuildMode)),
 	}
@@ -126,7 +126,7 @@ func (a *App) newBuildCommand(withRepo repoRunner) *cobra.Command {
 	return cmd
 }
 
-func (a *App) newReleaseCommand(withRepo repoRunner) *cobra.Command {
+func (a *app) newReleaseCommand(withRepo repoRunner) *cobra.Command {
 	opts := buildOptions{
 		mode: getenvDefault("NNCTL_RELEASE_OPTIMIZE", getenvDefault("RELEASE_MODE", defaultReleaseMode)),
 	}
@@ -143,7 +143,7 @@ func (a *App) newReleaseCommand(withRepo repoRunner) *cobra.Command {
 	return cmd
 }
 
-func (a *App) newTestCommand(withRepo repoRunner) *cobra.Command {
+func (a *app) newTestCommand(withRepo repoRunner) *cobra.Command {
 	opts := testOptions{}
 	cmd := &cobra.Command{
 		Use:   "test [flags] [name]",
@@ -167,7 +167,7 @@ func (a *App) newTestCommand(withRepo repoRunner) *cobra.Command {
 	return cmd
 }
 
-func (a *App) newBenchmarkCommand(withRepo repoRunner) *cobra.Command {
+func (a *app) newBenchmarkCommand(withRepo repoRunner) *cobra.Command {
 	opts := defaultBenchmarkOptions()
 	cmd := &cobra.Command{
 		Use:   "benchmark",
@@ -198,7 +198,7 @@ raw CSV file to print current-vs-baseline deltas.`,
 	return cmd
 }
 
-func (a *App) newDeployCommand(withRepo repoRunner) *cobra.Command {
+func (a *app) newDeployCommand(withRepo repoRunner) *cobra.Command {
 	opts := defaultDeployOptions()
 	cmd := &cobra.Command{
 		Use:   "deploy TARGET",
@@ -231,7 +231,7 @@ changes, so remote benchmark runs can be tied back to a specific git ref.`,
 	return cmd
 }
 
-func (a *App) newCloudCommand(withRepo repoRunner) *cobra.Command {
+func (a *app) newCloudCommand(withRepo repoRunner) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "cloud <command>",
 		Short: "Deploy cloud benchmark workers",
@@ -253,7 +253,7 @@ func (a *App) newCloudCommand(withRepo repoRunner) *cobra.Command {
 	return cmd
 }
 
-func (a *App) newCloudBenchmarkDeployCommand(withRepo repoRunner) *cobra.Command {
+func (a *app) newCloudBenchmarkDeployCommand(withRepo repoRunner) *cobra.Command {
 	opts := defaultCloudBenchmarkDeployOptions()
 	cmd := &cobra.Command{
 		Use:     "benchmark-deploy",
@@ -316,7 +316,7 @@ no reusable source OS volume is available.`,
 	return cmd
 }
 
-func (a *App) newCloudVolumeCommand() *cobra.Command {
+func (a *app) newCloudVolumeCommand() *cobra.Command {
 	opts := cloudVolumesOptions{}
 	cmd := &cobra.Command{
 		Use:     "volume [VOLUME_ID...]",
@@ -365,9 +365,9 @@ func (a *App) newCloudVolumeCommand() *cobra.Command {
 	return cmd
 }
 
-func (a *App) newCloudDeployCommand() *cobra.Command {
+func (a *app) newCloudDeployCommand() *cobra.Command {
 	opts := cloudDeployOptions{
-		DeployOptions: verdacloud.DefaultDeployOptions(""),
+		DeployOptions: verda.DefaultDeployOptions(""),
 	}
 	cmd := &cobra.Command{
 		Use:   "deploy",
@@ -416,9 +416,9 @@ nnctl/internal/cloud/verda/packer/bootstrap.sh.`,
 	return cmd
 }
 
-func (a *App) newCloudDestroyCommand() *cobra.Command {
+func (a *app) newCloudDestroyCommand() *cobra.Command {
 	opts := cloudDestroyOptions{
-		DestroyOptions: verdacloud.DefaultDestroyOptions(nil),
+		DestroyOptions: verda.DefaultDestroyOptions(nil),
 	}
 	cmd := &cobra.Command{
 		Use:     "destroy INSTANCE_ID [INSTANCE_ID...]",
@@ -445,7 +445,7 @@ func (a *App) newCloudDestroyCommand() *cobra.Command {
 	return cmd
 }
 
-func (a *App) newCloudPackerTemplateCommand() *cobra.Command {
+func (a *app) newCloudPackerTemplateCommand() *cobra.Command {
 	opts := cloudPackerTemplateOptions{}
 	cmd := &cobra.Command{
 		Use:   "packer-template DIR",
@@ -463,7 +463,7 @@ func (a *App) newCloudPackerTemplateCommand() *cobra.Command {
 	return cmd
 }
 
-func (a *App) newCloudSSHKeysCommand() *cobra.Command {
+func (a *app) newCloudSSHKeysCommand() *cobra.Command {
 	opts := cloudSSHKeysOptions{}
 	cmd := &cobra.Command{
 		Use:     "ssh-keys",
@@ -484,7 +484,7 @@ func (a *App) newCloudSSHKeysCommand() *cobra.Command {
 	return cmd
 }
 
-func (a *App) newCloudListCommand() *cobra.Command {
+func (a *app) newCloudListCommand() *cobra.Command {
 	opts := cloudListOptions{}
 	cmd := &cobra.Command{
 		Use:   "list",
@@ -507,12 +507,12 @@ func (a *App) newCloudListCommand() *cobra.Command {
 	return cmd
 }
 
-func (a *App) newCloudPricingCommand() *cobra.Command {
+func (a *app) newCloudPricingCommand() *cobra.Command {
 	opts := cloudPricingOptions{
 		sortBy: "price",
 	}
 	opts.filters.AvailableOnly = true
-	opts.filters.Market = verdacloud.PricingMarketSpot
+	opts.filters.Market = verda.PricingMarketSpot
 	cmd := &cobra.Command{
 		Use:   "pricing",
 		Short: "List Verda instance prices",
@@ -558,7 +558,7 @@ func (a *App) newCloudPricingCommand() *cobra.Command {
 	return cmd
 }
 
-func (a *App) newExperimentsCommand(withRepo repoRunner) *cobra.Command {
+func (a *app) newExperimentsCommand(withRepo repoRunner) *cobra.Command {
 	opts := buildOptions{
 		mode: getenvDefault("NNCTL_OPTIMIZE", getenvDefault("BUILD_MODE", defaultBuildMode)),
 	}
@@ -577,7 +577,7 @@ func (a *App) newExperimentsCommand(withRepo repoRunner) *cobra.Command {
 	return cmd
 }
 
-func (a *App) newRunCommand(withRepo repoRunner) *cobra.Command {
+func (a *app) newRunCommand(withRepo repoRunner) *cobra.Command {
 	mode := ""
 	gpu := ""
 	cmd := &cobra.Command{
@@ -621,7 +621,7 @@ func (a *App) newRunCommand(withRepo repoRunner) *cobra.Command {
 	return cmd
 }
 
-func (a *App) newTrainCommand(withRepo repoRunner) *cobra.Command {
+func (a *app) newTrainCommand(withRepo repoRunner) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "train <target>",
 		Short: "Train model checkpoints",
@@ -633,7 +633,7 @@ func (a *App) newTrainCommand(withRepo repoRunner) *cobra.Command {
 	return cmd
 }
 
-func (a *App) newTrainSpeechCommandsCommand(withRepo repoRunner) *cobra.Command {
+func (a *app) newTrainSpeechCommandsCommand(withRepo repoRunner) *cobra.Command {
 	opts := defaultSpeechCommandsTrainOptions()
 	cmd := &cobra.Command{
 		Use:     "speech-commands",
@@ -662,7 +662,7 @@ validation checkpoint is evaluated once on a speaker-disjoint held-out split.`,
 	return cmd
 }
 
-func (a *App) newTrainTinyGPTCommand(withRepo repoRunner) *cobra.Command {
+func (a *app) newTrainTinyGPTCommand(withRepo repoRunner) *cobra.Command {
 	opts := defaultTinyGPTTrainOptions()
 	cmd := &cobra.Command{
 		Use:     "tiny-gpt",
@@ -703,7 +703,7 @@ Use --corpus-path to train on any local UTF-8 text file instead of a preset.`,
 	return cmd
 }
 
-func (a *App) newChatCommand(withRepo repoRunner) *cobra.Command {
+func (a *app) newChatCommand(withRepo repoRunner) *cobra.Command {
 	opts := defaultChatOptions()
 	cmd := &cobra.Command{
 		Use:   "chat",
@@ -732,7 +732,7 @@ func (a *App) newChatCommand(withRepo repoRunner) *cobra.Command {
 	return cmd
 }
 
-func (a *App) newListCommand(root *cobra.Command) *cobra.Command {
+func (a *app) newListCommand(root *cobra.Command) *cobra.Command {
 	return &cobra.Command{
 		Use:   "list [topic]",
 		Short: "List tasks, experiments, or tests",
@@ -757,7 +757,7 @@ func (a *App) newListCommand(root *cobra.Command) *cobra.Command {
 	}
 }
 
-func (a *App) newFormatCommand(withRepo repoRunner) *cobra.Command {
+func (a *app) newFormatCommand(withRepo repoRunner) *cobra.Command {
 	check := false
 	cmd := &cobra.Command{
 		Use:     "fmt",
@@ -772,7 +772,7 @@ func (a *App) newFormatCommand(withRepo repoRunner) *cobra.Command {
 	return cmd
 }
 
-func (a *App) newCleanCommand(withRepo repoRunner) *cobra.Command {
+func (a *app) newCleanCommand(withRepo repoRunner) *cobra.Command {
 	includeTool := false
 	cmd := &cobra.Command{
 		Use:   "clean",
@@ -786,7 +786,7 @@ func (a *App) newCleanCommand(withRepo repoRunner) *cobra.Command {
 	return cmd
 }
 
-func (a *App) newDataCommand(withRepo repoRunner) *cobra.Command {
+func (a *app) newDataCommand(withRepo repoRunner) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "data <command>",
 		Short: "Download or prepare experiment data",
@@ -798,7 +798,7 @@ func (a *App) newDataCommand(withRepo repoRunner) *cobra.Command {
 	return cmd
 }
 
-func (a *App) newDataSpeechCommandsCommand(withRepo repoRunner) *cobra.Command {
+func (a *app) newDataSpeechCommandsCommand(withRepo repoRunner) *cobra.Command {
 	dir := "data/mini_speech_commands"
 	force := false
 	cmd := &cobra.Command{
@@ -819,7 +819,7 @@ func (a *App) newDataSpeechCommandsCommand(withRepo repoRunner) *cobra.Command {
 	return cmd
 }
 
-func (a *App) newDataMNISTCommand(withRepo repoRunner) *cobra.Command {
+func (a *app) newDataMNISTCommand(withRepo repoRunner) *cobra.Command {
 	dir := "data"
 	force := false
 	cmd := &cobra.Command{
@@ -837,7 +837,7 @@ func (a *App) newDataMNISTCommand(withRepo repoRunner) *cobra.Command {
 	return cmd
 }
 
-func (a *App) newDataTinyGPTCommand(withRepo repoRunner) *cobra.Command {
+func (a *app) newDataTinyGPTCommand(withRepo repoRunner) *cobra.Command {
 	return &cobra.Command{
 		Use:     "tiny-gpt",
 		Aliases: []string{"tinygpt"},
@@ -861,7 +861,7 @@ Set TINYSTORIES_BYTES before running to change the TinyStories slice size.`,
 	}
 }
 
-func (a *App) newDoctorCommand(withRepo repoRunner) *cobra.Command {
+func (a *app) newDoctorCommand(withRepo repoRunner) *cobra.Command {
 	return &cobra.Command{
 		Use:     "doctor",
 		Aliases: []string{"env"},
@@ -873,7 +873,7 @@ func (a *App) newDoctorCommand(withRepo repoRunner) *cobra.Command {
 	}
 }
 
-func (a *App) newTinyGPTTopicCommand() *cobra.Command {
+func (a *app) newTinyGPTTopicCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "tiny-gpt",
 		Short: "Show TinyGPT workflows",
@@ -901,7 +901,7 @@ Use --corpus-path with run or train to use any local UTF-8 text file instead of 
 	}
 }
 
-func newVersionCommand(a *App) *cobra.Command {
+func newVersionCommand(a *app) *cobra.Command {
 	return &cobra.Command{
 		Use:   "version",
 		Short: "Print nnctl version",

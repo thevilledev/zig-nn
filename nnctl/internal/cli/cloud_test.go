@@ -8,14 +8,14 @@ import (
 	"strings"
 	"testing"
 
-	verdacloud "nnctl/internal/cloud/verda"
+	"nnctl/internal/cloud/verda"
 )
 
 func TestCloudDeployDryRunJSON(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	app := &App{Stdout: &stdout, Stderr: &stderr}
+	app := &app{Stdout: &stdout, Stderr: &stderr}
 
-	err := app.Run(context.Background(), []string{"cloud", "deploy", "--instance-type", "1V100.6V", "--source-os-volume-id", "vol-golden", "--dry-run", "--json"})
+	err := app.execute(context.Background(), []string{"cloud", "deploy", "--instance-type", "1V100.6V", "--source-os-volume-id", "vol-golden", "--dry-run", "--json"})
 	if err != nil {
 		t.Fatalf("Run() error = %v\nstderr:\n%s", err, stderr.String())
 	}
@@ -40,7 +40,7 @@ func TestCloudDeployDryRunJSON(t *testing.T) {
 			Contract     string `json:"contract"`
 			IsSpot       bool   `json:"is_spot"`
 		} `json:"request"`
-		StartupScript *verdacloud.StartupScript `json:"startup_script"`
+		StartupScript *verda.StartupScript `json:"startup_script"`
 	}
 	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
 		t.Fatalf("invalid JSON output: %v\n%s", err, stdout.String())
@@ -68,9 +68,9 @@ func TestCloudDeployDryRunJSON(t *testing.T) {
 
 func TestCloudDeployDryRunJSONOnDemand(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	app := &App{Stdout: &stdout, Stderr: &stderr}
+	app := &app{Stdout: &stdout, Stderr: &stderr}
 
-	err := app.Run(context.Background(), []string{"cloud", "deploy", "--instance-type", "1H200.141S.44V", "--market", "on-demand", "--location-code", "FIN-02", "--dry-run", "--json"})
+	err := app.execute(context.Background(), []string{"cloud", "deploy", "--instance-type", "1H200.141S.44V", "--market", "on-demand", "--location-code", "FIN-02", "--dry-run", "--json"})
 	if err != nil {
 		t.Fatalf("Run() error = %v\nstderr:\n%s", err, stderr.String())
 	}
@@ -103,9 +103,9 @@ func TestCloudDeployDryRunJSONOnDemand(t *testing.T) {
 
 func TestCloudDeployDryRunJSONCanReuseClonedOSVolume(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	app := &App{Stdout: &stdout, Stderr: &stderr}
+	app := &app{Stdout: &stdout, Stderr: &stderr}
 
-	err := app.Run(context.Background(), []string{
+	err := app.execute(context.Background(), []string{
 		"cloud",
 		"deploy",
 		"--instance-type",
@@ -145,9 +145,9 @@ func TestCloudDeployDryRunJSONCanReuseClonedOSVolume(t *testing.T) {
 
 func TestCloudDeployDryRunJSONWithSourceOSVolumeName(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	app := &App{Stdout: &stdout, Stderr: &stderr}
+	app := &app{Stdout: &stdout, Stderr: &stderr}
 
-	err := app.Run(context.Background(), []string{"cloud", "deploy", "--instance-type", "1V100.6V", "--source-os-volume-name", "golden", "--dry-run", "--json"})
+	err := app.execute(context.Background(), []string{"cloud", "deploy", "--instance-type", "1V100.6V", "--source-os-volume-name", "golden", "--dry-run", "--json"})
 	if err != nil {
 		t.Fatalf("Run() error = %v\nstderr:\n%s", err, stderr.String())
 	}
@@ -163,7 +163,7 @@ func TestCloudDeployDryRunJSONWithSourceOSVolumeName(t *testing.T) {
 			Image        string `json:"image"`
 			LocationCode string `json:"location_code"`
 		} `json:"request"`
-		OSVolumeClone *verdacloud.OSVolumeClone `json:"os_volume_clone"`
+		OSVolumeClone *verda.OSVolumeClone `json:"os_volume_clone"`
 	}
 	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
 		t.Fatalf("invalid JSON output: %v\n%s", err, stdout.String())
@@ -185,9 +185,9 @@ func TestCloudDeployDryRunJSONWithSourceOSVolumeName(t *testing.T) {
 
 func TestCloudDeployAcceptsSourceVolumeNameAlias(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	app := &App{Stdout: &stdout, Stderr: &stderr}
+	app := &app{Stdout: &stdout, Stderr: &stderr}
 
-	err := app.Run(context.Background(), []string{"cloud", "deploy", "--instance-type", "1V100.6V", "--source-volume-name", "golden", "--dry-run", "--json"})
+	err := app.execute(context.Background(), []string{"cloud", "deploy", "--instance-type", "1V100.6V", "--source-volume-name", "golden", "--dry-run", "--json"})
 	if err != nil {
 		t.Fatalf("Run() error = %v\nstderr:\n%s", err, stderr.String())
 	}
@@ -205,9 +205,9 @@ func TestCloudDeployAcceptsSourceVolumeNameAlias(t *testing.T) {
 
 func TestCloudDeployRejectsNonUUIDSSHKeyID(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	app := &App{Stdout: &stdout, Stderr: &stderr}
+	app := &app{Stdout: &stdout, Stderr: &stderr}
 
-	err := app.Run(context.Background(), []string{"cloud", "deploy", "--instance-type", "1V100.6V", "--source-os-volume-id", "vol-golden", "--dry-run", "--ssh-key-id", "ville+mba@vesilehto.fi"})
+	err := app.execute(context.Background(), []string{"cloud", "deploy", "--instance-type", "1V100.6V", "--source-os-volume-id", "vol-golden", "--dry-run", "--ssh-key-id", "ville+mba@vesilehto.fi"})
 	if err == nil {
 		t.Fatal("expected non-UUID SSH key id error")
 	}
@@ -218,9 +218,9 @@ func TestCloudDeployRejectsNonUUIDSSHKeyID(t *testing.T) {
 
 func TestCloudDeployRequiresInstanceTypeFlag(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	app := &App{Stdout: &stdout, Stderr: &stderr}
+	app := &app{Stdout: &stdout, Stderr: &stderr}
 
-	err := app.Run(context.Background(), []string{"cloud", "deploy", "--dry-run"})
+	err := app.execute(context.Background(), []string{"cloud", "deploy", "--dry-run"})
 	if err == nil {
 		t.Fatal("expected missing instance type error")
 	}
@@ -231,9 +231,9 @@ func TestCloudDeployRequiresInstanceTypeFlag(t *testing.T) {
 
 func TestCloudDeployDryRunWithoutSourceOSVolumeUsesDefaultImage(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	app := &App{Stdout: &stdout, Stderr: &stderr}
+	app := &app{Stdout: &stdout, Stderr: &stderr}
 
-	err := app.Run(context.Background(), []string{"cloud", "deploy", "--instance-type", "1V100.6V", "--dry-run", "--json"})
+	err := app.execute(context.Background(), []string{"cloud", "deploy", "--instance-type", "1V100.6V", "--dry-run", "--json"})
 	if err != nil {
 		t.Fatalf("Run() error = %v\nstderr:\n%s", err, stderr.String())
 	}
@@ -246,16 +246,16 @@ func TestCloudDeployDryRunWithoutSourceOSVolumeUsesDefaultImage(t *testing.T) {
 		Request struct {
 			Image string `json:"image"`
 		} `json:"request"`
-		SourceOSVolumeID string                    `json:"source_os_volume_id"`
-		OSVolumeClone    *verdacloud.OSVolumeClone `json:"os_volume_clone"`
-		StartupScript    *verdacloud.StartupScript `json:"startup_script"`
+		SourceOSVolumeID string               `json:"source_os_volume_id"`
+		OSVolumeClone    *verda.OSVolumeClone `json:"os_volume_clone"`
+		StartupScript    *verda.StartupScript `json:"startup_script"`
 	}
 	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
 		t.Fatalf("invalid JSON output: %v\n%s", err, stdout.String())
 	}
 
-	if result.Request.Image != verdacloud.DefaultDeployImage {
-		t.Fatalf("Image = %q, want %s", result.Request.Image, verdacloud.DefaultDeployImage)
+	if result.Request.Image != verda.DefaultDeployImage {
+		t.Fatalf("Image = %q, want %s", result.Request.Image, verda.DefaultDeployImage)
 	}
 	if result.Policy.LocationSelection != "spot_placement" || result.Policy.SourceOSVolumeLocked {
 		t.Fatalf("unexpected policy: %#v", result.Policy)
@@ -270,9 +270,9 @@ func TestCloudDeployDryRunWithoutSourceOSVolumeUsesDefaultImage(t *testing.T) {
 
 func TestCloudDestroyDryRunJSON(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	app := &App{Stdout: &stdout, Stderr: &stderr}
+	app := &app{Stdout: &stdout, Stderr: &stderr}
 
-	err := app.Run(context.Background(), []string{"cloud", "destroy", "inst-1", "inst-2", "--dry-run", "--permanent=false", "--volume-id", "vol-1", "--json"})
+	err := app.execute(context.Background(), []string{"cloud", "destroy", "inst-1", "inst-2", "--dry-run", "--permanent=false", "--volume-id", "vol-1", "--json"})
 	if err != nil {
 		t.Fatalf("Run() error = %v\nstderr:\n%s", err, stderr.String())
 	}
@@ -306,14 +306,14 @@ func TestCloudDestroyDryRunJSON(t *testing.T) {
 
 func TestCloudDestroyDefaultsToPermanentDryRun(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	app := &App{Stdout: &stdout, Stderr: &stderr}
+	app := &app{Stdout: &stdout, Stderr: &stderr}
 
-	err := app.Run(context.Background(), []string{"cloud", "destroy", "inst-1", "--dry-run", "--json"})
+	err := app.execute(context.Background(), []string{"cloud", "destroy", "inst-1", "--dry-run", "--json"})
 	if err != nil {
 		t.Fatalf("Run() error = %v\nstderr:\n%s", err, stderr.String())
 	}
 
-	var result verdacloud.DestroyResult
+	var result verda.DestroyResult
 	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
 		t.Fatalf("invalid JSON output: %v\n%s", err, stdout.String())
 	}
@@ -324,14 +324,14 @@ func TestCloudDestroyDefaultsToPermanentDryRun(t *testing.T) {
 
 func TestCloudVolumePurgeDryRunJSON(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	app := &App{Stdout: &stdout, Stderr: &stderr}
+	app := &app{Stdout: &stdout, Stderr: &stderr}
 
-	err := app.Run(context.Background(), []string{"cloud", "volume", "vol-1", "vol-2", "--purge", "--dry-run", "--json"})
+	err := app.execute(context.Background(), []string{"cloud", "volume", "vol-1", "vol-2", "--purge", "--dry-run", "--json"})
 	if err != nil {
 		t.Fatalf("Run() error = %v\nstderr:\n%s", err, stderr.String())
 	}
 
-	var result verdacloud.PurgeVolumesResult
+	var result verda.PurgeVolumesResult
 	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
 		t.Fatalf("invalid JSON output: %v\n%s", err, stdout.String())
 	}
@@ -345,14 +345,14 @@ func TestCloudVolumePurgeDryRunJSON(t *testing.T) {
 
 func TestCloudVolumePurgeAllDryRunJSON(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	app := &App{Stdout: &stdout, Stderr: &stderr}
+	app := &app{Stdout: &stdout, Stderr: &stderr}
 
-	err := app.Run(context.Background(), []string{"cloud", "volume", "--purge-all", "--dry-run", "--json"})
+	err := app.execute(context.Background(), []string{"cloud", "volume", "--purge-all", "--dry-run", "--json"})
 	if err != nil {
 		t.Fatalf("Run() error = %v\nstderr:\n%s", err, stderr.String())
 	}
 
-	var result verdacloud.PurgeVolumesResult
+	var result verda.PurgeVolumesResult
 	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
 		t.Fatalf("invalid JSON output: %v\n%s", err, stdout.String())
 	}
@@ -369,9 +369,9 @@ func TestCloudVolumePurgeAllDryRunJSON(t *testing.T) {
 
 func TestCloudVolumePurgeAllRejectsArgs(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	app := &App{Stdout: &stdout, Stderr: &stderr}
+	app := &app{Stdout: &stdout, Stderr: &stderr}
 
-	err := app.Run(context.Background(), []string{"cloud", "volume", "vol-1", "--purge-all"})
+	err := app.execute(context.Background(), []string{"cloud", "volume", "vol-1", "--purge-all"})
 	if err == nil {
 		t.Fatal("expected volume ID with purge-all error")
 	}
@@ -382,9 +382,9 @@ func TestCloudVolumePurgeAllRejectsArgs(t *testing.T) {
 
 func TestCloudVolumePurgeAllRejectsPurge(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	app := &App{Stdout: &stdout, Stderr: &stderr}
+	app := &app{Stdout: &stdout, Stderr: &stderr}
 
-	err := app.Run(context.Background(), []string{"cloud", "volume", "vol-1", "--purge", "--purge-all"})
+	err := app.execute(context.Background(), []string{"cloud", "volume", "vol-1", "--purge", "--purge-all"})
 	if err == nil {
 		t.Fatal("expected conflicting purge flags error")
 	}
@@ -395,9 +395,9 @@ func TestCloudVolumePurgeAllRejectsPurge(t *testing.T) {
 
 func TestCloudVolumeRejectsArgsWithoutPurge(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	app := &App{Stdout: &stdout, Stderr: &stderr}
+	app := &app{Stdout: &stdout, Stderr: &stderr}
 
-	err := app.Run(context.Background(), []string{"cloud", "volume", "vol-1"})
+	err := app.execute(context.Background(), []string{"cloud", "volume", "vol-1"})
 	if err == nil {
 		t.Fatal("expected volume ID without purge error")
 	}
@@ -408,9 +408,9 @@ func TestCloudVolumeRejectsArgsWithoutPurge(t *testing.T) {
 
 func TestCloudVolumeDryRunRequiresPurge(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	app := &App{Stdout: &stdout, Stderr: &stderr}
+	app := &app{Stdout: &stdout, Stderr: &stderr}
 
-	err := app.Run(context.Background(), []string{"cloud", "volume", "--dry-run"})
+	err := app.execute(context.Background(), []string{"cloud", "volume", "--dry-run"})
 	if err == nil {
 		t.Fatal("expected dry-run without purge error")
 	}
@@ -421,9 +421,9 @@ func TestCloudVolumeDryRunRequiresPurge(t *testing.T) {
 
 func TestPrintCloudVolumesPlainText(t *testing.T) {
 	var stdout bytes.Buffer
-	app := &App{Stdout: &stdout}
+	app := &app{Stdout: &stdout}
 
-	err := app.printCloudVolumes([]verdacloud.Volume{
+	err := app.printCloudVolumes([]verda.Volume{
 		{
 			ID:         "vol-active",
 			Name:       "worker-os",
@@ -457,10 +457,10 @@ func TestPrintCloudVolumesPlainText(t *testing.T) {
 
 func TestCloudPackerTemplateWritesEmbeddedFiles(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	app := &App{Stdout: &stdout, Stderr: &stderr}
+	app := &app{Stdout: &stdout, Stderr: &stderr}
 	dir := t.TempDir()
 
-	err := app.Run(context.Background(), []string{"cloud", "packer-template", dir})
+	err := app.execute(context.Background(), []string{"cloud", "packer-template", dir})
 	if err != nil {
 		t.Fatalf("Run() error = %v\nstderr:\n%s", err, stderr.String())
 	}
@@ -491,9 +491,9 @@ func TestCloudPackerTemplateWritesEmbeddedFiles(t *testing.T) {
 
 func TestPrintCloudSSHKeysPlainText(t *testing.T) {
 	var stdout bytes.Buffer
-	app := &App{Stdout: &stdout}
+	app := &app{Stdout: &stdout}
 
-	err := app.printCloudSSHKeys([]verdacloud.SSHKey{
+	err := app.printCloudSSHKeys([]verda.SSHKey{
 		{ID: "11111111-1111-1111-1111-111111111111", Name: "ville+mba@vesilehto.fi", Fingerprint: "SHA256:abc"},
 	}, false)
 	if err != nil {
@@ -517,16 +517,16 @@ func TestPrintCloudSSHKeysPlainText(t *testing.T) {
 
 func TestPrintCloudSSHKeysJSON(t *testing.T) {
 	var stdout bytes.Buffer
-	app := &App{Stdout: &stdout}
+	app := &app{Stdout: &stdout}
 
-	err := app.printCloudSSHKeys([]verdacloud.SSHKey{
+	err := app.printCloudSSHKeys([]verda.SSHKey{
 		{ID: "11111111-1111-1111-1111-111111111111", Name: "key", Fingerprint: "SHA256:abc"},
 	}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	var keys []verdacloud.SSHKey
+	var keys []verda.SSHKey
 	if err := json.Unmarshal(stdout.Bytes(), &keys); err != nil {
 		t.Fatalf("invalid JSON output: %v\n%s", err, stdout.String())
 	}
@@ -537,15 +537,15 @@ func TestPrintCloudSSHKeysJSON(t *testing.T) {
 
 func TestPrintCloudDestroyResultPlainText(t *testing.T) {
 	var stdout bytes.Buffer
-	app := &App{Stdout: &stdout}
+	app := &app{Stdout: &stdout}
 
-	err := app.printCloudDestroyResult(&verdacloud.DestroyResult{
+	err := app.printCloudDestroyResult(&verda.DestroyResult{
 		Provider: "verda",
-		Request: verdacloud.DestroyInstanceRequest{
+		Request: verda.DestroyInstanceRequest{
 			InstanceIDs:       []string{"inst-1"},
 			DeletePermanently: true,
 		},
-		Results: []verdacloud.DestroyInstanceResult{
+		Results: []verda.DestroyInstanceResult{
 			{InstanceID: "inst-1", Status: "success"},
 		},
 	}, false)
@@ -563,10 +563,10 @@ func TestPrintCloudDestroyResultPlainText(t *testing.T) {
 
 func TestPrintCloudInstancesPlainText(t *testing.T) {
 	var stdout bytes.Buffer
-	app := &App{Stdout: &stdout}
+	app := &app{Stdout: &stdout}
 	ip := "203.0.113.10"
 
-	err := app.printCloudInstances([]verdacloud.Instance{
+	err := app.printCloudInstances([]verda.Instance{
 		{ID: "inst-1", Hostname: "worker", Status: "running", InstanceType: "1L40S.20V", Location: "FIN-02", IsSpot: true, IP: &ip},
 	}, false)
 	if err != nil {
@@ -582,7 +582,7 @@ func TestPrintCloudInstancesPlainText(t *testing.T) {
 }
 
 func TestActiveCloudInstancesFiltersInactiveStatuses(t *testing.T) {
-	instances := []verdacloud.Instance{
+	instances := []verda.Instance{
 		{ID: "running", Status: "running"},
 		{ID: "pending", Status: "pending"},
 		{ID: "offline", Status: "offline"},
@@ -597,9 +597,9 @@ func TestActiveCloudInstancesFiltersInactiveStatuses(t *testing.T) {
 
 func TestPrintCloudPricingPlainText(t *testing.T) {
 	var stdout bytes.Buffer
-	app := &App{Stdout: &stdout}
+	app := &app{Stdout: &stdout}
 
-	err := app.printCloudPricing([]verdacloud.InstancePrice{
+	err := app.printCloudPricing([]verda.InstancePrice{
 		{LocationCode: "FIN-02", Market: "spot", IsSpot: true, InstanceType: "1L40S.20V", GPUCount: 1, Model: "L40S", PricePerHour: 0.42, PriceKnown: true, Currency: "eur", Available: true},
 	}, false)
 	if err != nil {
@@ -616,16 +616,16 @@ func TestPrintCloudPricingPlainText(t *testing.T) {
 
 func TestPrintCloudPricingJSON(t *testing.T) {
 	var stdout bytes.Buffer
-	app := &App{Stdout: &stdout}
+	app := &app{Stdout: &stdout}
 
-	err := app.printCloudPricing([]verdacloud.InstancePrice{
+	err := app.printCloudPricing([]verda.InstancePrice{
 		{LocationCode: "FIN-02", Market: "spot", IsSpot: true, InstanceType: "1L40S.20V", GPUCount: 1, Model: "L40S", PricePerHour: 0.42, PriceKnown: true, Currency: "eur", Available: true},
 	}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	var prices []verdacloud.InstancePrice
+	var prices []verda.InstancePrice
 	if err := json.Unmarshal(stdout.Bytes(), &prices); err != nil {
 		t.Fatalf("invalid JSON output: %v\n%s", err, stdout.String())
 	}

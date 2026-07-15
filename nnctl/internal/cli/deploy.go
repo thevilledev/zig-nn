@@ -30,7 +30,7 @@ func defaultDeployOptions() deployOptions {
 	}
 }
 
-func (a *App) runDeploy(ctx context.Context, opts deployOptions) error {
+func (a *app) runDeploy(ctx context.Context, opts deployOptions) error {
 	if strings.TrimSpace(opts.target) == "" {
 		return fmt.Errorf("deploy target is required")
 	}
@@ -81,7 +81,7 @@ func (a *App) runDeploy(ctx context.Context, opts deployOptions) error {
 	return nil
 }
 
-func (a *App) gitStatusPorcelain(ctx context.Context, git string) (string, error) {
+func (a *app) gitStatusPorcelain(ctx context.Context, git string) (string, error) {
 	cmd := exec.CommandContext(ctx, git, "status", "--porcelain", "--untracked-files=all")
 	cmd.Dir = a.repoRoot
 	output, err := cmd.CombinedOutput()

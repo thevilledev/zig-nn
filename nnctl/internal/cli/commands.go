@@ -27,7 +27,7 @@ type testOptions struct {
 	name           string
 }
 
-func (a *App) runAll(ctx context.Context, opts buildOptions) error {
+func (a *app) runAll(ctx context.Context, opts buildOptions) error {
 	if err := a.runZig(ctx, zig.Args("build", zig.Options{Optimize: opts.mode, GPU: opts.gpu})...); err != nil {
 		return err
 	}
@@ -40,11 +40,11 @@ func (a *App) runAll(ctx context.Context, opts buildOptions) error {
 	return a.runZig(ctx, zig.Args("experiments", zig.Options{Optimize: opts.mode, GPU: opts.gpu})...)
 }
 
-func (a *App) runBuild(ctx context.Context, opts buildOptions) error {
+func (a *app) runBuild(ctx context.Context, opts buildOptions) error {
 	return a.runZig(ctx, zig.Args("build", zig.Options{Optimize: opts.mode, GPU: opts.gpu})...)
 }
 
-func (a *App) runTest(ctx context.Context, opts testOptions) error {
+func (a *app) runTest(ctx context.Context, opts testOptions) error {
 	if opts.unitOnly && opts.acceptanceOnly {
 		return fmt.Errorf("--unit-only and --acceptance-only cannot be used together")
 	}
@@ -66,11 +66,11 @@ func (a *App) runTest(ctx context.Context, opts testOptions) error {
 	return a.runZig(ctx, zig.Args("test-acceptance", zigOpts)...)
 }
 
-func (a *App) runExperiments(ctx context.Context, opts buildOptions) error {
+func (a *app) runExperiments(ctx context.Context, opts buildOptions) error {
 	return a.runZig(ctx, zig.Args("experiments", zig.Options{Optimize: opts.mode, GPU: opts.gpu})...)
 }
 
-func (a *App) runExperiment(ctx context.Context, name string, passthrough []string, mode, gpu string) error {
+func (a *app) runExperiment(ctx context.Context, name string, passthrough []string, mode, gpu string) error {
 	if catalog.NormalizeName(name) == "quick" {
 		for _, experiment := range catalog.Experiments() {
 			if !experiment.Quick {
@@ -92,7 +92,7 @@ func (a *App) runExperiment(ctx context.Context, name string, passthrough []stri
 	return a.runZig(ctx, zig.RunArgs(experiment.Step, opts, passthrough)...)
 }
 
-func (a *App) listExperiments() {
+func (a *app) listExperiments() {
 	for _, experiment := range catalog.SortedExperiments() {
 		if experiment.Hidden {
 			continue
@@ -101,20 +101,20 @@ func (a *App) listExperiments() {
 	}
 }
 
-func (a *App) listTests() {
+func (a *app) listTests() {
 	for _, test := range catalog.Tests() {
 		fmt.Fprintln(a.stdout(), test)
 	}
 }
 
-func (a *App) runFormat(ctx context.Context, check bool) error {
+func (a *app) runFormat(ctx context.Context, check bool) error {
 	if check {
 		return a.run(ctx, a.repoRoot, a.zig, "fmt", "--check", ".")
 	}
 	return a.run(ctx, a.repoRoot, a.zig, "fmt", ".")
 }
 
-func (a *App) runClean(includeTool bool) error {
+func (a *app) runClean(includeTool bool) error {
 	paths := []string{"zig-out", ".zig-cache"}
 	if includeTool {
 		paths = append(paths, filepath.Join("bin", "nnctl"))
@@ -129,7 +129,7 @@ func (a *App) runClean(includeTool bool) error {
 	return nil
 }
 
-func (a *App) runDoctor(ctx context.Context) error {
+func (a *app) runDoctor(ctx context.Context) error {
 	fmt.Fprintf(a.stdout(), "repo: %s\n", a.repoRoot)
 	fmt.Fprintf(a.stdout(), "nnctl: %s\n", runtime.Version())
 	fmt.Fprintf(a.stdout(), "platform: %s/%s\n", runtime.GOOS, runtime.GOARCH)
@@ -139,7 +139,7 @@ func (a *App) runDoctor(ctx context.Context) error {
 	return nil
 }
 
-func (a *App) printBackendDoctor() {
+func (a *app) printBackendDoctor() {
 	cudaPath := getenvDefault("CUDA_PATH", "/usr/local/cuda")
 	rocmPath := getenvDefault("ROCM_PATH", "/opt/rocm")
 	fmt.Fprintf(a.stdout(), "metal: %s\n", metalDoctorStatus(runtime.GOOS))
@@ -183,7 +183,7 @@ func pathExists(path string) bool {
 	return err == nil
 }
 
-func (a *App) printToolVersion(ctx context.Context, name string, args ...string) {
+func (a *app) printToolVersion(ctx context.Context, name string, args ...string) {
 	path, err := exec.LookPath(name)
 	if err != nil {
 		fmt.Fprintf(a.stdout(), "%s: missing\n", name)
@@ -199,11 +199,11 @@ func (a *App) printToolVersion(ctx context.Context, name string, args ...string)
 	fmt.Fprintf(a.stdout(), "%s: %s\n", name, strings.TrimSpace(string(out)))
 }
 
-func (a *App) runZig(ctx context.Context, args ...string) error {
+func (a *app) runZig(ctx context.Context, args ...string) error {
 	return a.run(ctx, a.repoRoot, a.zig, args...)
 }
 
-func (a *App) run(ctx context.Context, dir, name string, args ...string) error {
+func (a *app) run(ctx context.Context, dir, name string, args ...string) error {
 	fmt.Fprintf(a.stderr(), "==> %s\n", zig.CommandString(name, args))
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir

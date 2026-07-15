@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	verdacloud "nnctl/internal/cloud/verda"
+	"nnctl/internal/cloud/verda"
 )
 
 func TestNormalizeCloudBenchmarkDeployOptionsDefaultsSourceName(t *testing.T) {
@@ -22,7 +22,7 @@ func TestNormalizeCloudBenchmarkDeployOptionsDefaultsSourceName(t *testing.T) {
 	if opts.SourceOSVolumeName != defaultCloudBenchmarkSourceName {
 		t.Fatalf("SourceOSVolumeName = %q, want %q", opts.SourceOSVolumeName, defaultCloudBenchmarkSourceName)
 	}
-	if opts.Market != verdacloud.PricingMarketSpot || opts.backend != "cuda" {
+	if opts.Market != verda.PricingMarketSpot || opts.backend != "cuda" {
 		t.Fatalf("unexpected defaults: market=%q backend=%q", opts.Market, opts.backend)
 	}
 	if opts.Image != defaultCloudBenchmarkPackerImage {
@@ -63,7 +63,7 @@ func TestCloudBenchmarkProgressReportsNumberedPhases(t *testing.T) {
 }
 
 func TestReusableCloudBenchmarkSourceVolumeUsesNewestActiveOSVolume(t *testing.T) {
-	volumes := []verdacloud.Volume{
+	volumes := []verda.Volume{
 		{ID: "vol-old", Name: defaultCloudBenchmarkSourceName, Location: "FIN-01", IsOSVolume: true, CreatedAt: "2026-07-10T00:00:00Z"},
 		{ID: "vol-new", Name: defaultCloudBenchmarkSourceName, Location: "fin-01", IsOSVolume: true, CreatedAt: "2026-07-15T00:00:00Z"},
 		{ID: "vol-data", Name: defaultCloudBenchmarkSourceName, Location: "FIN-01", CreatedAt: "2026-07-16T00:00:00Z"},
@@ -125,7 +125,7 @@ func TestCloudBenchmarkPackerBuildArgsConfigureMissingVolume(t *testing.T) {
 	opts := defaultCloudBenchmarkDeployOptions()
 	opts.InstanceType = "1H200.141S.44V"
 	opts.SourceOSVolumeName = "zig-nn-h200-golden"
-	opts.Market = verdacloud.PricingMarketOnDemand
+	opts.Market = verda.PricingMarketOnDemand
 
 	got, err := cloudBenchmarkPackerBuildArgs(filepath.Join(dir, "ubuntu.pkr.hcl"), "/tmp/keys", opts, "FIN-03")
 	if err != nil {
@@ -170,7 +170,7 @@ printf '%s\n' 'matmul,64x64x64,cuda,ReleaseFast,1,8,41879,35256,80710,-0.0365066
 	}
 
 	var stderr strings.Builder
-	app := &App{Stderr: &stderr}
+	app := &app{Stderr: &stderr}
 	output, err := app.captureCloudBenchmarkSSH(context.Background(), ssh, nil, "root@example", "benchmark")
 	if err != nil {
 		t.Fatalf("captureCloudBenchmarkSSH() error = %v", err)

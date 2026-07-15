@@ -1,3 +1,4 @@
+// Package cli implements the nnctl command-line interface.
 package cli
 
 import (
@@ -13,7 +14,7 @@ const (
 	defaultReleaseMode = "ReleaseSafe"
 )
 
-type App struct {
+type app struct {
 	Stdin  io.Reader
 	Stdout io.Writer
 	Stderr io.Writer
@@ -22,40 +23,41 @@ type App struct {
 	zig      string
 }
 
+// Main runs nnctl with the process standard streams and returns its exit code.
 func Main(args []string) int {
-	app := &App{
+	app := &app{
 		Stdin:  os.Stdin,
 		Stdout: os.Stdout,
 		Stderr: os.Stderr,
 	}
-	if err := app.Run(context.Background(), args); err != nil {
+	if err := app.execute(context.Background(), args); err != nil {
 		fmt.Fprintln(app.stderr(), "error:", err)
 		return 1
 	}
 	return 0
 }
 
-func (a *App) Run(ctx context.Context, args []string) error {
+func (a *app) execute(ctx context.Context, args []string) error {
 	root := a.newRootCommand()
 	root.SetArgs(args)
 	return root.ExecuteContext(ctx)
 }
 
-func (a *App) stdout() io.Writer {
+func (a *app) stdout() io.Writer {
 	if a.Stdout == nil {
 		return io.Discard
 	}
 	return a.Stdout
 }
 
-func (a *App) stderr() io.Writer {
+func (a *app) stderr() io.Writer {
 	if a.Stderr == nil {
 		return io.Discard
 	}
 	return a.Stderr
 }
 
-func (a *App) stdin() io.Reader {
+func (a *app) stdin() io.Reader {
 	if a.Stdin == nil {
 		return strings.NewReader("")
 	}

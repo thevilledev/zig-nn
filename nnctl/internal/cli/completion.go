@@ -6,7 +6,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func (a *App) newCompletionCommand() *cobra.Command {
+func (a *app) newCompletionCommand() *cobra.Command {
 	noDesc := false
 	cmd := &cobra.Command{
 		Use:   "completion",
@@ -31,7 +31,7 @@ Print the script to stdout so it can be sourced directly or written into your sh
 	return cmd
 }
 
-func (a *App) newBashCompletionCommand(noDesc *bool) *cobra.Command {
+func (a *app) newBashCompletionCommand(noDesc *bool) *cobra.Command {
 	return &cobra.Command{
 		Use:                   "bash",
 		Short:                 "Generate the bash completion script",
@@ -45,7 +45,7 @@ func (a *App) newBashCompletionCommand(noDesc *bool) *cobra.Command {
 	}
 }
 
-func (a *App) newZshCompletionCommand(noDesc *bool) *cobra.Command {
+func (a *app) newZshCompletionCommand(noDesc *bool) *cobra.Command {
 	return &cobra.Command{
 		Use:                   "zsh",
 		Short:                 "Generate the zsh completion script",
@@ -62,7 +62,7 @@ func (a *App) newZshCompletionCommand(noDesc *bool) *cobra.Command {
 	}
 }
 
-func (a *App) newFishCompletionCommand(noDesc *bool) *cobra.Command {
+func (a *app) newFishCompletionCommand(noDesc *bool) *cobra.Command {
 	return &cobra.Command{
 		Use:                   "fish",
 		Short:                 "Generate the fish completion script",

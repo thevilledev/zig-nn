@@ -1,4 +1,4 @@
-package verdacloud
+package verda
 
 import (
 	"encoding/json"

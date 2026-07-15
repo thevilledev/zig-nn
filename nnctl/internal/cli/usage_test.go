@@ -55,9 +55,9 @@ func TestDirectHelpAvailableForEveryCommand(t *testing.T) {
 	for _, args := range tests {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
-			app := &App{Stdout: &stdout, Stderr: &stderr}
+			app := &app{Stdout: &stdout, Stderr: &stderr}
 
-			if err := app.Run(context.Background(), args); err != nil {
+			if err := app.execute(context.Background(), args); err != nil {
 				t.Fatalf("Run() error = %v", err)
 			}
 			if !strings.Contains(stdout.String(), "Usage:") || !strings.Contains(stdout.String(), "nnctl") {
@@ -74,8 +74,8 @@ func TestExperimentListCompatibilityAliases(t *testing.T) {
 	outputs := make([]string, 0, 4)
 	for _, topic := range []string{"experiments", "experiment", "examples", "example"} {
 		var stdout bytes.Buffer
-		app := &App{Stdout: &stdout}
-		if err := app.Run(context.Background(), []string{"list", topic}); err != nil {
+		app := &app{Stdout: &stdout}
+		if err := app.execute(context.Background(), []string{"list", topic}); err != nil {
 			t.Fatalf("nnctl list %s: %v", topic, err)
 		}
 		outputs = append(outputs, stdout.String())
@@ -88,7 +88,7 @@ func TestExperimentListCompatibilityAliases(t *testing.T) {
 }
 
 func TestUnknownExperimentPointsToPrimaryListCommand(t *testing.T) {
-	app := &App{}
+	app := &app{}
 	err := app.runExperiment(context.Background(), "definitely-missing", nil, "", "")
 	if err == nil || !strings.Contains(err.Error(), "nnctl list experiments") {
 		t.Fatalf("runExperiment() error = %v", err)
@@ -97,9 +97,9 @@ func TestUnknownExperimentPointsToPrimaryListCommand(t *testing.T) {
 
 func TestNestedHelpContainsTinyGPTCorpusWorkflow(t *testing.T) {
 	var stdout bytes.Buffer
-	app := &App{Stdout: &stdout}
+	app := &app{Stdout: &stdout}
 
-	if err := app.Run(context.Background(), []string{"help", "train", "tiny-gpt"}); err != nil {
+	if err := app.execute(context.Background(), []string{"help", "train", "tiny-gpt"}); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 
@@ -126,9 +126,9 @@ func TestNestedHelpContainsTinyGPTCorpusWorkflow(t *testing.T) {
 
 func TestHelpAfterRunPassthroughSeparatorReachesExperiment(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	app := &App{Stdout: &stdout, Stderr: &stderr}
+	app := &app{Stdout: &stdout, Stderr: &stderr}
 
-	if err := app.Run(context.Background(), []string{"--zig", "/bin/echo", "run", "tiny-gpt", "--", "--help"}); err != nil {
+	if err := app.execute(context.Background(), []string{"--zig", "/bin/echo", "run", "tiny-gpt", "--", "--help"}); err != nil {
 		t.Fatalf("Run() error = %v\nstderr:\n%s", err, stderr.String())
 	}
 	if strings.Contains(stdout.String(), "Usage: nnctl run tiny-gpt") {
@@ -165,9 +165,9 @@ func TestCompletionScripts(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
-			app := &App{Stdout: &stdout, Stderr: &stderr}
+			app := &app{Stdout: &stdout, Stderr: &stderr}
 
-			if err := app.Run(context.Background(), tt.args); err != nil {
+			if err := app.execute(context.Background(), tt.args); err != nil {
 				t.Fatalf("Run() error = %v\nstderr:\n%s", err, stderr.String())
 			}
 			for _, want := range tt.want {
@@ -184,9 +184,9 @@ func TestCompletionScripts(t *testing.T) {
 
 func TestCompletionDoesNotResolveRepo(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	app := &App{Stdout: &stdout, Stderr: &stderr}
+	app := &app{Stdout: &stdout, Stderr: &stderr}
 
-	if err := app.Run(context.Background(), []string{"--repo", "/definitely/not/zig-nn", "completion", "bash"}); err != nil {
+	if err := app.execute(context.Background(), []string{"--repo", "/definitely/not/zig-nn", "completion", "bash"}); err != nil {
 		t.Fatalf("Run() error = %v\nstderr:\n%s", err, stderr.String())
 	}
 	if !strings.Contains(stdout.String(), "# bash completion V2 for nnctl") {

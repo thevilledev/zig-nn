@@ -24,7 +24,7 @@ func TestPrepareSpeechCommandsExtractsIdempotentlyAndForcesReplacement(t *testin
 
 	destination := filepath.Join(t.TempDir(), "mini_speech_commands")
 	var stdout bytes.Buffer
-	app := &App{Stdout: &stdout}
+	app := &app{Stdout: &stdout}
 	if err := app.prepareSpeechCommands(context.Background(), server.URL, destination, false); err != nil {
 		t.Fatalf("prepareSpeechCommands() error = %v", err)
 	}
@@ -71,7 +71,7 @@ func TestPrepareSpeechCommandsRejectsTraversal(t *testing.T) {
 	}))
 	defer server.Close()
 
-	app := &App{}
+	app := &app{}
 	destination := filepath.Join(t.TempDir(), "mini_speech_commands")
 	err = app.prepareSpeechCommands(context.Background(), server.URL, destination, false)
 	if err == nil || !strings.Contains(err.Error(), "unsafe zip entry") {
@@ -84,7 +84,7 @@ func TestPrepareSpeechCommandsRejectsTraversal(t *testing.T) {
 
 func TestRunDataTinyGPTUsesExperimentsPath(t *testing.T) {
 	repoRoot := t.TempDir()
-	app := &App{repoRoot: repoRoot}
+	app := &app{repoRoot: repoRoot}
 	err := app.runDataTinyGPT(context.Background())
 	want := filepath.Join(repoRoot, "experiments", "tiny_gpt", "scripts", "prepare_data.sh")
 	if err == nil || !strings.Contains(err.Error(), want) {

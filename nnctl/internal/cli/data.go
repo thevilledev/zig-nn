@@ -32,7 +32,7 @@ var mnistFiles = []mnistFile{
 	{Name: "t10k-labels-idx1-ubyte", URL: "https://storage.googleapis.com/cvdf-datasets/mnist/t10k-labels-idx1-ubyte.gz"},
 }
 
-func (a *App) runDataMNIST(ctx context.Context, dir string, force bool) error {
+func (a *app) runDataMNIST(ctx context.Context, dir string, force bool) error {
 	if !filepath.IsAbs(dir) {
 		dir = filepath.Join(a.repoRoot, dir)
 	}
@@ -47,7 +47,7 @@ func (a *App) runDataMNIST(ctx context.Context, dir string, force bool) error {
 	return nil
 }
 
-func (a *App) runDataTinyGPT(ctx context.Context) error {
+func (a *app) runDataTinyGPT(ctx context.Context) error {
 	script := filepath.Join(a.repoRoot, "experiments", "tiny_gpt", "scripts", "prepare_data.sh")
 	if !repo.FileExists(script) {
 		return fmt.Errorf("missing Tiny GPT data script at %s", script)
@@ -55,14 +55,14 @@ func (a *App) runDataTinyGPT(ctx context.Context) error {
 	return a.run(ctx, a.repoRoot, script)
 }
 
-func (a *App) runDataSpeechCommands(ctx context.Context, dir string, force bool) error {
+func (a *app) runDataSpeechCommands(ctx context.Context, dir string, force bool) error {
 	if !filepath.IsAbs(dir) {
 		dir = filepath.Join(a.repoRoot, dir)
 	}
 	return a.prepareSpeechCommands(ctx, miniSpeechCommandsURL, dir, force)
 }
 
-func (a *App) prepareSpeechCommands(ctx context.Context, url, dir string, force bool) error {
+func (a *app) prepareSpeechCommands(ctx context.Context, url, dir string, force bool) error {
 	if err := validateSpeechCommandsDir(dir); err == nil && !force {
 		fmt.Fprintf(a.stdout(), "exists %s\n", filepath.Base(dir))
 		return nil
@@ -240,7 +240,7 @@ func replaceDirectory(source, destination string, force bool) error {
 	return nil
 }
 
-func (a *App) downloadGzip(ctx context.Context, url, dest string, force bool) error {
+func (a *app) downloadGzip(ctx context.Context, url, dest string, force bool) error {
 	if !force {
 		if _, err := os.Stat(dest); err == nil {
 			fmt.Fprintf(a.stdout(), "exists %s\n", filepath.Base(dest))

@@ -45,7 +45,7 @@ func defaultBenchmarkOptions() benchmarkOptions {
 	}
 }
 
-func (a *App) runBenchmark(ctx context.Context, opts benchmarkOptions) error {
+func (a *app) runBenchmark(ctx context.Context, opts benchmarkOptions) error {
 	if opts.csv && opts.compare != "" {
 		return fmt.Errorf("--csv cannot be used with --compare")
 	}

@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	verdacloud "nnctl/internal/cloud/verda"
+	"nnctl/internal/cloud/verda"
 	"nnctl/internal/zig"
 )
 
@@ -44,7 +44,7 @@ const (
 )
 
 type cloudBenchmarkDeployOptions struct {
-	verdacloud.DeployOptions
+	verda.DeployOptions
 	packerDir             string
 	packer                string
 	packerInstanceType    string
@@ -71,10 +71,10 @@ type cloudBenchmarkDeployOptions struct {
 }
 
 type cloudBenchmarkClient interface {
-	verdacloud.Client
-	verdacloud.DestroyClient
-	ListInstances(context.Context, string) ([]verdacloud.Instance, error)
-	ListSSHKeys(context.Context) ([]verdacloud.SSHKey, error)
+	verda.Client
+	verda.DestroyClient
+	ListInstances(context.Context, string) ([]verda.Instance, error)
+	ListSSHKeys(context.Context) ([]verda.SSHKey, error)
 }
 
 type cloudBenchmarkMetadata struct {
@@ -118,7 +118,7 @@ func (p *cloudBenchmarkProgress) detail(format string, args ...any) {
 }
 
 func defaultCloudBenchmarkDeployOptions() cloudBenchmarkDeployOptions {
-	deployOpts := verdacloud.DefaultDeployOptions("")
+	deployOpts := verda.DefaultDeployOptions("")
 	deployOpts.Image = defaultCloudBenchmarkPackerImage
 	return cloudBenchmarkDeployOptions{
 		DeployOptions:      deployOpts,
@@ -138,7 +138,7 @@ func defaultCloudBenchmarkDeployOptions() cloudBenchmarkDeployOptions {
 	}
 }
 
-func (a *App) runCloudBenchmarkDeploy(ctx context.Context, opts cloudBenchmarkDeployOptions) (runErr error) {
+func (a *app) runCloudBenchmarkDeploy(ctx context.Context, opts cloudBenchmarkDeployOptions) (runErr error) {
 	if err := normalizeCloudBenchmarkDeployOptions(&opts); err != nil {
 		return err
 	}
@@ -204,7 +204,7 @@ func (a *App) runCloudBenchmarkDeploy(ctx context.Context, opts cloudBenchmarkDe
 
 	progress.phase(cloudBenchmarkPhaseDeploy, "Deploy cloud worker")
 	progress.detail("Instance: %s, market: %s, location: %s", opts.InstanceType, opts.Market, opts.LocationCode)
-	result, err := verdacloud.Deploy(ctx, client, opts.DeployOptions)
+	result, err := verda.Deploy(ctx, client, opts.DeployOptions)
 	if err != nil {
 		return err
 	}
@@ -310,7 +310,7 @@ func (a *App) runCloudBenchmarkDeploy(ctx context.Context, opts cloudBenchmarkDe
 	metadata := cloudBenchmarkMetadata{
 		Timestamp:      stamp,
 		Commit:         commit,
-		Provider:       verdacloud.ProviderName,
+		Provider:       verda.ProviderName,
 		InstanceID:     instanceID,
 		InstanceType:   opts.InstanceType,
 		Location:       firstNonEmpty(instance.Location, sourceVolume.Location),
@@ -379,7 +379,7 @@ func normalizeCloudBenchmarkDeployOptions(opts *cloudBenchmarkDeployOptions) err
 	if opts.SourceOSVolumeID == "" && opts.SourceOSVolumeName == "" {
 		opts.SourceOSVolumeName = defaultCloudBenchmarkSourceName
 	}
-	if opts.Market != verdacloud.PricingMarketSpot && opts.Market != verdacloud.PricingMarketOnDemand {
+	if opts.Market != verda.PricingMarketSpot && opts.Market != verda.PricingMarketOnDemand {
 		return fmt.Errorf("benchmark deploy market must be spot or on-demand")
 	}
 	switch opts.backend {
@@ -402,37 +402,37 @@ func normalizeCloudBenchmarkDeployOptions(opts *cloudBenchmarkDeployOptions) err
 	if opts.updateDocs && opts.docsPath == "" {
 		return fmt.Errorf("--docs must not be empty with --update-docs")
 	}
-	if err := verdacloud.ValidateSSHKeyIDs(opts.SSHKeyIDs); err != nil {
+	if err := verda.ValidateSSHKeyIDs(opts.SSHKeyIDs); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (a *App) prepareCloudBenchmarkSourceVolume(
+func (a *app) prepareCloudBenchmarkSourceVolume(
 	ctx context.Context,
 	client cloudBenchmarkClient,
-	creds verdacloud.Credentials,
+	creds verda.Credentials,
 	packerDir string,
 	workflowDir string,
 	opts *cloudBenchmarkDeployOptions,
 	progress *cloudBenchmarkProgress,
-) (verdacloud.Volume, error) {
+) (verda.Volume, error) {
 	if opts.SourceOSVolumeID != "" {
 		volume, err := client.GetVolume(ctx, opts.SourceOSVolumeID)
 		if err != nil {
-			return verdacloud.Volume{}, fmt.Errorf("get source Verda OS volume %s: %w", opts.SourceOSVolumeID, err)
+			return verda.Volume{}, fmt.Errorf("get source Verda OS volume %s: %w", opts.SourceOSVolumeID, err)
 		}
 		return normalizeCloudBenchmarkSourceVolume(volume)
 	}
 
-	placements, err := client.GetPlacementOptions(ctx, opts.InstanceType, opts.Market == verdacloud.PricingMarketSpot)
+	placements, err := client.GetPlacementOptions(ctx, opts.InstanceType, opts.Market == verda.PricingMarketSpot)
 	if err != nil {
-		return verdacloud.Volume{}, fmt.Errorf("list Verda %s placements for %q: %w", opts.Market, opts.InstanceType, err)
+		return verda.Volume{}, fmt.Errorf("list Verda %s placements for %q: %w", opts.Market, opts.InstanceType, err)
 	}
 	sortCloudBenchmarkPlacements(placements)
 	volumes, err := client.ListVolumes(ctx)
 	if err != nil {
-		return verdacloud.Volume{}, fmt.Errorf("list Verda volumes: %w", err)
+		return verda.Volume{}, fmt.Errorf("list Verda volumes: %w", err)
 	}
 	if opts.LocationCode == "" {
 		for _, placement := range placements {
@@ -443,7 +443,7 @@ func (a *App) prepareCloudBenchmarkSourceVolume(
 	}
 	targetLocation, err := cloudBenchmarkTargetLocation(opts.LocationCode, placements)
 	if err != nil {
-		return verdacloud.Volume{}, err
+		return verda.Volume{}, err
 	}
 	if source, ok := reusableCloudBenchmarkSourceVolume(volumes, opts.SourceOSVolumeName, targetLocation); ok {
 		return source, nil
@@ -453,22 +453,22 @@ func (a *App) prepareCloudBenchmarkSourceVolume(
 	progress.detail("Building a golden volume with Packer")
 	keysFile, err := a.cloudBenchmarkAuthorizedKeysFile(ctx, client, workflowDir, opts.authorizedKeysFile, opts.SSHKeyIDs)
 	if err != nil {
-		return verdacloud.Volume{}, err
+		return verda.Volume{}, err
 	}
 	templatePath := filepath.Join(packerDir, "ubuntu.pkr.hcl")
 	buildArgs, err := cloudBenchmarkPackerBuildArgs(templatePath, keysFile, *opts, targetLocation)
 	if err != nil {
-		return verdacloud.Volume{}, err
+		return verda.Volume{}, err
 	}
 	packerEnv := environmentWith(os.Environ(), map[string]string{
 		"VERDA_CLIENT_ID":     creds.ClientID,
 		"VERDA_CLIENT_SECRET": creds.ClientSecret,
 	})
 	if err := a.runCloudBenchmarkCommand(ctx, packerDir, packerEnv, opts.packer, "init", "."); err != nil {
-		return verdacloud.Volume{}, err
+		return verda.Volume{}, err
 	}
 	if err := a.runCloudBenchmarkCommand(ctx, packerDir, packerEnv, opts.packer, buildArgs...); err != nil {
-		return verdacloud.Volume{}, err
+		return verda.Volume{}, err
 	}
 
 	deadline := time.Now().Add(opts.timeout)
@@ -481,21 +481,21 @@ func (a *App) prepareCloudBenchmarkSourceVolume(
 		}
 		if time.Now().After(deadline) {
 			if listErr != nil {
-				return verdacloud.Volume{}, fmt.Errorf("wait for Packer OS volume %q in %s: %w", opts.SourceOSVolumeName, targetLocation, listErr)
+				return verda.Volume{}, fmt.Errorf("wait for Packer OS volume %q in %s: %w", opts.SourceOSVolumeName, targetLocation, listErr)
 			}
-			return verdacloud.Volume{}, fmt.Errorf("packer completed but OS volume %q did not appear in %s", opts.SourceOSVolumeName, targetLocation)
+			return verda.Volume{}, fmt.Errorf("packer completed but OS volume %q did not appear in %s", opts.SourceOSVolumeName, targetLocation)
 		}
 		timer := time.NewTimer(opts.pollInterval)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return verdacloud.Volume{}, ctx.Err()
+			return verda.Volume{}, ctx.Err()
 		case <-timer.C:
 		}
 	}
 }
 
-func (a *App) cloudBenchmarkAuthorizedKeysFile(ctx context.Context, client cloudBenchmarkClient, workflowDir, configured string, ids []string) (string, error) {
+func (a *app) cloudBenchmarkAuthorizedKeysFile(ctx context.Context, client cloudBenchmarkClient, workflowDir, configured string, ids []string) (string, error) {
 	if strings.TrimSpace(configured) != "" {
 		path, err := filepath.Abs(configured)
 		if err != nil {
@@ -514,7 +514,7 @@ func (a *App) cloudBenchmarkAuthorizedKeysFile(ctx context.Context, client cloud
 	if err != nil {
 		return "", fmt.Errorf("list Verda SSH keys for Packer image: %w", err)
 	}
-	byID := make(map[string]verdacloud.SSHKey, len(keys))
+	byID := make(map[string]verda.SSHKey, len(keys))
 	for _, key := range keys {
 		byID[strings.TrimSpace(key.ID)] = key
 	}
@@ -543,7 +543,7 @@ func ensureCloudPackerTemplate(outputDir string, force bool) ([]string, error) {
 		return nil, fmt.Errorf("create Packer template directory: %w", err)
 	}
 	var written []string
-	for _, file := range verdacloud.PackerTemplateFiles() {
+	for _, file := range verda.PackerTemplateFiles() {
 		path := filepath.Join(outputDir, file.Path)
 		current, err := os.ReadFile(path)
 		if err == nil && !force {
@@ -577,7 +577,7 @@ func cloudBenchmarkPackerBuildArgs(templatePath, keysFile string, opts cloudBenc
 	}
 	needsConfigurableTemplate := opts.SourceOSVolumeName != defaultCloudBenchmarkSourceName ||
 		(targetLocation != cloudBenchmarkPackerBuildLocation && targetLocation != cloudBenchmarkPackerArtifactLocation) ||
-		opts.Market != verdacloud.PricingMarketSpot ||
+		opts.Market != verda.PricingMarketSpot ||
 		strings.TrimSpace(opts.BaseURL) != ""
 	if needsConfigurableTemplate {
 		required := []string{`variable "artifact_volume_name"`, `variable "build_location_code"`, `variable "build_market"`, `variable "artifact_volume_location_codes"`, `variable "base_url"`}
@@ -597,8 +597,8 @@ func cloudBenchmarkPackerBuildArgs(templatePath, keysFile string, opts cloudBenc
 	return append(args, "."), nil
 }
 
-func reusableCloudBenchmarkSourceVolume(volumes []verdacloud.Volume, name, location string) (verdacloud.Volume, bool) {
-	var matches []verdacloud.Volume
+func reusableCloudBenchmarkSourceVolume(volumes []verda.Volume, name, location string) (verda.Volume, bool) {
+	var matches []verda.Volume
 	for _, volume := range volumes {
 		if strings.TrimSpace(volume.Name) != name || !volume.IsOSVolume || !strings.EqualFold(volume.Location, location) || cloudBenchmarkVolumeDeleted(volume) {
 			continue
@@ -609,7 +609,7 @@ func reusableCloudBenchmarkSourceVolume(volumes []verdacloud.Volume, name, locat
 		}
 	}
 	if len(matches) == 0 {
-		return verdacloud.Volume{}, false
+		return verda.Volume{}, false
 	}
 	sort.SliceStable(matches, func(i, j int) bool {
 		if matches[i].CreatedAt != matches[j].CreatedAt {
@@ -620,17 +620,17 @@ func reusableCloudBenchmarkSourceVolume(volumes []verdacloud.Volume, name, locat
 	return matches[0], true
 }
 
-func normalizeCloudBenchmarkSourceVolume(volume verdacloud.Volume) (verdacloud.Volume, error) {
+func normalizeCloudBenchmarkSourceVolume(volume verda.Volume) (verda.Volume, error) {
 	volume.ID = strings.TrimSpace(volume.ID)
 	volume.Name = strings.TrimSpace(volume.Name)
 	volume.Location = strings.ToUpper(strings.TrimSpace(volume.Location))
 	if volume.ID == "" || volume.Location == "" {
-		return verdacloud.Volume{}, fmt.Errorf("source OS volume did not report an ID and location")
+		return verda.Volume{}, fmt.Errorf("source OS volume did not report an ID and location")
 	}
 	return volume, nil
 }
 
-func cloudBenchmarkVolumeDeleted(volume verdacloud.Volume) bool {
+func cloudBenchmarkVolumeDeleted(volume verda.Volume) bool {
 	if volume.IsPermanentlyDeleted || strings.TrimSpace(volume.DeletedAt) != "" {
 		return true
 	}
@@ -642,7 +642,7 @@ func cloudBenchmarkVolumeDeleted(volume verdacloud.Volume) bool {
 	}
 }
 
-func sortCloudBenchmarkPlacements(placements []verdacloud.SpotPlacement) {
+func sortCloudBenchmarkPlacements(placements []verda.SpotPlacement) {
 	sort.SliceStable(placements, func(i, j int) bool {
 		left, right := placements[i], placements[j]
 		if left.PriceKnown != right.PriceKnown {
@@ -655,7 +655,7 @@ func sortCloudBenchmarkPlacements(placements []verdacloud.SpotPlacement) {
 	})
 }
 
-func cloudBenchmarkTargetLocation(requested string, placements []verdacloud.SpotPlacement) (string, error) {
+func cloudBenchmarkTargetLocation(requested string, placements []verda.SpotPlacement) (string, error) {
 	requested = strings.ToUpper(strings.TrimSpace(requested))
 	if requested != "" {
 		for _, placement := range placements {
@@ -671,12 +671,12 @@ func cloudBenchmarkTargetLocation(requested string, placements []verdacloud.Spot
 	return strings.ToUpper(strings.TrimSpace(placements[0].LocationCode)), nil
 }
 
-func waitForCloudBenchmarkInstance(ctx context.Context, client cloudBenchmarkClient, instanceID string, timeout, poll time.Duration) (verdacloud.Instance, error) {
+func waitForCloudBenchmarkInstance(ctx context.Context, client cloudBenchmarkClient, instanceID string, timeout, poll time.Duration) (verda.Instance, error) {
 	deadline := time.Now().Add(timeout)
 	for {
 		instances, err := client.ListInstances(ctx, "")
 		if err != nil {
-			return verdacloud.Instance{}, fmt.Errorf("list Verda instances while waiting for %s: %w", instanceID, err)
+			return verda.Instance{}, fmt.Errorf("list Verda instances while waiting for %s: %w", instanceID, err)
 		}
 		for _, instance := range instances {
 			if instance.ID != instanceID {
@@ -684,20 +684,20 @@ func waitForCloudBenchmarkInstance(ctx context.Context, client cloudBenchmarkCli
 			}
 			status := strings.ToLower(strings.TrimSpace(instance.Status))
 			if cloudBenchmarkInstanceFailed(status) {
-				return verdacloud.Instance{}, fmt.Errorf("benchmark instance %s entered terminal status %q", instanceID, instance.Status)
+				return verda.Instance{}, fmt.Errorf("benchmark instance %s entered terminal status %q", instanceID, instance.Status)
 			}
 			if status == "running" && instance.IP != nil && strings.TrimSpace(*instance.IP) != "" {
 				return instance, nil
 			}
 		}
 		if time.Now().After(deadline) {
-			return verdacloud.Instance{}, fmt.Errorf("timed out waiting for benchmark instance %s to be running with an IP", instanceID)
+			return verda.Instance{}, fmt.Errorf("timed out waiting for benchmark instance %s to be running with an IP", instanceID)
 		}
 		timer := time.NewTimer(poll)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return verdacloud.Instance{}, ctx.Err()
+			return verda.Instance{}, ctx.Err()
 		case <-timer.C:
 		}
 	}
@@ -769,7 +769,7 @@ func remoteBenchmarkMetadataCommand() string {
 		"if command -v nvidia-smi >/dev/null 2>&1; then nvidia-smi --query-gpu=name,memory.total,compute_cap,driver_version --format=csv,noheader,nounits | sed 's/^/nvidia=/'; fi"
 }
 
-func (a *App) runCloudBenchmarkSSH(ctx context.Context, ssh string, baseArgs []string, host, remoteCommand string, stdout io.Writer) error {
+func (a *app) runCloudBenchmarkSSH(ctx context.Context, ssh string, baseArgs []string, host, remoteCommand string, stdout io.Writer) error {
 	args := append(append([]string{}, baseArgs...), host, remoteCommand)
 	fmt.Fprintf(a.stderr(), "==> %s\n", zig.CommandString(ssh, args))
 	cmd := exec.CommandContext(ctx, ssh, args...)
@@ -782,7 +782,7 @@ func (a *App) runCloudBenchmarkSSH(ctx context.Context, ssh string, baseArgs []s
 	return nil
 }
 
-func (a *App) captureCloudBenchmarkSSH(ctx context.Context, ssh string, baseArgs []string, host, remoteCommand string) ([]byte, error) {
+func (a *app) captureCloudBenchmarkSSH(ctx context.Context, ssh string, baseArgs []string, host, remoteCommand string) ([]byte, error) {
 	args := append(append([]string{}, baseArgs...), host, remoteCommand)
 	fmt.Fprintf(a.stderr(), "==> %s\n", zig.CommandString(ssh, args))
 	cmd := exec.CommandContext(ctx, ssh, args...)
@@ -797,7 +797,7 @@ func (a *App) captureCloudBenchmarkSSH(ctx context.Context, ssh string, baseArgs
 	return output, nil
 }
 
-func (a *App) runCloudBenchmarkCommand(ctx context.Context, dir string, env []string, name string, args ...string) error {
+func (a *app) runCloudBenchmarkCommand(ctx context.Context, dir string, env []string, name string, args ...string) error {
 	fmt.Fprintf(a.stderr(), "==> %s\n", zig.CommandString(name, args))
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
@@ -816,7 +816,7 @@ func cleanupCloudBenchmark(ctx context.Context, client cloudBenchmarkClient, bas
 	if strings.TrimSpace(cloneID) != "" {
 		volumeIDs = []string{cloneID}
 	}
-	_, err := verdacloud.Destroy(ctx, client, verdacloud.DestroyOptions{
+	_, err := verda.Destroy(ctx, client, verda.DestroyOptions{
 		InstanceIDs:       []string{instanceID},
 		VolumeIDs:         volumeIDs,
 		SourceOSVolumeID:  sourceID,

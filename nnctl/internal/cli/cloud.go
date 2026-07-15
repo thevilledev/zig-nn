@@ -10,11 +10,11 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	verdacloud "nnctl/internal/cloud/verda"
+	"nnctl/internal/cloud/verda"
 )
 
 type cloudDeployOptions struct {
-	verdacloud.DeployOptions
+	verda.DeployOptions
 	userDataFile string
 	jsonOutput   bool
 }
@@ -25,14 +25,14 @@ type cloudSSHKeysOptions struct {
 }
 
 type cloudVolumesOptions struct {
-	verdacloud.PurgeVolumesOptions
+	verda.PurgeVolumesOptions
 	includeDeleted bool
 	purge          bool
 	jsonOutput     bool
 }
 
 type cloudDestroyOptions struct {
-	verdacloud.DestroyOptions
+	verda.DestroyOptions
 	jsonOutput bool
 }
 
@@ -48,7 +48,7 @@ type cloudListOptions struct {
 }
 
 type cloudPricingOptions struct {
-	filters    verdacloud.PricingFilters
+	filters    verda.PricingFilters
 	zones      []string
 	gpuCounts  []int
 	singleGPU  bool
@@ -58,27 +58,27 @@ type cloudPricingOptions struct {
 	jsonOutput bool
 }
 
-func (a *App) newVerdaSDKClient(ctx context.Context, baseURL string) (*verdacloud.SDKClient, error) {
+func (a *app) newVerdaSDKClient(ctx context.Context, baseURL string) (*verda.SDKClient, error) {
 	client, _, err := a.newVerdaSDKClientWithCredentials(ctx, baseURL)
 	return client, err
 }
 
-func (a *App) newVerdaSDKClientWithCredentials(ctx context.Context, baseURL string) (*verdacloud.SDKClient, verdacloud.Credentials, error) {
-	creds, err := (verdacloud.KeyringCredentialStore{}).Credentials(ctx)
+func (a *app) newVerdaSDKClientWithCredentials(ctx context.Context, baseURL string) (*verda.SDKClient, verda.Credentials, error) {
+	creds, err := (verda.KeyringCredentialStore{}).Credentials(ctx)
 	if err != nil {
-		return nil, verdacloud.Credentials{}, err
+		return nil, verda.Credentials{}, err
 	}
-	client, err := verdacloud.NewSDKClient(creds, verdacloud.ClientOptions{
+	client, err := verda.NewSDKClient(creds, verda.ClientOptions{
 		BaseURL:   baseURL,
 		UserAgent: "nnctl",
 	})
 	if err != nil {
-		return nil, verdacloud.Credentials{}, fmt.Errorf("create Verda client: %w", err)
+		return nil, verda.Credentials{}, fmt.Errorf("create Verda client: %w", err)
 	}
 	return client, creds, nil
 }
 
-func (a *App) runCloudDeploy(ctx context.Context, opts cloudDeployOptions) error {
+func (a *app) runCloudDeploy(ctx context.Context, opts cloudDeployOptions) error {
 	deployOpts := opts.DeployOptions
 	if opts.userDataFile != "" {
 		script, err := os.ReadFile(opts.userDataFile)
@@ -88,7 +88,7 @@ func (a *App) runCloudDeploy(ctx context.Context, opts cloudDeployOptions) error
 		deployOpts.UserDataScript = string(script)
 	}
 
-	var client verdacloud.Client
+	var client verda.Client
 	if !deployOpts.DryRun {
 		sdkClient, err := a.newVerdaSDKClient(ctx, deployOpts.BaseURL)
 		if err != nil {
@@ -97,14 +97,14 @@ func (a *App) runCloudDeploy(ctx context.Context, opts cloudDeployOptions) error
 		client = sdkClient
 	}
 
-	result, err := verdacloud.Deploy(ctx, client, deployOpts)
+	result, err := verda.Deploy(ctx, client, deployOpts)
 	if err != nil {
 		return err
 	}
 	return a.printCloudDeployResult(result, opts.jsonOutput)
 }
 
-func (a *App) runCloudSSHKeys(ctx context.Context, opts cloudSSHKeysOptions) error {
+func (a *app) runCloudSSHKeys(ctx context.Context, opts cloudSSHKeysOptions) error {
 	client, err := a.newVerdaSDKClient(ctx, opts.baseURL)
 	if err != nil {
 		return err
@@ -116,9 +116,9 @@ func (a *App) runCloudSSHKeys(ctx context.Context, opts cloudSSHKeysOptions) err
 	return a.printCloudSSHKeys(keys, opts.jsonOutput)
 }
 
-func (a *App) runCloudVolumes(ctx context.Context, opts cloudVolumesOptions) error {
+func (a *app) runCloudVolumes(ctx context.Context, opts cloudVolumesOptions) error {
 	if opts.purge || opts.AllDeleted {
-		var client verdacloud.VolumePurgeClient
+		var client verda.VolumePurgeClient
 		if !opts.DryRun {
 			sdkClient, err := a.newVerdaSDKClient(ctx, opts.BaseURL)
 			if err != nil {
@@ -127,7 +127,7 @@ func (a *App) runCloudVolumes(ctx context.Context, opts cloudVolumesOptions) err
 			client = sdkClient
 		}
 
-		result, err := verdacloud.PurgeVolumes(ctx, client, opts.PurgeVolumesOptions)
+		result, err := verda.PurgeVolumes(ctx, client, opts.PurgeVolumesOptions)
 		if err != nil {
 			return err
 		}
@@ -138,7 +138,7 @@ func (a *App) runCloudVolumes(ctx context.Context, opts cloudVolumesOptions) err
 	if err != nil {
 		return err
 	}
-	volumes, err := verdacloud.ListVolumes(ctx, client, verdacloud.ListVolumesOptions{
+	volumes, err := verda.ListVolumes(ctx, client, verda.ListVolumesOptions{
 		IncludeDeleted: opts.includeDeleted,
 	})
 	if err != nil {
@@ -147,8 +147,8 @@ func (a *App) runCloudVolumes(ctx context.Context, opts cloudVolumesOptions) err
 	return a.printCloudVolumes(volumes, opts.jsonOutput)
 }
 
-func (a *App) runCloudDestroy(ctx context.Context, opts cloudDestroyOptions) error {
-	var client verdacloud.DestroyClient
+func (a *app) runCloudDestroy(ctx context.Context, opts cloudDestroyOptions) error {
+	var client verda.DestroyClient
 	if !opts.DryRun {
 		sdkClient, err := a.newVerdaSDKClient(ctx, opts.BaseURL)
 		if err != nil {
@@ -157,14 +157,14 @@ func (a *App) runCloudDestroy(ctx context.Context, opts cloudDestroyOptions) err
 		client = sdkClient
 	}
 
-	result, err := verdacloud.Destroy(ctx, client, opts.DestroyOptions)
+	result, err := verda.Destroy(ctx, client, opts.DestroyOptions)
 	if err != nil {
 		return err
 	}
 	return a.printCloudDestroyResult(result, opts.jsonOutput)
 }
 
-func (a *App) runCloudPackerTemplate(outputDir string, opts cloudPackerTemplateOptions) error {
+func (a *app) runCloudPackerTemplate(outputDir string, opts cloudPackerTemplateOptions) error {
 	written, err := writeCloudPackerTemplate(outputDir, opts.force)
 	if err != nil {
 		return err
@@ -175,7 +175,7 @@ func (a *App) runCloudPackerTemplate(outputDir string, opts cloudPackerTemplateO
 	return nil
 }
 
-func (a *App) runCloudList(ctx context.Context, opts cloudListOptions) error {
+func (a *app) runCloudList(ctx context.Context, opts cloudListOptions) error {
 	client, err := a.newVerdaSDKClient(ctx, opts.baseURL)
 	if err != nil {
 		return err
@@ -200,7 +200,7 @@ func writeCloudPackerTemplate(outputDir string, force bool) ([]string, error) {
 	}
 
 	var written []string
-	for _, file := range verdacloud.PackerTemplateFiles() {
+	for _, file := range verda.PackerTemplateFiles() {
 		path := filepath.Join(outputDir, file.Path)
 		flag := os.O_WRONLY | os.O_CREATE
 		if force {
@@ -227,9 +227,9 @@ func writeCloudPackerTemplate(outputDir string, force bool) ([]string, error) {
 	return written, nil
 }
 
-func (a *App) runCloudPricing(ctx context.Context, opts cloudPricingOptions) error {
-	opts.filters = verdacloud.NormalizePricingFilters(opts.filters)
-	if err := verdacloud.ValidatePricingFilters(opts.filters); err != nil {
+func (a *app) runCloudPricing(ctx context.Context, opts cloudPricingOptions) error {
+	opts.filters = verda.NormalizePricingFilters(opts.filters)
+	if err := verda.ValidatePricingFilters(opts.filters); err != nil {
 		return err
 	}
 
@@ -241,11 +241,11 @@ func (a *App) runCloudPricing(ctx context.Context, opts cloudPricingOptions) err
 	if err != nil {
 		return fmt.Errorf("list Verda prices: %w", err)
 	}
-	verdacloud.SortInstancePrices(prices, opts.sortBy)
+	verda.SortInstancePrices(prices, opts.sortBy)
 	return a.printCloudPricing(prices, opts.jsonOutput)
 }
 
-func (a *App) printCloudSSHKeys(keys []verdacloud.SSHKey, jsonOutput bool) error {
+func (a *app) printCloudSSHKeys(keys []verda.SSHKey, jsonOutput bool) error {
 	if jsonOutput {
 		enc := json.NewEncoder(a.stdout())
 		enc.SetIndent("", "  ")
@@ -264,7 +264,7 @@ func (a *App) printCloudSSHKeys(keys []verdacloud.SSHKey, jsonOutput bool) error
 	return w.Flush()
 }
 
-func (a *App) printCloudVolumes(volumes []verdacloud.Volume, jsonOutput bool) error {
+func (a *app) printCloudVolumes(volumes []verda.Volume, jsonOutput bool) error {
 	if jsonOutput {
 		enc := json.NewEncoder(a.stdout())
 		enc.SetIndent("", "  ")
@@ -292,7 +292,7 @@ func (a *App) printCloudVolumes(volumes []verdacloud.Volume, jsonOutput bool) er
 	return w.Flush()
 }
 
-func (a *App) printCloudPurgeResult(result *verdacloud.PurgeVolumesResult, jsonOutput bool) error {
+func (a *app) printCloudPurgeResult(result *verda.PurgeVolumesResult, jsonOutput bool) error {
 	if jsonOutput {
 		enc := json.NewEncoder(a.stdout())
 		enc.SetIndent("", "  ")
@@ -327,7 +327,7 @@ func (a *App) printCloudPurgeResult(result *verdacloud.PurgeVolumesResult, jsonO
 	return nil
 }
 
-func (a *App) printCloudDestroyResult(result *verdacloud.DestroyResult, jsonOutput bool) error {
+func (a *app) printCloudDestroyResult(result *verda.DestroyResult, jsonOutput bool) error {
 	if jsonOutput {
 		enc := json.NewEncoder(a.stdout())
 		enc.SetIndent("", "  ")
@@ -353,7 +353,7 @@ func (a *App) printCloudDestroyResult(result *verdacloud.DestroyResult, jsonOutp
 	return nil
 }
 
-func (a *App) printCloudInstances(instances []verdacloud.Instance, jsonOutput bool) error {
+func (a *app) printCloudInstances(instances []verda.Instance, jsonOutput bool) error {
 	if jsonOutput {
 		enc := json.NewEncoder(a.stdout())
 		enc.SetIndent("", "  ")
@@ -384,7 +384,7 @@ func (a *App) printCloudInstances(instances []verdacloud.Instance, jsonOutput bo
 	return w.Flush()
 }
 
-func (a *App) printCloudPricing(prices []verdacloud.InstancePrice, jsonOutput bool) error {
+func (a *app) printCloudPricing(prices []verda.InstancePrice, jsonOutput bool) error {
 	if jsonOutput {
 		enc := json.NewEncoder(a.stdout())
 		enc.SetIndent("", "  ")
@@ -412,7 +412,7 @@ func (a *App) printCloudPricing(prices []verdacloud.InstancePrice, jsonOutput bo
 	return w.Flush()
 }
 
-func (a *App) printCloudDeployResult(result *verdacloud.DeployResult, jsonOutput bool) error {
+func (a *app) printCloudDeployResult(result *verda.DeployResult, jsonOutput bool) error {
 	if jsonOutput {
 		enc := json.NewEncoder(a.stdout())
 		enc.SetIndent("", "  ")
@@ -501,7 +501,7 @@ func (a *App) printCloudDeployResult(result *verdacloud.DeployResult, jsonOutput
 	return nil
 }
 
-func activeCloudInstances(instances []verdacloud.Instance) []verdacloud.Instance {
+func activeCloudInstances(instances []verda.Instance) []verda.Instance {
 	active := instances[:0]
 	for _, instance := range instances {
 		if isActiveCloudStatus(instance.Status) {
@@ -588,7 +588,7 @@ func sortUniqueInts(values []int) []int {
 	return unique
 }
 
-func formatCloudPrice(price verdacloud.InstancePrice) string {
+func formatCloudPrice(price verda.InstancePrice) string {
 	if !price.PriceKnown {
 		return "-"
 	}

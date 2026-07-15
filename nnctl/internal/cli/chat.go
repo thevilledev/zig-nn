@@ -46,7 +46,7 @@ func defaultChatOptions() chatOptions {
 	}
 }
 
-func (a *App) runChat(ctx context.Context, opts chatOptions) error {
+func (a *app) runChat(ctx context.Context, opts chatOptions) error {
 	if opts.modelPath == "" && !opts.allowUntrained {
 		return fmt.Errorf("chat requires --model <checkpoint> or --allow-untrained")
 	}
