@@ -6,7 +6,10 @@ pub const QuantizationError = error{
     EmptyInput,
     InvalidBitWidth,
     DimensionMismatch,
+    DimensionOverflow,
     InvalidPayloadBits,
+    NonFiniteInput,
+    RangeOverflow,
 };
 
 pub const VectorMetrics = struct {
@@ -79,7 +82,7 @@ pub fn encodeUniformScalar(
     try validateInput(input, bits);
 
     const range = findRange(input);
-    const scale = quantizationScale(range.min, range.max, bits);
+    const scale = try quantizationScale(range.min, range.max, bits);
     const codes = try encodeCodes(allocator, input, range.min, scale, bits);
     errdefer allocator.free(codes);
 
@@ -102,9 +105,10 @@ pub fn encodeTurboQuant(
 
     const rotated = try randomHadamardTransform(allocator, input, seed);
     defer allocator.free(rotated);
+    try validateFinite(rotated);
 
     const range = findRange(rotated);
-    const scale = quantizationScale(range.min, range.max, bits);
+    const scale = try quantizationScale(range.min, range.max, bits);
     const codes = try encodeCodes(allocator, rotated, range.min, scale, bits);
     errdefer allocator.free(codes);
 
@@ -129,39 +133,61 @@ pub fn measureVectorError(
     if (original.len == 0) return QuantizationError.EmptyInput;
     if (original.len != decoded.len) return QuantizationError.DimensionMismatch;
     if (quantized_bits == 0) return QuantizationError.InvalidPayloadBits;
+    try validateFinite(original);
+    try validateFinite(decoded);
     if (query) |q| {
         if (q.len != original.len) return QuantizationError.DimensionMismatch;
+        try validateFinite(q);
     }
 
-    var sum_sq: f64 = 0.0;
     var max_abs_error: f64 = 0.0;
+    var original_scale: f64 = 0.0;
+    var decoded_scale: f64 = 0.0;
+    for (original, decoded) |source, reconstructed| {
+        const diff = source - reconstructed;
+        if (!std.math.isFinite(diff)) return QuantizationError.RangeOverflow;
+        max_abs_error = @max(max_abs_error, @abs(diff));
+        original_scale = @max(original_scale, @abs(source));
+        decoded_scale = @max(decoded_scale, @abs(reconstructed));
+    }
+
+    var scaled_error_sum: f64 = 0.0;
     var original_norm: f64 = 0.0;
     var decoded_norm: f64 = 0.0;
     var cross_norm: f64 = 0.0;
-    var original_inner: f64 = 0.0;
-    var decoded_inner: f64 = 0.0;
+    var inner_product_delta: f64 = 0.0;
 
     for (original, decoded, 0..) |source, reconstructed, i| {
         const diff = source - reconstructed;
-        const abs_error = @abs(diff);
-        sum_sq += diff * diff;
-        max_abs_error = @max(max_abs_error, abs_error);
-        original_norm += source * source;
-        decoded_norm += reconstructed * reconstructed;
-        cross_norm += source * reconstructed;
+        if (max_abs_error != 0) {
+            const scaled_error = diff / max_abs_error;
+            scaled_error_sum += scaled_error * scaled_error;
+        }
+        const scaled_original = if (original_scale == 0) 0 else source / original_scale;
+        const scaled_decoded = if (decoded_scale == 0) 0 else reconstructed / decoded_scale;
+        original_norm += scaled_original * scaled_original;
+        decoded_norm += scaled_decoded * scaled_decoded;
+        cross_norm += scaled_original * scaled_decoded;
 
         const q = if (query) |provided| provided[i] else source;
-        original_inner += q * source;
-        decoded_inner += q * reconstructed;
+        const inner_product_term = q * diff;
+        if (!std.math.isFinite(inner_product_term)) return QuantizationError.RangeOverflow;
+        inner_product_delta += inner_product_term;
+        if (!std.math.isFinite(inner_product_delta)) return QuantizationError.RangeOverflow;
     }
 
-    const original_bits = original.len * 64;
+    const count: f64 = @floatFromInt(original.len);
+    const root_mean_error = max_abs_error * @sqrt(scaled_error_sum / count);
+    const mse = root_mean_error * root_mean_error;
+    if (!std.math.isFinite(mse)) return QuantizationError.RangeOverflow;
+
+    const original_bits = std.math.mul(usize, original.len, 64) catch return QuantizationError.DimensionOverflow;
     return VectorMetrics{
         .element_count = original.len,
-        .mse = sum_sq / @as(f64, @floatFromInt(original.len)),
+        .mse = mse,
         .max_abs_error = max_abs_error,
         .cosine_similarity = cosineFromNorms(original_norm, decoded_norm, cross_norm),
-        .inner_product_error = @abs(original_inner - decoded_inner),
+        .inner_product_error = @abs(inner_product_delta),
         .original_bits = original_bits,
         .quantized_bits = quantized_bits,
         .compression_ratio = @as(f64, @floatFromInt(original_bits)) /
@@ -172,6 +198,13 @@ pub fn measureVectorError(
 fn validateInput(input: []const f64, bits: u8) QuantizationError!void {
     if (input.len == 0) return QuantizationError.EmptyInput;
     if (bits == 0 or bits > 16) return QuantizationError.InvalidBitWidth;
+    try validateFinite(input);
+}
+
+fn validateFinite(values: []const f64) QuantizationError!void {
+    for (values) |value| {
+        if (!std.math.isFinite(value)) return QuantizationError.NonFiniteInput;
+    }
 }
 
 fn quantizationLevels(bits: u8) u32 {
@@ -179,9 +212,10 @@ fn quantizationLevels(bits: u8) u32 {
     return (@as(u32, 1) << shift) - 1;
 }
 
-fn quantizationScale(min: f64, max: f64, bits: u8) f64 {
+fn quantizationScale(min: f64, max: f64, bits: u8) QuantizationError!f64 {
     const levels = @as(f64, @floatFromInt(quantizationLevels(bits)));
     const range = max - min;
+    if (!std.math.isFinite(range)) return QuantizationError.RangeOverflow;
     return if (range == 0.0) 0.0 else range / levels;
 }
 
@@ -244,13 +278,12 @@ fn findRange(input: []const f64) Range {
 fn cosineFromNorms(original_norm: f64, decoded_norm: f64, cross_norm: f64) f64 {
     if (original_norm == 0.0 and decoded_norm == 0.0) return 1.0;
     if (original_norm == 0.0 or decoded_norm == 0.0) return 0.0;
-    return cross_norm / @sqrt(original_norm * decoded_norm);
+    return std.math.clamp(cross_norm / (@sqrt(original_norm) * @sqrt(decoded_norm)), -1, 1);
 }
 
-fn nextPowerOfTwo(n: usize) usize {
-    var result: usize = 1;
-    while (result < n) : (result *= 2) {}
-    return result;
+fn nextPowerOfTwo(n: usize) QuantizationError!usize {
+    if (n == 0) return QuantizationError.EmptyInput;
+    return std.math.ceilPowerOfTwo(usize, n) catch QuantizationError.DimensionOverflow;
 }
 
 fn randomHadamardTransform(
@@ -258,7 +291,7 @@ fn randomHadamardTransform(
     input: []const f64,
     seed: u64,
 ) ![]f64 {
-    const transformed_len = nextPowerOfTwo(input.len);
+    const transformed_len = try nextPowerOfTwo(input.len);
     const transformed = try allocator.alloc(f64, transformed_len);
     errdefer allocator.free(transformed);
 
@@ -361,7 +394,7 @@ test "turbo quantized vectors are deterministic" {
     defer second.deinit();
 
     try testing.expectEqualSlices(u16, first.codes, second.codes);
-    try testing.expectEqual(nextPowerOfTwo(input.len), first.transformed_len);
+    try testing.expectEqual(try nextPowerOfTwo(input.len), first.transformed_len);
 
     const decoded = try first.decode(allocator);
     defer allocator.free(decoded);
@@ -369,4 +402,29 @@ test "turbo quantized vectors are deterministic" {
     try testing.expectEqual(input.len, decoded.len);
     const metrics = try measureVectorError(&input, decoded, null, first.payloadBits());
     try testing.expect(metrics.mse < 0.02);
+}
+
+test "quantization rejects non-finite inputs and overflowing ranges" {
+    try testing.expectError(
+        QuantizationError.NonFiniteInput,
+        encodeUniformScalar(testing.allocator, &.{std.math.nan(f64)}, 8),
+    );
+    try testing.expectError(
+        QuantizationError.NonFiniteInput,
+        measureVectorError(&.{1.0}, &.{std.math.inf(f64)}, null, 8),
+    );
+    try testing.expectError(
+        QuantizationError.RangeOverflow,
+        encodeUniformScalar(testing.allocator, &.{ -std.math.floatMax(f64), std.math.floatMax(f64) }, 8),
+    );
+
+    const maximum = std.math.floatMax(f64);
+    const exact_metrics = try measureVectorError(&.{maximum}, &.{maximum}, null, 64);
+    try testing.expectEqual(@as(f64, 0), exact_metrics.mse);
+    try testing.expectEqual(@as(f64, 0), exact_metrics.inner_product_error);
+    try testing.expectEqual(@as(f64, 1), exact_metrics.cosine_similarity);
+    try testing.expectError(
+        QuantizationError.RangeOverflow,
+        measureVectorError(&.{maximum}, &.{-maximum}, null, 64),
+    );
 }

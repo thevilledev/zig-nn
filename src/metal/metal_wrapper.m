@@ -2,9 +2,10 @@
 #import <Metal/Metal.h>
 #import <MetalPerformanceShaders/MetalPerformanceShaders.h>
 #import "metal_wrapper.h"
+#include "../gpu/gpu_wrapper_common.h"
 #include <string.h>
 
-static void metal_copy_message(char* buffer, unsigned long buffer_len, NSString* message) {
+static void metal_copy_message(char* buffer, size_t buffer_len, NSString* message) {
     if (buffer == NULL || buffer_len == 0) {
         return;
     }
@@ -23,7 +24,7 @@ static void metal_copy_message(char* buffer, unsigned long buffer_len, NSString*
     buffer[buffer_len - 1] = '\0';
 }
 
-static unsigned long metal_min_ulong(unsigned long a, unsigned long b) {
+static size_t metal_min_size(size_t a, size_t b) {
     return a < b ? a : b;
 }
 
@@ -54,7 +55,7 @@ void metal_command_buffer_commit(MTLCommandBufferRef command_buffer_ref) {
     [commandBuffer commit];
 }
 
-int metal_command_buffer_wait_until_completed(MTLCommandBufferRef command_buffer_ref, char* error_buffer, unsigned long error_buffer_len) {
+int metal_command_buffer_wait_until_completed(MTLCommandBufferRef command_buffer_ref, char* error_buffer, size_t error_buffer_len) {
     id<MTLCommandBuffer> commandBuffer = (id<MTLCommandBuffer>)command_buffer_ref;
     [commandBuffer waitUntilCompleted];
 
@@ -68,24 +69,30 @@ int metal_command_buffer_wait_until_completed(MTLCommandBufferRef command_buffer
     return 0;
 }
 
-MTLBufferRef metal_device_create_buffer(MTLDeviceRef device_ref, unsigned long length, unsigned int options) {
+MTLBufferRef metal_device_create_buffer(MTLDeviceRef device_ref, size_t length, unsigned int options) {
     id<MTLDevice> device = (id<MTLDevice>)device_ref;
+    if (device == nil || length == 0) {
+        return NULL;
+    }
     id<MTLBuffer> buffer = [device newBufferWithLength:length options:options];
     return (void*)buffer;
 }
 
-unsigned long metal_buffer_length(MTLBufferRef buffer_ref) {
+size_t metal_buffer_length(MTLBufferRef buffer_ref) {
     id<MTLBuffer> buffer = (id<MTLBuffer>)buffer_ref;
     return [buffer length];
 }
 
-int metal_buffer_upload_f32(MTLBufferRef buffer_ref, const float* source, unsigned long count) {
+int metal_buffer_upload_f32(MTLBufferRef buffer_ref, const float* source, size_t count) {
     id<MTLBuffer> buffer = (id<MTLBuffer>)buffer_ref;
     if (buffer == nil || source == NULL) {
         return 0;
     }
 
-    unsigned long required_len = count * sizeof(float);
+    size_t required_len = 0;
+    if (!zig_nn_f32_byte_count(count, &required_len)) {
+        return 0;
+    }
     if ([buffer length] < required_len) {
         return 0;
     }
@@ -100,13 +107,16 @@ int metal_buffer_upload_f32(MTLBufferRef buffer_ref, const float* source, unsign
     return 1;
 }
 
-int metal_buffer_download_f32(MTLBufferRef buffer_ref, float* destination, unsigned long count) {
+int metal_buffer_download_f32(MTLBufferRef buffer_ref, float* destination, size_t count) {
     id<MTLBuffer> buffer = (id<MTLBuffer>)buffer_ref;
     if (buffer == nil || destination == NULL) {
         return 0;
     }
 
-    unsigned long required_len = count * sizeof(float);
+    size_t required_len = 0;
+    if (!zig_nn_f32_byte_count(count, &required_len)) {
+        return 0;
+    }
     if ([buffer length] < required_len) {
         return 0;
     }
@@ -127,9 +137,9 @@ int metal_encode_matrix_multiply(
     MTLBufferRef left_ref,
     MTLBufferRef right_ref,
     MTLBufferRef result_ref,
-    unsigned long rows,
-    unsigned long inner,
-    unsigned long cols
+    size_t rows,
+    size_t inner,
+    size_t cols
 ) {
     id<MTLDevice> device = (id<MTLDevice>)device_ref;
     id<MTLCommandBuffer> commandBuffer = (id<MTLCommandBuffer>)command_buffer_ref;
@@ -140,20 +150,45 @@ int metal_encode_matrix_multiply(
         return 0;
     }
 
+    size_t left_count = 0;
+    size_t right_count = 0;
+    size_t result_count = 0;
+    size_t left_length = 0;
+    size_t right_length = 0;
+    size_t result_length = 0;
+    size_t left_row_bytes = 0;
+    size_t right_row_bytes = 0;
+    size_t result_row_bytes = 0;
+    if (rows == 0 || inner == 0 || cols == 0 ||
+        !zig_nn_size_product(rows, inner, &left_count) ||
+        !zig_nn_size_product(inner, cols, &right_count) ||
+        !zig_nn_size_product(rows, cols, &result_count) ||
+        !zig_nn_f32_byte_count(left_count, &left_length) ||
+        !zig_nn_f32_byte_count(right_count, &right_length) ||
+        !zig_nn_f32_byte_count(result_count, &result_length) ||
+        !zig_nn_f32_byte_count(inner, &left_row_bytes) ||
+        !zig_nn_f32_byte_count(cols, &right_row_bytes) ||
+        !zig_nn_f32_byte_count(cols, &result_row_bytes)) {
+        return 0;
+    }
+    if ([leftBuffer length] < left_length || [rightBuffer length] < right_length || [resultBuffer length] < result_length) {
+        return 0;
+    }
+
     MPSMatrixDescriptor* leftDescriptor = [MPSMatrixDescriptor
         matrixDescriptorWithRows:rows
         columns:inner
-        rowBytes:inner * sizeof(float)
+        rowBytes:left_row_bytes
         dataType:MPSDataTypeFloat32];
     MPSMatrixDescriptor* rightDescriptor = [MPSMatrixDescriptor
         matrixDescriptorWithRows:inner
         columns:cols
-        rowBytes:cols * sizeof(float)
+        rowBytes:right_row_bytes
         dataType:MPSDataTypeFloat32];
     MPSMatrixDescriptor* resultDescriptor = [MPSMatrixDescriptor
         matrixDescriptorWithRows:rows
         columns:cols
-        rowBytes:cols * sizeof(float)
+        rowBytes:result_row_bytes
         dataType:MPSDataTypeFloat32];
 
     MPSMatrix* left = [[MPSMatrix alloc] initWithBuffer:leftBuffer descriptor:leftDescriptor];
@@ -184,7 +219,7 @@ int metal_encode_matrix_multiply(
     return 1;
 }
 
-MTLLibraryRef metal_device_create_library_from_source(MTLDeviceRef device_ref, const char* source, char* error_buffer, unsigned long error_buffer_len) {
+MTLLibraryRef metal_device_create_library_from_source(MTLDeviceRef device_ref, const char* source, char* error_buffer, size_t error_buffer_len) {
     id<MTLDevice> device = (id<MTLDevice>)device_ref;
     if (device == nil || source == NULL) {
         metal_copy_message(error_buffer, error_buffer_len, @"Missing Metal device or shader source");
@@ -226,7 +261,7 @@ MTLFunctionRef metal_library_create_function(MTLLibraryRef library_ref, const ch
     return (void*)function;
 }
 
-MTLComputePipelineStateRef metal_device_create_compute_pipeline_state(MTLDeviceRef device_ref, MTLFunctionRef function_ref, char* error_buffer, unsigned long error_buffer_len) {
+MTLComputePipelineStateRef metal_device_create_compute_pipeline_state(MTLDeviceRef device_ref, MTLFunctionRef function_ref, char* error_buffer, size_t error_buffer_len) {
     id<MTLDevice> device = (id<MTLDevice>)device_ref;
     id<MTLFunction> function = (id<MTLFunction>)function_ref;
     if (device == nil || function == nil) {
@@ -262,45 +297,45 @@ void metal_compute_encoder_set_pipeline_state(MTLComputeCommandEncoderRef encode
     [encoder setComputePipelineState:pipelineState];
 }
 
-void metal_compute_encoder_set_buffer(MTLComputeCommandEncoderRef encoder_ref, MTLBufferRef buffer_ref, unsigned long offset, unsigned int index) {
+void metal_compute_encoder_set_buffer(MTLComputeCommandEncoderRef encoder_ref, MTLBufferRef buffer_ref, size_t offset, unsigned int index) {
     id<MTLComputeCommandEncoder> encoder = (id<MTLComputeCommandEncoder>)encoder_ref;
     id<MTLBuffer> buffer = (id<MTLBuffer>)buffer_ref;
     [encoder setBuffer:buffer offset:offset atIndex:index];
 }
 
-void metal_compute_encoder_set_bytes(MTLComputeCommandEncoderRef encoder_ref, const void* bytes, unsigned long length, unsigned int index) {
+void metal_compute_encoder_set_bytes(MTLComputeCommandEncoderRef encoder_ref, const void* bytes, size_t length, unsigned int index) {
     id<MTLComputeCommandEncoder> encoder = (id<MTLComputeCommandEncoder>)encoder_ref;
     [encoder setBytes:bytes length:length atIndex:index];
 }
 
-void metal_compute_encoder_dispatch_threads(MTLComputeCommandEncoderRef encoder_ref, MTLComputePipelineStateRef pipeline_state_ref, unsigned long width, unsigned long height, unsigned long depth) {
+void metal_compute_encoder_dispatch_threads(MTLComputeCommandEncoderRef encoder_ref, MTLComputePipelineStateRef pipeline_state_ref, size_t width, size_t height, size_t depth) {
     id<MTLComputeCommandEncoder> encoder = (id<MTLComputeCommandEncoder>)encoder_ref;
     id<MTLComputePipelineState> pipelineState = (id<MTLComputePipelineState>)pipeline_state_ref;
 
-    unsigned long grid_width = width == 0 ? 1 : width;
-    unsigned long grid_height = height == 0 ? 1 : height;
-    unsigned long grid_depth = depth == 0 ? 1 : depth;
+    size_t grid_width = width == 0 ? 1 : width;
+    size_t grid_height = height == 0 ? 1 : height;
+    size_t grid_depth = depth == 0 ? 1 : depth;
 
-    unsigned long execution_width = [pipelineState threadExecutionWidth];
+    size_t execution_width = [pipelineState threadExecutionWidth];
     if (execution_width == 0) {
         execution_width = 1;
     }
 
-    unsigned long max_threads = [pipelineState maxTotalThreadsPerThreadgroup];
+    size_t max_threads = [pipelineState maxTotalThreadsPerThreadgroup];
     if (max_threads == 0) {
         max_threads = execution_width;
     }
 
-    unsigned long tg_width = metal_min_ulong(execution_width, grid_width);
+    size_t tg_width = metal_min_size(execution_width, grid_width);
     if (tg_width == 0) {
         tg_width = 1;
     }
 
-    unsigned long tg_height_limit = max_threads / tg_width;
+    size_t tg_height_limit = max_threads / tg_width;
     if (tg_height_limit == 0) {
         tg_height_limit = 1;
     }
-    unsigned long tg_height = metal_min_ulong(tg_height_limit, grid_height);
+    size_t tg_height = metal_min_size(tg_height_limit, grid_height);
     if (tg_height == 0) {
         tg_height = 1;
     }

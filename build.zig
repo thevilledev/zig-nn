@@ -1,5 +1,88 @@
 const std = @import("std");
 
+const GpuBackend = enum {
+    none,
+    auto,
+    metal,
+    cuda,
+    rocm,
+};
+
+const Experiment = struct {
+    name: []const u8,
+    src: []const u8,
+    description: []const u8,
+    links_gpu: bool = false,
+};
+
+const experiments = [_]Experiment{
+    .{ .name = "gated_network", .src = "experiments/gated_network/gated_network.zig", .description = "Run the gated network experiment" },
+    .{ .name = "simple_xor", .src = "experiments/simple_xor/simple_xor.zig", .description = "Run the simple XOR experiment" },
+    .{ .name = "xor_training", .src = "experiments/xor_training/xor_training.zig", .description = "Run the XOR training experiment with backpropagation" },
+    .{ .name = "binary_classification", .src = "experiments/binary_classification/binary_classification.zig", .description = "Run the binary classification experiment with circular decision boundary" },
+    .{ .name = "regression", .src = "experiments/regression/regression.zig", .description = "Run the regression experiment with nonlinear function approximation" },
+    .{ .name = "mnist", .src = "experiments/mnist/mnist.zig", .description = "Run the MNIST digit recognition experiment" },
+    .{ .name = "serving", .src = "experiments/serving/server.zig", .description = "Run the serving experiment" },
+    .{ .name = "network_visualisation", .src = "experiments/network_visualisation/network_visualisation.zig", .description = "Run the network visualisation experiment" },
+    .{ .name = "backend_demo", .src = "experiments/backend_demo/backend_demo.zig", .description = "Run the backend abstraction demonstration" },
+    .{ .name = "backend_training", .src = "experiments/backend_training/backend_training.zig", .description = "Run the backend-aware training experiment" },
+    .{ .name = "optimizer_lab", .src = "experiments/optimizer_lab/optimizer_lab.zig", .description = "Compare SGD, momentum, and AdamW on two-moons classification" },
+    .{ .name = "tokenizer_lab", .src = "experiments/tokenizer_lab/tokenizer_lab.zig", .description = "Compare byte and learned BPE tokenization" },
+    .{ .name = "padding_masks", .src = "experiments/padding_masks/padding_masks.zig", .description = "Learn batching and padding masks for variable-length sequences" },
+    .{ .name = "word2vec", .src = "experiments/word2vec/word2vec.zig", .description = "Learn distributional word embeddings with skip-gram" },
+    .{ .name = "speech_commands", .src = "experiments/speech_commands/speech_commands.zig", .description = "Train and run an eight-word speech command recognizer" },
+    .{ .name = "text_classifier", .src = "experiments/text_classifier/text_classifier.zig", .description = "Classify padded text with a masked multi-head encoder" },
+    .{ .name = "sequence_tagging", .src = "experiments/sequence_tagging/sequence_tagging.zig", .description = "Learn structured BIO tagging with a linear-chain CRF" },
+    .{ .name = "decoding_lab", .src = "experiments/decoding_lab/decoding_lab.zig", .description = "Compare greedy, top-k, nucleus, and repetition-aware decoding" },
+    .{ .name = "seq2seq", .src = "experiments/seq2seq/seq2seq.zig", .description = "Learn encoder-decoder alignment with cross-attention" },
+    .{ .name = "semantic_search", .src = "experiments/semantic_search/semantic_search.zig", .description = "Learn dual-encoder retrieval with symmetric InfoNCE" },
+    .{ .name = "cnn", .src = "experiments/cnn/cnn.zig", .description = "Learn image patterns with convolution and max pooling" },
+    .{ .name = "autoencoder", .src = "experiments/autoencoder/autoencoder.zig", .description = "Learn denoising and latent representations with an autoencoder" },
+    .{ .name = "gru_sequence", .src = "experiments/gru_sequence/gru_sequence.zig", .description = "Learn selective sequence memory with a GRU" },
+    .{ .name = "transformer_encoder", .src = "experiments/transformer_encoder/transformer_encoder.zig", .description = "Learn bidirectional context with a Transformer encoder" },
+    .{ .name = "dqn", .src = "experiments/dqn/dqn.zig", .description = "Learn value-based reinforcement learning with DQN" },
+    .{ .name = "gpu", .src = "experiments/gpu/gpu.zig", .description = "Run the GPU experiment", .links_gpu = true },
+    .{ .name = "gpu_benchmark", .src = "experiments/gpu_benchmark/gpu_benchmark.zig", .description = "Benchmark Metal backend against CPU", .links_gpu = true },
+    .{ .name = "turboquant", .src = "experiments/quantization/turboquant.zig", .description = "Run the TurboQuant paper lab experiment" },
+    .{ .name = "tiny_gpt", .src = "experiments/tiny_gpt/tiny_gpt.zig", .description = "Run the tiny GPT decoder-only Transformer experiment" },
+    .{ .name = "tiny_gpt_openai", .src = "experiments/tiny_gpt/openai_server.zig", .description = "Run the Tiny GPT OpenAI-compatible inference server" },
+};
+
+const SourceTest = struct {
+    name: []const u8,
+    src: []const u8,
+};
+
+const source_tests = [_]SourceTest{
+    .{ .name = "dimensions", .src = "src/dimensions.zig" },
+    .{ .name = "matrix", .src = "src/matrix.zig" },
+    .{ .name = "activation", .src = "src/activation.zig" },
+    .{ .name = "tensor", .src = "src/tensor.zig" },
+    .{ .name = "text", .src = "src/text.zig" },
+    .{ .name = "embeddings", .src = "src/embeddings.zig" },
+    .{ .name = "structured", .src = "src/structured.zig" },
+    .{ .name = "decoding", .src = "src/decoding.zig" },
+    .{ .name = "retrieval", .src = "src/retrieval.zig" },
+    .{ .name = "audio", .src = "src/audio.zig" },
+    .{ .name = "modules", .src = "src/modules.zig" },
+    .{ .name = "training", .src = "src/training.zig" },
+    .{ .name = "spatial", .src = "src/spatial.zig" },
+    .{ .name = "recurrent", .src = "src/recurrent.zig" },
+    .{ .name = "reinforcement", .src = "src/reinforcement.zig" },
+    .{ .name = "transformer", .src = "src/transformer.zig" },
+    .{ .name = "layer", .src = "src/layer.zig" },
+    .{ .name = "layer_norm", .src = "src/layer_norm.zig" },
+    .{ .name = "network", .src = "src/network.zig" },
+    .{ .name = "inference_service", .src = "src/inference_service.zig" },
+    .{ .name = "visualiser", .src = "src/visualiser.zig" },
+    .{ .name = "quantization", .src = "src/quantization.zig" },
+    .{ .name = "backend", .src = "src/backend.zig" },
+    .{ .name = "cpu_backend", .src = "src/cpu_backend.zig" },
+    .{ .name = "metal_backend", .src = "src/metal_backend.zig" },
+    .{ .name = "cuda_backend", .src = "src/cuda_backend.zig" },
+    .{ .name = "rocm_backend", .src = "src/rocm_backend.zig" },
+};
+
 // Although this function looks imperative, note that its job is to
 // declaratively construct a build graph that will be executed by an external
 // runner.
@@ -15,12 +98,11 @@ pub fn build(b: *std.Build) void {
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
-    // GPU backend option
-    const gpu_option = b.option(
-        []const u8,
+    const gpu_backend = b.option(
+        GpuBackend,
         "gpu",
         "GPU backend to use: auto, metal, cuda, rocm, or none (default: none)",
-    ) orelse "none";
+    ) orelse .none;
     const cuda_path = b.option(
         []const u8,
         "cuda-path",
@@ -32,21 +114,25 @@ pub fn build(b: *std.Build) void {
         "ROCm toolkit root used for HIP, HIPRTC, and rocBLAS libraries (default: /opt/rocm)",
     ) orelse "/opt/rocm";
 
-    // Determine enabled GPU backends based on target and option
-    const enable_gpu = !std.mem.eql(u8, gpu_option, "none");
     const is_macos = target.result.os.tag == .macos;
     const is_linux = target.result.os.tag == .linux;
 
-    const enable_metal = is_macos and (std.mem.eql(u8, gpu_option, "metal") or
-        std.mem.eql(u8, gpu_option, "auto"));
+    if (gpu_backend == .metal and !is_macos) {
+        std.process.fatal("the Metal GPU backend requires a macOS target (selected target: {s})", .{@tagName(target.result.os.tag)});
+    }
+    if ((gpu_backend == .cuda or gpu_backend == .rocm) and !is_linux) {
+        std.process.fatal("the {s} GPU backend requires a Linux target (selected target: {s})", .{
+            @tagName(gpu_backend),
+            @tagName(target.result.os.tag),
+        });
+    }
 
-    const enable_cuda = is_linux and (std.mem.eql(u8, gpu_option, "cuda") or
-        std.mem.eql(u8, gpu_option, "auto"));
-    const enable_rocm = is_linux and std.mem.eql(u8, gpu_option, "rocm");
+    const enable_metal = is_macos and (gpu_backend == .metal or gpu_backend == .auto);
+    const enable_cuda = is_linux and (gpu_backend == .cuda or gpu_backend == .auto);
+    const enable_rocm = is_linux and gpu_backend == .rocm;
 
     // Build options
     const build_options = b.addOptions();
-    build_options.addOption(bool, "enable_gpu", enable_gpu);
     build_options.addOption(bool, "enable_metal", enable_metal);
     build_options.addOption(bool, "enable_cuda", enable_cuda);
     build_options.addOption(bool, "enable_rocm", enable_rocm);
@@ -90,44 +176,7 @@ pub fn build(b: *std.Build) void {
     const examples_step = b.step("examples", "Alias for the experiments build step");
     examples_step.dependOn(experiments_step);
 
-    // Define all experiments in a single place for easier maintenance
-    inline for ([_]struct {
-        name: []const u8,
-        src: []const u8,
-        description: []const u8,
-    }{
-        .{ .name = "gated_network", .src = "experiments/gated_network/gated_network.zig", .description = "Run the gated network experiment" },
-        .{ .name = "simple_xor", .src = "experiments/simple_xor/simple_xor.zig", .description = "Run the simple XOR experiment" },
-        .{ .name = "xor_training", .src = "experiments/xor_training/xor_training.zig", .description = "Run the XOR training experiment with backpropagation" },
-        .{ .name = "binary_classification", .src = "experiments/binary_classification/binary_classification.zig", .description = "Run the binary classification experiment with circular decision boundary" },
-        .{ .name = "regression", .src = "experiments/regression/regression.zig", .description = "Run the regression experiment with nonlinear function approximation" },
-        .{ .name = "mnist", .src = "experiments/mnist/mnist.zig", .description = "Run the MNIST digit recognition experiment" },
-        .{ .name = "serving", .src = "experiments/serving/server.zig", .description = "Run the serving experiment" },
-        .{ .name = "network_visualisation", .src = "experiments/network_visualisation/network_visualisation.zig", .description = "Run the network visualisation experiment" },
-        .{ .name = "backend_demo", .src = "experiments/backend_demo/backend_demo.zig", .description = "Run the backend abstraction demonstration" },
-        .{ .name = "backend_training", .src = "experiments/backend_training/backend_training.zig", .description = "Run the backend-aware training experiment" },
-        .{ .name = "optimizer_lab", .src = "experiments/optimizer_lab/optimizer_lab.zig", .description = "Compare SGD, momentum, and AdamW on two-moons classification" },
-        .{ .name = "tokenizer_lab", .src = "experiments/tokenizer_lab/tokenizer_lab.zig", .description = "Compare byte and learned BPE tokenization" },
-        .{ .name = "padding_masks", .src = "experiments/padding_masks/padding_masks.zig", .description = "Learn batching and padding masks for variable-length sequences" },
-        .{ .name = "word2vec", .src = "experiments/word2vec/word2vec.zig", .description = "Learn distributional word embeddings with skip-gram" },
-        .{ .name = "speech_commands", .src = "experiments/speech_commands/speech_commands.zig", .description = "Train and run an eight-word speech command recognizer" },
-        .{ .name = "text_classifier", .src = "experiments/text_classifier/text_classifier.zig", .description = "Classify padded text with a masked multi-head encoder" },
-        .{ .name = "sequence_tagging", .src = "experiments/sequence_tagging/sequence_tagging.zig", .description = "Learn structured BIO tagging with a linear-chain CRF" },
-        .{ .name = "decoding_lab", .src = "experiments/decoding_lab/decoding_lab.zig", .description = "Compare greedy, top-k, nucleus, and repetition-aware decoding" },
-        .{ .name = "seq2seq", .src = "experiments/seq2seq/seq2seq.zig", .description = "Learn encoder-decoder alignment with cross-attention" },
-        .{ .name = "semantic_search", .src = "experiments/semantic_search/semantic_search.zig", .description = "Learn dual-encoder retrieval with symmetric InfoNCE" },
-        .{ .name = "cnn", .src = "experiments/cnn/cnn.zig", .description = "Learn image patterns with convolution and max pooling" },
-        .{ .name = "autoencoder", .src = "experiments/autoencoder/autoencoder.zig", .description = "Learn denoising and latent representations with an autoencoder" },
-        .{ .name = "gru_sequence", .src = "experiments/gru_sequence/gru_sequence.zig", .description = "Learn selective sequence memory with a GRU" },
-        .{ .name = "transformer_encoder", .src = "experiments/transformer_encoder/transformer_encoder.zig", .description = "Learn bidirectional context with a Transformer encoder" },
-        .{ .name = "dqn", .src = "experiments/dqn/dqn.zig", .description = "Learn value-based reinforcement learning with DQN" },
-        .{ .name = "gpu", .src = "experiments/gpu/gpu.zig", .description = "Run the GPU experiment" },
-        .{ .name = "gpu_benchmark", .src = "experiments/gpu_benchmark/gpu_benchmark.zig", .description = "Benchmark Metal backend against CPU" },
-        .{ .name = "turboquant", .src = "experiments/quantization/turboquant.zig", .description = "Run the TurboQuant paper lab experiment" },
-        .{ .name = "tiny_gpt", .src = "experiments/tiny_gpt/tiny_gpt.zig", .description = "Run the tiny GPT decoder-only Transformer experiment" },
-        .{ .name = "tiny_gpt_openai", .src = "experiments/tiny_gpt/openai_server.zig", .description = "Run the Tiny GPT OpenAI-compatible inference server" },
-        // Add new experiments here in the future
-    }) |experiment| {
+    inline for (experiments) |experiment| {
         const exe_mod = b.createModule(.{
             .root_source_file = b.path(experiment.src),
             .target = target,
@@ -144,7 +193,7 @@ pub fn build(b: *std.Build) void {
         });
 
         // Conditionally link frameworks/libraries for GPU experiments
-        if (std.mem.eql(u8, experiment.name, "gpu") or std.mem.eql(u8, experiment.name, "gpu_benchmark")) {
+        if (experiment.links_gpu) {
             if (enable_metal) {
                 addMetalSupport(b, exe_mod, enable_metal, false);
             }
@@ -156,12 +205,8 @@ pub fn build(b: *std.Build) void {
             }
         }
 
-        // Install the experiment executable
-        b.installArtifact(exe);
-
         // Create a run step for the experiment
         const run_cmd = b.addRunArtifact(exe);
-        run_cmd.step.dependOn(b.getInstallStep());
 
         // Add command line arguments if provided
         if (b.args) |args| {
@@ -206,81 +251,18 @@ pub fn build(b: *std.Build) void {
         "Run repeatable Debug CPU/GPU benchmark suite",
     );
 
-    // Main test step that will run all tests
     const test_step = b.step("test", "Run all unit tests");
+    const aggregate_test_run = createTestRun(b, "src/tests.zig", target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
+    test_step.dependOn(aggregate_test_run);
 
-    // Create individual test steps for each source file
-    // Run them in a logical order: matrix -> activation -> layer -> network
-    var prev_step = addTestStep(b, test_step, "matrix", "src/matrix.zig", null, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
-    prev_step = addTestStep(b, test_step, "activation", "src/activation.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
-    prev_step = addTestStep(b, test_step, "tensor", "src/tensor.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
-    prev_step = addTestStep(b, test_step, "text", "src/text.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
-    prev_step = addTestStep(b, test_step, "embeddings", "src/embeddings.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
-    prev_step = addTestStep(b, test_step, "structured", "src/structured.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
-    prev_step = addTestStep(b, test_step, "decoding", "src/decoding.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
-    prev_step = addTestStep(b, test_step, "retrieval", "src/retrieval.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
-    prev_step = addTestStep(b, test_step, "audio", "src/audio.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
-    prev_step = addTestStep(b, test_step, "modules", "src/modules.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
-    prev_step = addTestStep(b, test_step, "training", "src/training.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
-    prev_step = addTestStep(b, test_step, "spatial", "src/spatial.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
-    prev_step = addTestStep(b, test_step, "recurrent", "src/recurrent.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
-    prev_step = addTestStep(b, test_step, "reinforcement", "src/reinforcement.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
-    prev_step = addTestStep(b, test_step, "transformer", "src/transformer.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
-    prev_step = addTestStep(b, test_step, "layer", "src/layer.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
-    prev_step = addTestStep(b, test_step, "layer_norm", "src/layer_norm.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
-    prev_step = addTestStep(b, test_step, "network", "src/network.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
-    prev_step = addTestStep(b, test_step, "inference_service", "src/inference_service.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
-    prev_step = addTestStep(b, test_step, "visualiser", "src/visualiser.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
-    prev_step = addTestStep(b, test_step, "quantization", "src/quantization.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
+    inline for (source_tests) |source_test| {
+        addSourceTestStep(b, source_test, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path);
+    }
 
-    // Add backend-related tests
-    prev_step = addTestStep(b, test_step, "backend", "src/backend.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
-    prev_step = addTestStep(b, test_step, "cpu_backend", "src/cpu_backend.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
-    prev_step = addTestStep(b, test_step, "metal_backend", "src/metal_backend.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
-    prev_step = addTestStep(b, test_step, "cuda_backend", "src/cuda_backend.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
-    _ = addTestStep(b, test_step, "rocm_backend", "src/rocm_backend.zig", prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
-
-    // Create a step for running acceptance tests from experiments
     const acceptance_test_step = b.step("test-acceptance", "Run all experiment acceptance tests");
-
-    // Add test steps for all experiments
     var experiment_prev_step: ?*std.Build.Step = null;
-    inline for ([_]struct {
-        name: []const u8,
-        path: []const u8,
-    }{
-        .{ .name = "gated_network", .path = "experiments/gated_network/gated_network.zig" },
-        .{ .name = "simple_xor", .path = "experiments/simple_xor/simple_xor.zig" },
-        .{ .name = "xor_training", .path = "experiments/xor_training/xor_training.zig" },
-        .{ .name = "binary_classification", .path = "experiments/binary_classification/binary_classification.zig" },
-        .{ .name = "regression", .path = "experiments/regression/regression.zig" },
-        .{ .name = "mnist", .path = "experiments/mnist/mnist.zig" },
-        .{ .name = "serving", .path = "experiments/serving/server.zig" },
-        .{ .name = "network_visualisation", .path = "experiments/network_visualisation/network_visualisation.zig" },
-        .{ .name = "backend_demo", .path = "experiments/backend_demo/backend_demo.zig" },
-        .{ .name = "backend_training", .path = "experiments/backend_training/backend_training.zig" },
-        .{ .name = "optimizer_lab", .path = "experiments/optimizer_lab/optimizer_lab.zig" },
-        .{ .name = "tokenizer_lab", .path = "experiments/tokenizer_lab/tokenizer_lab.zig" },
-        .{ .name = "padding_masks", .path = "experiments/padding_masks/padding_masks.zig" },
-        .{ .name = "word2vec", .path = "experiments/word2vec/word2vec.zig" },
-        .{ .name = "speech_commands", .path = "experiments/speech_commands/speech_commands.zig" },
-        .{ .name = "text_classifier", .path = "experiments/text_classifier/text_classifier.zig" },
-        .{ .name = "sequence_tagging", .path = "experiments/sequence_tagging/sequence_tagging.zig" },
-        .{ .name = "decoding_lab", .path = "experiments/decoding_lab/decoding_lab.zig" },
-        .{ .name = "seq2seq", .path = "experiments/seq2seq/seq2seq.zig" },
-        .{ .name = "semantic_search", .path = "experiments/semantic_search/semantic_search.zig" },
-        .{ .name = "cnn", .path = "experiments/cnn/cnn.zig" },
-        .{ .name = "autoencoder", .path = "experiments/autoencoder/autoencoder.zig" },
-        .{ .name = "gru_sequence", .path = "experiments/gru_sequence/gru_sequence.zig" },
-        .{ .name = "transformer_encoder", .path = "experiments/transformer_encoder/transformer_encoder.zig" },
-        .{ .name = "dqn", .path = "experiments/dqn/dqn.zig" },
-        .{ .name = "gpu", .path = "experiments/gpu/gpu.zig" },
-        .{ .name = "gpu_benchmark", .path = "experiments/gpu_benchmark/gpu_benchmark.zig" },
-        .{ .name = "turboquant", .path = "experiments/quantization/turboquant.zig" },
-        .{ .name = "tiny_gpt", .path = "experiments/tiny_gpt/tiny_gpt.zig" },
-        .{ .name = "tiny_gpt_openai", .path = "experiments/tiny_gpt/openai_server.zig" },
-    }) |experiment| {
-        experiment_prev_step = addTestStep(b, acceptance_test_step, experiment.name, experiment.path, experiment_prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, lib_mod);
+    inline for (experiments) |experiment| {
+        experiment_prev_step = addAcceptanceTestStep(b, acceptance_test_step, experiment, experiment_prev_step, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, lib_mod);
     }
 }
 
@@ -417,13 +399,9 @@ fn addRocmSupport(b: *std.Build, mod: *std.Build.Module, enable_rocm: bool, incl
     }
 }
 
-// Helper function to create a test step for a specific file
-fn addTestStep(
+fn createTestRun(
     b: *std.Build,
-    main_test_step: *std.Build.Step,
-    name: []const u8,
     path: []const u8,
-    prev_step: ?*std.Build.Step,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
     build_options: *std.Build.Step.Options,
@@ -434,6 +412,24 @@ fn addTestStep(
     rocm_path: []const u8,
     nn_mod: ?*std.Build.Module,
 ) *std.Build.Step {
+    const test_artifact = createTestArtifact(b, path, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, nn_mod);
+    const run_cmd = b.addRunArtifact(test_artifact);
+    return &run_cmd.step;
+}
+
+fn createTestArtifact(
+    b: *std.Build,
+    path: []const u8,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    build_options: *std.Build.Step.Options,
+    enable_metal: bool,
+    enable_cuda: bool,
+    enable_rocm: bool,
+    cuda_path: []const u8,
+    rocm_path: []const u8,
+    nn_mod: ?*std.Build.Module,
+) *std.Build.Step.Compile {
     const test_mod = b.createModule(.{
         .root_source_file = b.path(path),
         .target = target,
@@ -447,33 +443,57 @@ fn addTestStep(
     addCudaSupport(b, test_mod, enable_cuda, nn_mod == null, cuda_path);
     addRocmSupport(b, test_mod, enable_rocm, nn_mod == null, rocm_path);
 
-    const test_artifact = b.addTest(.{
+    return b.addTest(.{
         .root_module = test_mod,
     });
-    const run_cmd = b.addRunArtifact(test_artifact);
+}
 
-    // Print the test name with a separator for better visibility
-    const echo_step = b.addSystemCommand(&[_][]const u8{
-        "echo", b.fmt("\n=== Running {s} tests ===", .{name}),
-    });
+fn addSourceTestStep(
+    b: *std.Build,
+    source_test: SourceTest,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    build_options: *std.Build.Step.Options,
+    enable_metal: bool,
+    enable_cuda: bool,
+    enable_rocm: bool,
+    cuda_path: []const u8,
+    rocm_path: []const u8,
+) void {
+    const run_step = createTestRun(b, source_test.src, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, null);
+    const step_name = b.fmt("test-{s}", .{source_test.name});
+    const description = b.fmt("Run {s} tests", .{source_test.name});
+    const test_step = b.step(step_name, description);
+    test_step.dependOn(run_step);
+}
 
-    // Make sure echo runs before the test
-    run_cmd.step.dependOn(&echo_step.step);
-
-    // If there's a previous step, make this step depend on it
-    // This ensures sequential execution
+fn addAcceptanceTestStep(
+    b: *std.Build,
+    acceptance_test_step: *std.Build.Step,
+    experiment: Experiment,
+    prev_step: ?*std.Build.Step,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    build_options: *std.Build.Step.Options,
+    enable_metal: bool,
+    enable_cuda: bool,
+    enable_rocm: bool,
+    cuda_path: []const u8,
+    rocm_path: []const u8,
+    nn_mod: *std.Build.Module,
+) *std.Build.Step {
+    const test_artifact = createTestArtifact(b, experiment.src, target, optimize, build_options, enable_metal, enable_cuda, enable_rocm, cuda_path, rocm_path, nn_mod);
+    const aggregate_run = b.addRunArtifact(test_artifact);
     if (prev_step) |step| {
-        echo_step.step.dependOn(step);
+        aggregate_run.step.dependOn(step);
     }
+    acceptance_test_step.dependOn(&aggregate_run.step);
 
-    // Create an individual step for this test
-    const test_name = b.fmt("test-{s}", .{name});
-    const test_desc = b.fmt("Run {s} tests", .{name});
-    const file_test_step = b.step(test_name, test_desc);
-    file_test_step.dependOn(&run_cmd.step);
+    const step_name = b.fmt("test-{s}", .{experiment.name});
+    const description = b.fmt("Run {s} tests", .{experiment.name});
+    const experiment_test_step = b.step(step_name, description);
+    const individual_run = b.addRunArtifact(test_artifact);
+    experiment_test_step.dependOn(&individual_run.step);
 
-    // Add this test to the main test step
-    main_test_step.dependOn(&run_cmd.step);
-
-    return &run_cmd.step;
+    return &aggregate_run.step;
 }

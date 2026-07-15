@@ -7,6 +7,15 @@ const Activation = @import("activation.zig").Activation;
 const Network = @import("network.zig").Network;
 const testing = std.testing;
 
+/// Generates one standard-normal sample with a Box-Muller transform. Using
+/// `1 - U` keeps the logarithm input in `(0, 1]`, including when the random
+/// source produces exactly zero.
+fn standardNormal(random: std.Random) f64 {
+    const radius_sample = 1.0 - random.float(f64);
+    const angle_sample = random.float(f64);
+    return @sqrt(-2.0 * @log(radius_sample)) * @cos(2.0 * std.math.pi * angle_sample);
+}
+
 fn addBackendBias(weighted_sum: *const BackendMatrix, bias: *const BackendMatrix, allocator: std.mem.Allocator) !*BackendMatrix {
     if (bias.rows != 1 or bias.cols != weighted_sum.cols) {
         return error.DimensionMismatch;
@@ -106,8 +115,14 @@ pub const Layer = struct {
         activation_fn: *const fn (f64) f64,
         activation_derivative_fn: *const fn (f64) f64,
     ) !Layer {
+        if (input_size == 0 or output_size == 0) {
+            return error.InvalidLayerDimensions;
+        }
+
         var weights = try Matrix.init(allocator, input_size, output_size);
+        errdefer weights.deinit();
         var bias = try Matrix.init(allocator, 1, output_size);
+        errdefer bias.deinit();
 
         // Xavier/Glorot initialization with adjustments for activation function
         var scale: f64 = undefined;
@@ -125,11 +140,7 @@ pub const Layer = struct {
         const rand = prng.random();
         for (0..input_size) |i| {
             for (0..output_size) |j| {
-                // Box-Muller transform for normal distribution
-                const rand1 = rand.float(f64);
-                const rand2 = rand.float(f64);
-                const z = @sqrt(-2.0 * @log(rand1)) * @cos(2.0 * std.math.pi * rand2);
-                try weights.set(i, j, z * scale);
+                try weights.set(i, j, standardNormal(rand) * scale);
             }
         }
 
@@ -231,13 +242,10 @@ pub const Layer = struct {
     /// Time complexity: O(batch_size * input_size * output_size)
     /// Memory complexity: O(batch_size * output_size)
     pub fn forward(self: *Layer, input: Matrix) !Matrix {
-        // Store a copy of the input for backpropagation
-        if (self.last_input != null) {
-            self.last_input.?.deinit();
-            self.last_input = null;
-        }
-        self.last_input = try Matrix.copy(input, self.allocator);
-        errdefer if (self.last_input) |last_input| last_input.deinit();
+        // Build the next set of training caches before replacing the current
+        // set. If any allocation fails, the existing caches remain valid.
+        var next_input = try Matrix.copy(input, self.allocator);
+        errdefer next_input.deinit();
 
         // Calculate weighted sum z = W·x
         var weighted_sum = try input.dotProduct(self.weights, self.allocator);
@@ -245,38 +253,33 @@ pub const Layer = struct {
 
         // Add bias to each row (broadcast bias to match batch size)
         var biased = try Matrix.init(self.allocator, weighted_sum.rows, weighted_sum.cols);
-        errdefer biased.deinit();
+        defer biased.deinit();
         for (0..weighted_sum.rows) |i| {
             for (0..weighted_sum.cols) |j| {
                 try biased.set(i, j, (try weighted_sum.get(i, j)) + (try self.bias.get(0, j)));
             }
         }
 
-        // Store the complete pre-activation z = xW + b for backpropagation.
-        if (self.last_weighted_sum != null) {
-            self.last_weighted_sum.?.deinit();
-            self.last_weighted_sum = null;
-        }
-        self.last_weighted_sum = try Matrix.copy(biased, self.allocator);
-        errdefer if (self.last_weighted_sum) |last_weighted_sum| last_weighted_sum.deinit();
+        var next_weighted_sum = try Matrix.copy(biased, self.allocator);
+        errdefer next_weighted_sum.deinit();
 
         // Apply activation function y = σ(z)
-        var output: Matrix = undefined;
-        if (self.activation_fn == Activation.softmax) {
+        var output = if (self.activation_fn == Activation.softmax)
             // For softmax, we need to apply it row-wise
-            output = try Activation.applySoftmax(biased, self.allocator);
-        } else {
-            output = try Activation.apply(biased, self.activation_fn, self.allocator);
-        }
-        biased.deinit();
+            try Activation.applySoftmax(biased, self.allocator)
+        else
+            try Activation.apply(biased, self.activation_fn, self.allocator);
+        errdefer output.deinit();
 
-        // Store output for backpropagation
-        if (self.last_output != null) {
-            self.last_output.?.deinit();
-            self.last_output = null;
-        }
-        self.last_output = try Matrix.copy(output, self.allocator);
-        errdefer if (self.last_output) |last_output| last_output.deinit();
+        var next_output = try Matrix.copy(output, self.allocator);
+        errdefer next_output.deinit();
+
+        if (self.last_input) |last_input| last_input.deinit();
+        if (self.last_weighted_sum) |last_weighted_sum| last_weighted_sum.deinit();
+        if (self.last_output) |last_output| last_output.deinit();
+        self.last_input = next_input;
+        self.last_weighted_sum = next_weighted_sum;
+        self.last_output = next_output;
 
         return output;
     }
@@ -552,14 +555,23 @@ pub const GatedLayer = struct {
         output_size: usize,
         use_swiglu: bool,
     ) !GatedLayer {
+        if (input_size == 0 or output_size == 0) {
+            return error.InvalidLayerDimensions;
+        }
+
         // Initialize two sets of weights and biases
         var linear_weights = try Matrix.init(allocator, input_size, output_size);
+        errdefer linear_weights.deinit();
         var linear_bias = try Matrix.init(allocator, 1, output_size);
+        errdefer linear_bias.deinit();
         var gate_weights = try Matrix.init(allocator, input_size, output_size);
+        errdefer gate_weights.deinit();
         var gate_bias = try Matrix.init(allocator, 1, output_size);
+        errdefer gate_bias.deinit();
 
         // Xavier/Glorot initialization for both linear and gate weights
-        const scale = @sqrt(2.0 / @as(f64, @floatFromInt(input_size + output_size)));
+        const fan_sum = @as(f64, @floatFromInt(input_size)) + @as(f64, @floatFromInt(output_size));
+        const scale = @sqrt(2.0 / fan_sum);
 
         // Initialize weights with scaled normal distribution
         var prng = std.Random.DefaultPrng.init(matrix_mod.randomSeed());
@@ -568,20 +580,14 @@ pub const GatedLayer = struct {
         // Initialize linear weights
         for (0..input_size) |i| {
             for (0..output_size) |j| {
-                const rand1 = rand.float(f64);
-                const rand2 = rand.float(f64);
-                const z = @sqrt(-2.0 * @log(rand1)) * @cos(2.0 * std.math.pi * rand2);
-                try linear_weights.set(i, j, z * scale);
+                try linear_weights.set(i, j, standardNormal(rand) * scale);
             }
         }
 
         // Initialize gate weights
         for (0..input_size) |i| {
             for (0..output_size) |j| {
-                const rand1 = rand.float(f64);
-                const rand2 = rand.float(f64);
-                const z = @sqrt(-2.0 * @log(rand1)) * @cos(2.0 * std.math.pi * rand2);
-                try gate_weights.set(i, j, z * scale);
+                try gate_weights.set(i, j, standardNormal(rand) * scale);
             }
         }
 
@@ -696,13 +702,10 @@ pub const GatedLayer = struct {
 
     /// Forward propagation through the gated layer
     pub fn forward(self: *GatedLayer, input: Matrix) !Matrix {
-        // Store a copy of the input for backpropagation
-        if (self.last_input != null) {
-            self.last_input.?.deinit();
-            self.last_input = null;
-        }
-        self.last_input = try Matrix.copy(input, self.allocator);
-        errdefer if (self.last_input) |last_input| last_input.deinit();
+        // Build a complete replacement cache set before releasing the current
+        // one, so an allocation failure cannot leave dangling cache entries.
+        var next_input = try Matrix.copy(input, self.allocator);
+        errdefer next_input.deinit();
 
         // Calculate linear part: input * linear_weights + linear_bias
         var linear_weighted_sum = try input.dotProduct(self.linear_weights, self.allocator);
@@ -710,20 +713,15 @@ pub const GatedLayer = struct {
 
         // Add linear bias to each row (broadcast bias to match batch size)
         var linear_biased = try Matrix.init(self.allocator, linear_weighted_sum.rows, linear_weighted_sum.cols);
-        errdefer linear_biased.deinit();
+        defer linear_biased.deinit();
         for (0..linear_weighted_sum.rows) |i| {
             for (0..linear_weighted_sum.cols) |j| {
                 try linear_biased.set(i, j, (try linear_weighted_sum.get(i, j)) + (try self.linear_bias.get(0, j)));
             }
         }
 
-        // Store linear output for backpropagation
-        if (self.last_linear_output != null) {
-            self.last_linear_output.?.deinit();
-            self.last_linear_output = null;
-        }
-        self.last_linear_output = try Matrix.copy(linear_biased, self.allocator);
-        errdefer if (self.last_linear_output) |last_linear_output| last_linear_output.deinit();
+        var next_linear_output = try Matrix.copy(linear_biased, self.allocator);
+        errdefer next_linear_output.deinit();
 
         // Calculate gating part: input * gate_weights + gate_bias
         var gate_weighted_sum = try input.dotProduct(self.gate_weights, self.allocator);
@@ -731,38 +729,34 @@ pub const GatedLayer = struct {
 
         // Add gate bias to each row (broadcast bias to match batch size)
         var gate_biased = try Matrix.init(self.allocator, gate_weighted_sum.rows, gate_weighted_sum.cols);
-        errdefer gate_biased.deinit();
+        defer gate_biased.deinit();
         for (0..gate_weighted_sum.rows) |i| {
             for (0..gate_weighted_sum.cols) |j| {
                 try gate_biased.set(i, j, (try gate_weighted_sum.get(i, j)) + (try self.gate_bias.get(0, j)));
             }
         }
 
-        // Store gate output for backpropagation
-        if (self.last_gate_output != null) {
-            self.last_gate_output.?.deinit();
-            self.last_gate_output = null;
-        }
-        self.last_gate_output = try Matrix.copy(gate_biased, self.allocator);
-        errdefer if (self.last_gate_output) |last_gate_output| last_gate_output.deinit();
+        var next_gate_output = try Matrix.copy(gate_biased, self.allocator);
+        errdefer next_gate_output.deinit();
 
         // Apply GLU or SwiGLU
-        var output: Matrix = undefined;
-        if (self.use_swiglu) {
-            output = try Activation.applySwiGLU(linear_biased, gate_biased, self.allocator);
-        } else {
-            output = try Activation.applyGLU(linear_biased, gate_biased, self.allocator);
-        }
-        linear_biased.deinit();
-        gate_biased.deinit();
+        var output = if (self.use_swiglu)
+            try Activation.applySwiGLU(linear_biased, gate_biased, self.allocator)
+        else
+            try Activation.applyGLU(linear_biased, gate_biased, self.allocator);
+        errdefer output.deinit();
 
-        // Store output for backpropagation
-        if (self.last_output != null) {
-            self.last_output.?.deinit();
-            self.last_output = null;
-        }
-        self.last_output = try Matrix.copy(output, self.allocator);
-        errdefer if (self.last_output) |last_output| last_output.deinit();
+        var next_output = try Matrix.copy(output, self.allocator);
+        errdefer next_output.deinit();
+
+        if (self.last_input) |last_input| last_input.deinit();
+        if (self.last_linear_output) |last_linear_output| last_linear_output.deinit();
+        if (self.last_gate_output) |last_gate_output| last_gate_output.deinit();
+        if (self.last_output) |last_output| last_output.deinit();
+        self.last_input = next_input;
+        self.last_linear_output = next_linear_output;
+        self.last_gate_output = next_gate_output;
+        self.last_output = next_output;
 
         return output;
     }
@@ -1079,6 +1073,44 @@ pub const GatedLayer = struct {
     }
 };
 
+fn checkLayerInitAllocationFailure(allocator: std.mem.Allocator) !void {
+    var layer = try Layer.init(allocator, 2, 2, Activation.relu, Activation.relu_derivative);
+    defer layer.deinit();
+}
+
+fn checkGatedLayerInitAllocationFailure(allocator: std.mem.Allocator) !void {
+    var layer = try GatedLayer.init(allocator, 2, 2, false);
+    defer layer.deinit();
+}
+
+fn checkLayerForwardAllocationFailure(allocator: std.mem.Allocator) !void {
+    var layer = try Layer.init(allocator, 2, 2, Activation.relu, Activation.relu_derivative);
+    defer layer.deinit();
+
+    var input = try Matrix.init(allocator, 1, 2);
+    defer input.deinit();
+    input.fill(1.0);
+
+    var first_output = try layer.forward(input);
+    defer first_output.deinit();
+    var second_output = try layer.forward(input);
+    defer second_output.deinit();
+}
+
+fn checkGatedLayerForwardAllocationFailure(allocator: std.mem.Allocator) !void {
+    var layer = try GatedLayer.init(allocator, 2, 2, true);
+    defer layer.deinit();
+
+    var input = try Matrix.init(allocator, 1, 2);
+    defer input.deinit();
+    input.fill(1.0);
+
+    var first_output = try layer.forward(input);
+    defer first_output.deinit();
+    var second_output = try layer.forward(input);
+    defer second_output.deinit();
+}
+
 // Tests basic layer initialization and dimension verification
 // Verifies that a layer correctly maintains its input and output dimensions
 // Mathematical representation:
@@ -1093,6 +1125,32 @@ test "layer initialization" {
 
     try testing.expectEqual(@as(usize, 3), layer.getInputSize());
     try testing.expectEqual(@as(usize, 2), layer.getOutputSize());
+}
+
+test "layer initialization validates dimensions and cleans up allocation failures" {
+    try testing.expectError(
+        error.InvalidLayerDimensions,
+        Layer.init(testing.allocator, 0, 1, Activation.relu, Activation.relu_derivative),
+    );
+    try testing.expectError(
+        error.InvalidLayerDimensions,
+        Layer.init(testing.allocator, 1, 0, Activation.relu, Activation.relu_derivative),
+    );
+    try testing.checkAllAllocationFailures(testing.allocator, checkLayerInitAllocationFailure, .{});
+}
+
+test "gated layer initialization validates dimensions and cleans up allocation failures" {
+    try testing.expectError(error.InvalidLayerDimensions, GatedLayer.init(testing.allocator, 0, 1, false));
+    try testing.expectError(error.InvalidLayerDimensions, GatedLayer.init(testing.allocator, 1, 0, false));
+    try testing.checkAllAllocationFailures(testing.allocator, checkGatedLayerInitAllocationFailure, .{});
+}
+
+test "layer forward cache replacement is allocation failure safe" {
+    try testing.checkAllAllocationFailures(testing.allocator, checkLayerForwardAllocationFailure, .{});
+}
+
+test "gated layer forward cache replacement is allocation failure safe" {
+    try testing.checkAllAllocationFailures(testing.allocator, checkGatedLayerForwardAllocationFailure, .{});
 }
 
 // Tests forward propagation through a layer with known weights and biases

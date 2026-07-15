@@ -19,6 +19,10 @@ run = "zig build test"
 description = "Run Zig acceptance tests"
 run = "zig build test-acceptance"
 
+[tasks."zig:fmt-check"]
+description = "Check Zig formatting"
+run = "zig fmt --check build.zig build.zig.zon benchmarks experiments src"
+
 [tasks."go:test"]
 description = "Run nnctl Go tests"
 dir = "nnctl"
@@ -60,6 +64,7 @@ run = "npx --no-install commitlint --last --verbose"
 [tasks.ci]
 description = "Run local CI checks"
 depends = [
+  "zig:fmt-check",
   "zig:test",
   "zig:test-acceptance",
   "go:test-race",

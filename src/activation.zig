@@ -11,6 +11,83 @@ const Matrix = @import("matrix.zig").Matrix;
 /// - Tanh: Similar to sigmoid but outputs in range (-1,1), often better for deep networks
 /// - Swish: Self-gated activation function, smooth and non-monotonic
 pub const Activation = struct {
+    /// Stable activation identifiers used by the network persistence format.
+    /// Existing values must not be reordered because versions 1 and 2 already
+    /// use tags 0 through 5 on disk.
+    pub const PersistenceTag = enum(u8) {
+        sigmoid = 0,
+        tanh = 1,
+        relu = 2,
+        softmax = 3,
+        glu = 4,
+        swiglu = 5,
+        linear = 6,
+    };
+
+    pub const FunctionPair = struct {
+        activation_fn: *const fn (f64) f64,
+        derivative_fn: *const fn (f64) f64,
+    };
+
+    /// Returns the stable persistence tag for a supported activation pair.
+    /// Matching both functions prevents silently changing a layer's derivative
+    /// when a network is saved and loaded again.
+    pub fn persistenceTag(
+        activation_fn: *const fn (f64) f64,
+        derivative_fn: *const fn (f64) f64,
+    ) !PersistenceTag {
+        if (activation_fn == sigmoid and derivative_fn == sigmoid_derivative) return .sigmoid;
+        if (activation_fn == tanh and derivative_fn == tanh_derivative) return .tanh;
+        if (activation_fn == relu and derivative_fn == relu_derivative) return .relu;
+        if (activation_fn == softmax and derivative_fn == softmax_derivative) return .softmax;
+        if (activation_fn == linear and derivative_fn == linear_derivative) return .linear;
+        return error.UnsupportedActivation;
+    }
+
+    /// Decodes a standard-layer activation tag for the requested file format.
+    /// Linear activation was added in version 3; versions 1 and 2 retain their
+    /// original tag set and reject tags that were not defined by those formats.
+    pub fn functionsFromPersistenceTag(raw_tag: u8, format_version: u32) !FunctionPair {
+        return switch (raw_tag) {
+            @intFromEnum(PersistenceTag.sigmoid) => .{
+                .activation_fn = sigmoid,
+                .derivative_fn = sigmoid_derivative,
+            },
+            @intFromEnum(PersistenceTag.tanh) => .{
+                .activation_fn = tanh,
+                .derivative_fn = tanh_derivative,
+            },
+            @intFromEnum(PersistenceTag.relu) => .{
+                .activation_fn = relu,
+                .derivative_fn = relu_derivative,
+            },
+            @intFromEnum(PersistenceTag.softmax) => .{
+                .activation_fn = softmax,
+                .derivative_fn = softmax_derivative,
+            },
+            @intFromEnum(PersistenceTag.linear) => if (format_version >= 3)
+                .{
+                    .activation_fn = linear,
+                    .derivative_fn = linear_derivative,
+                }
+            else
+                error.InvalidActivationType,
+            else => error.InvalidActivationType,
+        };
+    }
+
+    pub fn gatedPersistenceTag(use_swiglu: bool) PersistenceTag {
+        return if (use_swiglu) .swiglu else .glu;
+    }
+
+    pub fn swigluFromPersistenceTag(raw_tag: u8) !bool {
+        return switch (raw_tag) {
+            @intFromEnum(PersistenceTag.glu) => false,
+            @intFromEnum(PersistenceTag.swiglu) => true,
+            else => error.InvalidActivationType,
+        };
+    }
+
     /// Sigmoid activation function
     /// Mathematical form: σ(x) = 1 / (1 + e^(-x))
     /// Properties:
@@ -291,6 +368,53 @@ test "linear function" {
     try testing.expectEqual(@as(f64, 1.0), Activation.linear_derivative(0.0));
     try testing.expectEqual(@as(f64, 1.0), Activation.linear_derivative(1.0));
     try testing.expectEqual(@as(f64, 1.0), Activation.linear_derivative(-1.0));
+}
+
+test "persistence activation tags are strict and versioned" {
+    const cases = [_]struct {
+        tag: Activation.PersistenceTag,
+        activation_fn: *const fn (f64) f64,
+        derivative_fn: *const fn (f64) f64,
+    }{
+        .{ .tag = .sigmoid, .activation_fn = Activation.sigmoid, .derivative_fn = Activation.sigmoid_derivative },
+        .{ .tag = .tanh, .activation_fn = Activation.tanh, .derivative_fn = Activation.tanh_derivative },
+        .{ .tag = .relu, .activation_fn = Activation.relu, .derivative_fn = Activation.relu_derivative },
+        .{ .tag = .softmax, .activation_fn = Activation.softmax, .derivative_fn = Activation.softmax_derivative },
+        .{ .tag = .linear, .activation_fn = Activation.linear, .derivative_fn = Activation.linear_derivative },
+    };
+
+    for (cases) |case| {
+        try testing.expectEqual(case.tag, try Activation.persistenceTag(case.activation_fn, case.derivative_fn));
+
+        const decoded = try Activation.functionsFromPersistenceTag(@intFromEnum(case.tag), 3);
+        try testing.expect(decoded.activation_fn == case.activation_fn);
+        try testing.expect(decoded.derivative_fn == case.derivative_fn);
+    }
+
+    const custom = struct {
+        fn activate(x: f64) f64 {
+            return x + 1.0;
+        }
+
+        fn derivative(_: f64) f64 {
+            return 1.0;
+        }
+    };
+
+    try testing.expectError(
+        error.UnsupportedActivation,
+        Activation.persistenceTag(custom.activate, custom.derivative),
+    );
+    try testing.expectError(
+        error.UnsupportedActivation,
+        Activation.persistenceTag(Activation.sigmoid, Activation.linear_derivative),
+    );
+    try testing.expectError(error.InvalidActivationType, Activation.functionsFromPersistenceTag(6, 2));
+    try testing.expectError(error.InvalidActivationType, Activation.functionsFromPersistenceTag(4, 3));
+    try testing.expectError(error.InvalidActivationType, Activation.functionsFromPersistenceTag(255, 3));
+    try testing.expectEqual(false, try Activation.swigluFromPersistenceTag(4));
+    try testing.expectEqual(true, try Activation.swigluFromPersistenceTag(5));
+    try testing.expectError(error.InvalidActivationType, Activation.swigluFromPersistenceTag(0));
 }
 
 test "relu function" {

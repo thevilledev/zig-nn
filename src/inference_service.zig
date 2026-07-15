@@ -26,6 +26,7 @@ pub const InferenceService = struct {
     /// Free all resources used by the inference service
     pub fn deinit(self: *InferenceService) void {
         self.network.deinit();
+        self.* = undefined;
     }
 
     /// Make a prediction for a single input
@@ -48,6 +49,7 @@ pub const InferenceService = struct {
 
         // Convert output matrix to array
         var output = try self.allocator.alloc(f64, output_matrix.cols);
+        errdefer self.allocator.free(output);
         for (0..output_matrix.cols) |i| {
             output[i] = try output_matrix.get(0, i);
         }
@@ -84,8 +86,9 @@ pub const InferenceService = struct {
 
         // Convert output matrix to array of arrays
         var outputs = try self.allocator.alloc([]f64, output_matrix.rows);
+        var initialized_outputs: usize = 0;
         errdefer {
-            for (outputs) |output| {
+            for (outputs[0..initialized_outputs]) |output| {
                 self.allocator.free(output);
             }
             self.allocator.free(outputs);
@@ -93,6 +96,7 @@ pub const InferenceService = struct {
 
         for (0..output_matrix.rows) |i| {
             outputs[i] = try self.allocator.alloc(f64, output_matrix.cols);
+            initialized_outputs += 1;
             for (0..output_matrix.cols) |j| {
                 outputs[i][j] = try output_matrix.get(i, j);
             }
@@ -113,8 +117,34 @@ pub const InferenceService = struct {
 };
 
 // Tests
+fn temporaryModelPath(allocator: std.mem.Allocator, tmp: *const testing.TmpDir, filename: []const u8) ![]u8 {
+    return std.fs.path.join(allocator, &.{ ".zig-cache", "tmp", tmp.sub_path[0..], filename });
+}
+
+fn checkPredictBatchAllocationFailure(allocator: std.mem.Allocator) !void {
+    var service = InferenceService{
+        .network = Network.init(allocator, 0.1, .MeanSquaredError),
+        .allocator = allocator,
+    };
+    defer service.deinit();
+    try service.network.addLayer(2, 2, Activation.linear, Activation.linear_derivative);
+
+    const first = [_]f64{ 1.0, 0.5 };
+    const second = [_]f64{ 0.0, 1.0 };
+    const inputs = [_][]const f64{ first[0..], second[0..] };
+    const outputs = try service.predictBatch(&inputs);
+    defer {
+        for (outputs) |output| allocator.free(output);
+        allocator.free(outputs);
+    }
+}
+
 test "inference service initialization and prediction" {
     const allocator = testing.allocator;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const model_path = try temporaryModelPath(allocator, &tmp, "model.bin");
+    defer allocator.free(model_path);
 
     // Create a simple network for testing
     var network = Network.init(allocator, 0.1, .MeanSquaredError);
@@ -124,10 +154,10 @@ test "inference service initialization and prediction" {
     try network.addLayer(4, 1, Activation.sigmoid, Activation.sigmoid_derivative);
 
     // Save network to file
-    try network.saveToFile("test_model.bin");
+    try network.saveToFile(model_path);
 
     // Create inference service
-    var service = try InferenceService.init(allocator, "test_model.bin");
+    var service = try InferenceService.init(allocator, model_path);
     defer service.deinit();
 
     // Test single prediction
@@ -158,16 +188,19 @@ test "inference service initialization and prediction" {
     try testing.expectEqual(@as(usize, 2), predictions.len);
     try testing.expectEqual(@as(usize, 1), predictions[0].len);
     try testing.expectEqual(@as(usize, 1), predictions[1].len);
-
-    // Clean up test file
-    try std.Io.Dir.cwd().deleteFile(std.Options.debug_io, "test_model.bin");
 }
 
 test "inference service error handling" {
     const allocator = testing.allocator;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const model_path = try temporaryModelPath(allocator, &tmp, "model.bin");
+    defer allocator.free(model_path);
+    const missing_model_path = try temporaryModelPath(allocator, &tmp, "missing.bin");
+    defer allocator.free(missing_model_path);
 
     // Test with non-existent model file
-    try testing.expectError(error.FileNotFound, InferenceService.init(allocator, "nonexistent.bin"));
+    try testing.expectError(error.FileNotFound, InferenceService.init(allocator, missing_model_path));
 
     // Create a simple network for testing
     var network = Network.init(allocator, 0.1, .MeanSquaredError);
@@ -177,11 +210,10 @@ test "inference service error handling" {
     try network.addLayer(4, 1, Activation.sigmoid, Activation.sigmoid_derivative);
 
     // Save network to file
-    try network.saveToFile("test_model.bin");
-    defer std.Io.Dir.cwd().deleteFile(std.Options.debug_io, "test_model.bin") catch {}; // Clean up after test
+    try network.saveToFile(model_path);
 
     // Test with empty batch
-    var service = try InferenceService.init(allocator, "test_model.bin");
+    var service = try InferenceService.init(allocator, model_path);
     defer service.deinit();
 
     var empty_batch: [0][]const f64 = .{};
@@ -197,4 +229,8 @@ test "inference service error handling" {
     };
 
     try testing.expectError(error.InconsistentInputSizes, service.predictBatch(inconsistent_batch[0..]));
+}
+
+test "batch prediction cleans up partial allocations" {
+    try testing.checkAllAllocationFailures(testing.allocator, checkPredictBatchAllocationFailure, .{});
 }

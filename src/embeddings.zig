@@ -20,7 +20,7 @@ pub fn generateSkipGramPairs(allocator: std.mem.Allocator, tokens: []const usize
     defer pairs.deinit(allocator);
     for (tokens, 0..) |center, center_index| {
         const start = center_index -| window;
-        const end = @min(tokens.len, center_index + window + 1);
+        const end = @min(tokens.len, center_index +| window +| 1);
         for (tokens[start..end], start..) |context, context_index| {
             if (context_index == center_index) continue;
             try pairs.append(allocator, .{ .center = center, .context = context });
@@ -41,10 +41,18 @@ pub const NegativeSampler = struct {
         var total: f64 = 0;
         for (counts, cumulative) |count, *entry| {
             if (count == 0) return error.InvalidDistribution;
-            total += std.math.pow(f64, @floatFromInt(count), power);
+            const weight = std.math.pow(f64, @floatFromInt(count), power);
+            if (!std.math.isFinite(weight) or weight <= 0) return error.InvalidDistribution;
+            total += weight;
+            if (!std.math.isFinite(total)) return error.InvalidDistribution;
             entry.* = total;
         }
-        for (cumulative) |*entry| entry.* /= total;
+        var previous: f64 = 0;
+        for (cumulative) |*entry| {
+            entry.* /= total;
+            if (!std.math.isFinite(entry.*) or entry.* <= previous) return error.InvalidDistribution;
+            previous = entry.*;
+        }
         cumulative[cumulative.len - 1] = 1;
         return .{ .allocator = allocator, .cumulative = cumulative };
     }
@@ -56,16 +64,21 @@ pub const NegativeSampler = struct {
 
     pub fn sample(self: NegativeSampler, random: std.Random, excluded: usize) !usize {
         if (excluded >= self.cumulative.len) return error.InvalidToken;
-        while (true) {
-            const draw = random.float(f64);
-            const index = std.sort.lowerBound(f64, self.cumulative, draw, struct {
-                fn compare(value: f64, entry: f64) std.math.Order {
-                    return std.math.order(value, entry);
-                }
-            }.compare);
-            const candidate = @min(index, self.cumulative.len - 1);
-            if (candidate != excluded) return candidate;
-        }
+        const excluded_start = if (excluded == 0) 0 else self.cumulative[excluded - 1];
+        const excluded_end = self.cumulative[excluded];
+        const remaining_mass = 1 - (excluded_end - excluded_start);
+        if (remaining_mass <= 0) return error.InvalidDistribution;
+
+        var draw = random.float(f64) * remaining_mass;
+        if (draw >= excluded_start) draw = excluded_end + (draw - excluded_start);
+        draw = @min(draw, std.math.nextAfter(f64, 1, 0));
+        const candidate = std.sort.upperBound(f64, self.cumulative, draw, struct {
+            fn compare(value: f64, entry: f64) std.math.Order {
+                return std.math.order(value, entry);
+            }
+        }.compare);
+        if (candidate >= self.cumulative.len or candidate == excluded) return error.InvalidDistribution;
+        return candidate;
     }
 };
 
@@ -85,7 +98,8 @@ pub const NegativeSamplingBatch = struct {
         random: std.Random,
     ) !NegativeSamplingBatch {
         if (pairs.len == 0 or negatives_per_positive == 0) return error.EmptyBatch;
-        const row_count = try std.math.mul(usize, pairs.len, negatives_per_positive + 1);
+        const rows_per_pair = std.math.add(usize, negatives_per_positive, 1) catch return error.DimensionOverflow;
+        const row_count = std.math.mul(usize, pairs.len, rows_per_pair) catch return error.DimensionOverflow;
         const centers = try allocator.alloc(f32, row_count);
         errdefer allocator.free(centers);
         const contexts = try allocator.alloc(f32, row_count);
@@ -204,16 +218,20 @@ pub const SkipGram = struct {
 
 pub fn cosineSimilarity(left: []const f32, right: []const f32) !f32 {
     if (left.len == 0 or left.len != right.len) return error.DimensionMismatch;
-    var dot: f32 = 0;
-    var left_square: f32 = 0;
-    var right_square: f32 = 0;
+    var dot: f64 = 0;
+    var left_square: f64 = 0;
+    var right_square: f64 = 0;
     for (left, right) |a, b| {
-        dot += a * b;
-        left_square += a * a;
-        right_square += b * b;
+        if (!std.math.isFinite(a) or !std.math.isFinite(b)) return error.NonFiniteInput;
+        const left_value: f64 = a;
+        const right_value: f64 = b;
+        dot += left_value * right_value;
+        left_square += left_value * left_value;
+        right_square += right_value * right_value;
     }
     if (left_square == 0 or right_square == 0) return 0;
-    return dot / @sqrt(left_square * right_square);
+    const similarity = dot / @sqrt(left_square * right_square);
+    return @floatCast(std.math.clamp(similarity, -1, 1));
 }
 
 test "skip-gram pairs respect sentence edges and window" {
@@ -225,6 +243,13 @@ test "skip-gram pairs respect sentence edges and window" {
         .{ .center = 2, .context = 3 },
         .{ .center = 3, .context = 2 },
     }, pairs);
+}
+
+test "skip-gram pairs tolerate a saturating context window" {
+    const pairs = try generateSkipGramPairs(std.testing.allocator, &.{ 1, 2, 3 }, std.math.maxInt(usize));
+    defer std.testing.allocator.free(pairs);
+
+    try std.testing.expectEqual(@as(usize, 6), pairs.len);
 }
 
 test "negative sampling batch labels positives and excludes their targets" {
@@ -240,6 +265,44 @@ test "negative sampling batch labels positives and excludes their targets" {
         try std.testing.expectEqual(@as(f32, 0), label);
         try std.testing.expect(context != 1);
     }
+}
+
+test "negative sampling rejects non-finite distributions and overflowing batches" {
+    try std.testing.expectError(
+        error.InvalidDistribution,
+        NegativeSampler.init(std.testing.allocator, &.{ 2, 3 }, std.math.floatMax(f64)),
+    );
+    try std.testing.expectError(
+        error.InvalidDistribution,
+        NegativeSampler.init(std.testing.allocator, &.{ std.math.maxInt(usize), 1 }, 1),
+    );
+
+    var sampler = try NegativeSampler.init(std.testing.allocator, &.{ 1, 1 }, 1);
+    defer sampler.deinit();
+    var prng = std.Random.DefaultPrng.init(1);
+    try std.testing.expectError(
+        error.DimensionOverflow,
+        NegativeSamplingBatch.init(
+            std.testing.allocator,
+            &.{.{ .center = 0, .context = 1 }},
+            sampler,
+            std.math.maxInt(usize),
+            prng.random(),
+        ),
+    );
+}
+
+test "cosine similarity stays finite for large vectors" {
+    const maximum = std.math.floatMax(f32);
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 1),
+        try cosineSimilarity(&.{ maximum, maximum }, &.{ maximum, maximum }),
+        1e-6,
+    );
+    try std.testing.expectError(
+        error.NonFiniteInput,
+        cosineSimilarity(&.{std.math.nan(f32)}, &.{1}),
+    );
 }
 
 test "skip-gram update keeps the training path device resident" {

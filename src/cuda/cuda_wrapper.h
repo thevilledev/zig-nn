@@ -1,6 +1,8 @@
 #ifndef ZIG_NN_CUDA_WRAPPER_H
 #define ZIG_NN_CUDA_WRAPPER_H
 
+#include <stddef.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -29,15 +31,15 @@ enum ZigNNCudaKernelId {
     ZIG_NN_CUDA_KERNEL_APPLY_GELU_DERIVATIVE = 17,
 };
 
-CUDABackendRef cuda_backend_create(const char* kernel_source, char* error_buffer, unsigned long error_buffer_len);
+CUDABackendRef cuda_backend_create(const char* kernel_source, char* error_buffer, size_t error_buffer_len);
 void cuda_backend_destroy(CUDABackendRef backend_ref);
-int cuda_backend_device_name(CUDABackendRef backend_ref, char* output, unsigned long output_len);
+int cuda_backend_device_name(CUDABackendRef backend_ref, char* output, size_t output_len);
 int cuda_backend_synchronize(CUDABackendRef backend_ref);
 
-CUDABufferRef cuda_backend_create_buffer(CUDABackendRef backend_ref, unsigned long count);
+CUDABufferRef cuda_backend_create_buffer(CUDABackendRef backend_ref, size_t count);
 void cuda_backend_destroy_buffer(CUDABackendRef backend_ref, CUDABufferRef buffer_ref);
-int cuda_buffer_upload_f32(CUDABackendRef backend_ref, CUDABufferRef buffer_ref, const float* source, unsigned long count);
-int cuda_buffer_download_f32(CUDABackendRef backend_ref, CUDABufferRef buffer_ref, float* destination, unsigned long count);
+int cuda_buffer_upload_f32(CUDABackendRef backend_ref, CUDABufferRef buffer_ref, const float* source, size_t count);
+int cuda_buffer_download_f32(CUDABackendRef backend_ref, CUDABufferRef buffer_ref, float* destination, size_t count);
 
 int cuda_launch_matrix_multiply(CUDABackendRef backend_ref, CUDABufferRef a_ref, CUDABufferRef b_ref, CUDABufferRef result_ref, unsigned int a_rows, unsigned int a_cols, unsigned int b_cols);
 int cuda_launch_batched_matrix_multiply(CUDABackendRef backend_ref, CUDABufferRef a_ref, CUDABufferRef b_ref, CUDABufferRef result_ref, unsigned int batch, unsigned int a_rows, unsigned int a_cols, unsigned int b_rows, unsigned int b_cols, unsigned int transpose_a, unsigned int transpose_b);

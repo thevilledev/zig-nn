@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
 const backend_mod = @import("backend.zig");
+const dimension_utils = @import("dimensions.zig");
 const root = @import("root.zig");
 
 const Allocator = std.mem.Allocator;
@@ -400,7 +401,11 @@ pub const ExecutionContext = struct {
     /// Merges head-major batches back into token-major channels:
     /// `[batch * heads, tokens, width] -> [batch, tokens, heads, width]`.
     pub fn mergeHeads(self: *ExecutionContext, input: Tensor, batch: usize, heads: usize) !Tensor {
-        if (input.shape.rank != 3 or batch == 0 or heads == 0 or input.shape.dims[0] != batch * heads) return error.DimensionMismatch;
+        if (input.shape.rank != 3 or batch == 0 or heads == 0 or
+            !dimension_utils.matches(input.shape.dims[0], &.{ batch, heads }))
+        {
+            return error.DimensionMismatch;
+        }
         const tokens = input.shape.dims[1];
         const width = input.shape.dims[2];
         const matrix = try input.matrix.permuteBatchHeads(self.device.allocator, batch, tokens, heads, width, false);
@@ -1059,6 +1064,10 @@ test "split and merge heads preserve token-major values" {
     var merged_values: [8]f32 = undefined;
     try context.readback(merged, &merged_values);
     try testing.expectEqualSlices(f32, &.{ 1, 2, 3, 4, 5, 6, 7, 8 }, &merged_values);
+    try testing.expectError(
+        error.DimensionMismatch,
+        context.mergeHeads(split, std.math.maxInt(usize), 2),
+    );
 }
 
 test "masked softmax backward matches finite differences" {

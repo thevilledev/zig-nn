@@ -163,12 +163,13 @@ pub const LogMelConfig = struct {
 
     pub fn featureCount(self: LogMelConfig) !usize {
         try self.validate();
-        return std.math.mul(usize, self.mel_bins, self.time_bins);
+        return std.math.mul(usize, self.mel_bins, self.time_bins) catch
+            AudioError.InvalidFrontendConfig;
     }
 
     fn validate(self: LogMelConfig) !void {
         if (self.sample_rate == 0 or self.sample_count < self.frame_length or
-            self.frame_length == 0 or self.frame_step == 0 or self.fft_size < self.frame_length or
+            self.frame_length < 2 or self.frame_step == 0 or self.fft_size < self.frame_length or
             self.fft_size & (self.fft_size - 1) != 0 or self.mel_bins == 0 or self.time_bins == 0 or
             !std.math.isFinite(self.minimum_hz) or !std.math.isFinite(self.maximum_hz) or
             self.minimum_hz < 0 or self.maximum_hz <= self.minimum_hz or
@@ -176,6 +177,10 @@ pub const LogMelConfig = struct {
         {
             return AudioError.InvalidFrontendConfig;
         }
+        const frame_count = 1 + (self.sample_count - self.frame_length) / self.frame_step;
+        if (self.time_bins > frame_count) return AudioError.InvalidFrontendConfig;
+        _ = std.math.mul(usize, self.mel_bins, self.time_bins) catch
+            return AudioError.InvalidFrontendConfig;
     }
 };
 
@@ -198,7 +203,9 @@ pub const LogMelFrontend = struct {
         }
 
         const spectrum_bins = config.fft_size / 2 + 1;
-        const filters = try allocator.alloc(f32, config.mel_bins * spectrum_bins);
+        const filter_count = std.math.mul(usize, config.mel_bins, spectrum_bins) catch
+            return AudioError.InvalidFrontendConfig;
+        const filters = try allocator.alloc(f32, filter_count);
         errdefer allocator.free(filters);
         @memset(filters, 0);
         buildMelFilters(config, filters);
@@ -489,4 +496,26 @@ test "log-mel frontend is deterministic and finite for silence" {
         try testing.expect(std.math.isFinite(value));
         try testing.expectEqual(@as(f32, 0), value);
     }
+}
+
+test "log-mel frontend rejects degenerate windows and empty time bins" {
+    try std.testing.expectError(
+        AudioError.InvalidFrontendConfig,
+        LogMelFrontend.init(std.testing.allocator, .{ .frame_length = 1 }),
+    );
+    try std.testing.expectError(
+        AudioError.InvalidFrontendConfig,
+        LogMelFrontend.init(std.testing.allocator, .{ .time_bins = std.math.maxInt(usize) }),
+    );
+    try std.testing.expectError(
+        AudioError.InvalidFrontendConfig,
+        LogMelFrontend.init(std.testing.allocator, .{
+            .sample_count = std.math.maxInt(usize),
+            .frame_length = 2,
+            .frame_step = 1,
+            .fft_size = 2,
+            .mel_bins = 2,
+            .time_bins = std.math.maxInt(usize) - 1,
+        }),
+    );
 }

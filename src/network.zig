@@ -14,6 +14,33 @@ fn unixMilliTimestamp() i64 {
     return std.Io.Clock.real.now(std.Options.debug_io).toMilliseconds();
 }
 
+const persistence_version: u32 = 3;
+
+const TemporaryModelFile = struct {
+    file: std.Io.File,
+    path: []u8,
+};
+
+fn createTemporaryModelFile(
+    allocator: Allocator,
+    io: std.Io,
+    filepath: []const u8,
+) !TemporaryModelFile {
+    const cwd = std.Io.Dir.cwd();
+    for (0..16) |_| {
+        var nonce: u64 = undefined;
+        io.random(std.mem.asBytes(&nonce));
+        const temporary_path = try std.fmt.allocPrint(allocator, "{s}.tmp-{x}", .{ filepath, nonce });
+        const file = cwd.createFile(io, temporary_path, .{ .exclusive = true }) catch |err| {
+            allocator.free(temporary_path);
+            if (err == error.PathAlreadyExists) continue;
+            return err;
+        };
+        return .{ .file = file, .path = temporary_path };
+    }
+    return error.TemporaryFileCollision;
+}
+
 /// Neural Network Implementation
 /// Provides a flexible neural network architecture supporting:
 /// - Multiple layer types (standard and gated)
@@ -1265,6 +1292,14 @@ pub const Network = struct {
             layer.deinit(self.allocator);
         }
         self.layers.deinit(self.allocator);
+        self.* = undefined;
+    }
+
+    fn validateNextLayerInput(self: Network, input_size: usize) !void {
+        if (self.layers.items.len == 0) return;
+        if (self.layers.items[self.layers.items.len - 1].getOutputSize() != input_size) {
+            return error.InvalidLayerTopology;
+        }
     }
 
     /// Adds a standard fully connected layer to the network
@@ -1274,8 +1309,11 @@ pub const Network = struct {
     ///   - activation_fn: Activation function σ(x)
     ///   - activation_derivative_fn: Derivative σ'(x) for backpropagation
     pub fn addLayer(self: *Network, input_size: usize, output_size: usize, activation_fn: *const fn (f64) f64, activation_derivative_fn: *const fn (f64) f64) !void {
+        try self.validateNextLayerInput(input_size);
         const layer_ptr = try self.allocator.create(Layer);
+        errdefer self.allocator.destroy(layer_ptr);
         layer_ptr.* = try Layer.init(self.allocator, input_size, output_size, activation_fn, activation_derivative_fn);
+        errdefer layer_ptr.deinit();
         try self.layers.append(self.allocator, LayerVariant{ .Standard = layer_ptr });
     }
 
@@ -1285,8 +1323,11 @@ pub const Network = struct {
     ///   - output_size: Number of neurons in the layer
     ///   - use_swiglu: Whether to use SwiGLU (true) or GLU (false)
     pub fn addGatedLayer(self: *Network, input_size: usize, output_size: usize, use_swiglu: bool) !void {
+        try self.validateNextLayerInput(input_size);
         const layer_ptr = try self.allocator.create(GatedLayer);
+        errdefer self.allocator.destroy(layer_ptr);
         layer_ptr.* = try GatedLayer.init(self.allocator, input_size, output_size, use_swiglu);
+        errdefer layer_ptr.deinit();
         try self.layers.append(self.allocator, LayerVariant{ .Gated = layer_ptr });
     }
 
@@ -1306,6 +1347,8 @@ pub const Network = struct {
         }
 
         var current = input;
+        var owns_current = false;
+        errdefer if (owns_current) current.deinit();
 
         for (self.layers.items) |layer| {
             if (current.cols != layer.getInputSize()) {
@@ -1314,10 +1357,11 @@ pub const Network = struct {
 
             const next = try layer.forward(current);
 
-            if (current.data.ptr != input.data.ptr) {
+            if (owns_current) {
                 current.deinit();
             }
             current = next;
+            owns_current = true;
         }
 
         return current;
@@ -1808,7 +1852,7 @@ pub const Network = struct {
     /// Saves the network to a binary file
     /// Format:
     /// - Magic number (4 bytes): "ZNN\0"
-    /// - Version (4 bytes): 2
+    /// - Version (4 bytes): 3
     /// - Created at (8 bytes): Unix timestamp
     /// - Learning rate (8 bytes)
     /// - Loss function (1 byte)
@@ -1824,9 +1868,47 @@ pub const Network = struct {
     ///   * Bias vector (output_size * 8 bytes)
     ///   * For gated layers: additional weight matrix and bias vector
     pub fn saveToFile(self: Network, filepath: []const u8) !void {
+        // Validate the complete model before creating a temporary output file.
+        // This keeps an existing destination intact for all validation errors.
+        const input_size = try self.getInputSize();
+        const output_size = try self.getOutputSize();
+        const input_size_u32 = std.math.cast(u32, input_size) orelse return error.ModelTooLarge;
+        const output_size_u32 = std.math.cast(u32, output_size) orelse return error.ModelTooLarge;
+        const layer_count_u32 = std.math.cast(u32, self.layers.items.len) orelse return error.ModelTooLarge;
+        var expected_input_size = input_size;
+        for (self.layers.items) |layer| {
+            if (layer.getInputSize() != expected_input_size) return error.InvalidLayerTopology;
+            expected_input_size = layer.getOutputSize();
+            _ = std.math.cast(u32, layer.getInputSize()) orelse return error.ModelTooLarge;
+            _ = std.math.cast(u32, layer.getOutputSize()) orelse return error.ModelTooLarge;
+            switch (layer) {
+                .Standard => |standard_layer| {
+                    _ = try Activation.persistenceTag(
+                        standard_layer.activation_fn,
+                        standard_layer.activation_derivative_fn,
+                    );
+                },
+                .Gated => {},
+            }
+        }
+        if (expected_input_size != output_size) return error.InvalidLayerTopology;
+
         const io = std.Options.debug_io;
-        const file = try std.Io.Dir.cwd().createFile(io, filepath, .{});
-        defer file.close(io);
+        const cwd = std.Io.Dir.cwd();
+        const temporary = try createTemporaryModelFile(self.allocator, io, filepath);
+        const file = temporary.file;
+        var file_open = true;
+        defer {
+            if (file_open) file.close(io);
+            self.allocator.free(temporary.path);
+        }
+        errdefer {
+            if (file_open) {
+                file.close(io);
+                file_open = false;
+            }
+            cwd.deleteFile(io, temporary.path) catch {};
+        }
 
         var buffer: [4096]u8 = undefined;
         var file_writer = file.writerStreaming(io, &buffer);
@@ -1836,7 +1918,7 @@ pub const Network = struct {
         try writer.writeAll("ZNN\x00");
 
         // Write version
-        try writer.writeInt(u32, 2, .little);
+        try writer.writeInt(u32, persistence_version, .little);
 
         // Write creation timestamp
         try writer.writeInt(i64, unixMilliTimestamp(), .little);
@@ -1846,11 +1928,9 @@ pub const Network = struct {
         try writer.writeByte(@intFromEnum(self.loss_function));
 
         // Write network metadata
-        const input_size = try self.getInputSize();
-        const output_size = try self.getOutputSize();
-        try writer.writeInt(u32, @intCast(input_size), .little);
-        try writer.writeInt(u32, @intCast(output_size), .little);
-        try writer.writeInt(u32, @intCast(self.layers.items.len), .little);
+        try writer.writeInt(u32, input_size_u32, .little);
+        try writer.writeInt(u32, output_size_u32, .little);
+        try writer.writeInt(u32, layer_count_u32, .little);
 
         // Write each layer
         for (self.layers.items) |layer| {
@@ -1864,8 +1944,11 @@ pub const Network = struct {
                     try writer.writeInt(u32, @intCast(standard_layer.getOutputSize()), .little);
 
                     // Write activation type
-                    const activation_type: u8 = if (standard_layer.activation_fn == Activation.sigmoid) 0 else if (standard_layer.activation_fn == Activation.tanh) 1 else if (standard_layer.activation_fn == Activation.relu) 2 else if (standard_layer.activation_fn == Activation.softmax) 3 else 0; // Default to sigmoid
-                    try writer.writeByte(activation_type);
+                    const activation_type = try Activation.persistenceTag(
+                        standard_layer.activation_fn,
+                        standard_layer.activation_derivative_fn,
+                    );
+                    try writer.writeByte(@intFromEnum(activation_type));
 
                     // Write weights
                     for (0..standard_layer.weights.rows) |i| {
@@ -1888,8 +1971,7 @@ pub const Network = struct {
                     try writer.writeInt(u32, @intCast(gated_layer.getOutputSize()), .little);
 
                     // Write activation type (GLU = 4, SwiGLU = 5)
-                    const activation_type: u8 = if (gated_layer.use_swiglu) 5 else 4;
-                    try writer.writeByte(activation_type);
+                    try writer.writeByte(@intFromEnum(Activation.gatedPersistenceTag(gated_layer.use_swiglu)));
 
                     // Write linear weights
                     for (0..gated_layer.linear_weights.rows) |i| {
@@ -1919,6 +2001,10 @@ pub const Network = struct {
         }
 
         try writer.flush();
+        try file.sync(io);
+        file.close(io);
+        file_open = false;
+        try cwd.rename(temporary.path, cwd, filepath, io);
     }
 
     /// Loads a network from a binary file
@@ -1941,7 +2027,7 @@ pub const Network = struct {
 
         // Read version
         const version = try reader.takeInt(u32, .little);
-        if (version != 1 and version != 2) {
+        if (version < 1 or version > persistence_version) {
             return error.UnsupportedVersion;
         }
 
@@ -1962,39 +2048,43 @@ pub const Network = struct {
         }
 
         // Read network metadata
-        _ = try reader.takeInt(u32, .little); // input_size
-        _ = try reader.takeInt(u32, .little); // output_size
+        const file_input_size = try reader.takeInt(u32, .little);
+        const file_output_size = try reader.takeInt(u32, .little);
         const layer_count = try reader.takeInt(u32, .little);
+        if (file_input_size == 0 or file_output_size == 0 or layer_count == 0) {
+            return error.InvalidFileFormat;
+        }
 
         var network = Network.init(allocator, learning_rate, loss_function);
+        errdefer network.deinit();
 
         // Read each layer
-        for (0..layer_count) |_| {
+        for (0..layer_count) |layer_index| {
             const layer_type = try reader.takeByte();
             const layer_input_size = try reader.takeInt(u32, .little);
             const layer_output_size = try reader.takeInt(u32, .little);
             const activation_type = try reader.takeByte();
 
+            if (layer_index == 0) {
+                if (layer_input_size != file_input_size) return error.InvalidFileFormat;
+            } else if (network.layers.items[network.layers.items.len - 1].getOutputSize() != @as(usize, layer_input_size)) {
+                return error.InvalidFileFormat;
+            }
+            if (layer_index + 1 == @as(usize, layer_count) and layer_output_size != file_output_size) {
+                return error.InvalidFileFormat;
+            }
+
             switch (layer_type) {
                 0 => { // Standard layer
-                    // Determine activation function
-                    const activation_fn: *const fn (f64) f64 = switch (activation_type) {
-                        0 => Activation.sigmoid,
-                        1 => Activation.tanh,
-                        2 => Activation.relu,
-                        3 => Activation.softmax,
-                        else => Activation.sigmoid,
-                    };
-                    const activation_derivative_fn: *const fn (f64) f64 = switch (activation_type) {
-                        0 => Activation.sigmoid_derivative,
-                        1 => Activation.tanh_derivative,
-                        2 => Activation.relu_derivative,
-                        3 => Activation.softmax_derivative,
-                        else => Activation.sigmoid_derivative,
-                    };
+                    const functions = try Activation.functionsFromPersistenceTag(activation_type, version);
 
                     // Create layer
-                    try network.addLayer(layer_input_size, layer_output_size, activation_fn, activation_derivative_fn);
+                    try network.addLayer(
+                        layer_input_size,
+                        layer_output_size,
+                        functions.activation_fn,
+                        functions.derivative_fn,
+                    );
 
                     // Read weights
                     const layer = network.layers.items[network.layers.items.len - 1].Standard;
@@ -2012,7 +2102,7 @@ pub const Network = struct {
                     }
                 },
                 1 => { // Gated layer
-                    const use_swiglu = activation_type == 5;
+                    const use_swiglu = try Activation.swigluFromPersistenceTag(activation_type);
                     try network.addGatedLayer(layer_input_size, layer_output_size, use_swiglu);
 
                     // Read linear weights
@@ -2055,6 +2145,72 @@ pub const Network = struct {
 // Tests
 const backend_f32_tolerance: f64 = 1e-5;
 
+fn temporaryModelPath(allocator: Allocator, tmp: *const testing.TmpDir, filename: []const u8) ![]u8 {
+    return std.fs.path.join(allocator, &.{ ".zig-cache", "tmp", tmp.sub_path[0..], filename });
+}
+
+fn checkNetworkLayerAllocationFailure(allocator: Allocator) !void {
+    {
+        var network = Network.init(allocator, 0.1, .MeanSquaredError);
+        defer network.deinit();
+        try network.addLayer(2, 2, Activation.relu, Activation.relu_derivative);
+    }
+    {
+        var network = Network.init(allocator, 0.1, .MeanSquaredError);
+        defer network.deinit();
+        try network.addGatedLayer(2, 2, false);
+    }
+}
+
+fn checkNetworkForwardAllocationFailure(allocator: Allocator) !void {
+    var network = Network.init(allocator, 0.1, .MeanSquaredError);
+    defer network.deinit();
+    try network.addLayer(2, 2, Activation.relu, Activation.relu_derivative);
+    try network.addGatedLayer(2, 1, false);
+
+    var input = try Matrix.init(allocator, 1, 2);
+    defer input.deinit();
+    input.fill(1.0);
+
+    var output = try network.forward(input);
+    defer output.deinit();
+}
+
+fn checkNetworkLoadAllocationFailure(allocator: Allocator, model_path: []const u8) !void {
+    var network = try Network.loadFromFile(allocator, model_path);
+    defer network.deinit();
+}
+
+fn writeLegacyTestModel(model_path: []const u8, version: u32) !void {
+    std.debug.assert(version == 1 or version == 2);
+
+    const io = std.Options.debug_io;
+    const file = try std.Io.Dir.cwd().createFile(io, model_path, .{});
+    defer file.close(io);
+
+    var buffer: [256]u8 = undefined;
+    var file_writer = file.writerStreaming(io, &buffer);
+    const writer = &file_writer.interface;
+
+    try writer.writeAll("ZNN\x00");
+    try writer.writeInt(u32, version, .little);
+    try writer.writeInt(i64, 0, .little);
+    if (version == 2) {
+        try writer.writeInt(i64, @as(i64, @bitCast(@as(f64, 0.025))), .little);
+        try writer.writeByte(@intFromEnum(LossFunction.CrossEntropy));
+    }
+    try writer.writeInt(u32, 1, .little); // input size
+    try writer.writeInt(u32, 1, .little); // output size
+    try writer.writeInt(u32, 1, .little); // layer count
+    try writer.writeByte(0); // standard layer
+    try writer.writeInt(u32, 1, .little);
+    try writer.writeInt(u32, 1, .little);
+    try writer.writeByte(@intFromEnum(Activation.PersistenceTag.sigmoid));
+    try writer.writeInt(i64, @as(i64, @bitCast(@as(f64, 0.5))), .little);
+    try writer.writeInt(i64, @as(i64, @bitCast(@as(f64, -0.25))), .little);
+    try writer.flush();
+}
+
 test "network initialization and layer addition" {
     const allocator = testing.allocator;
 
@@ -2066,6 +2222,23 @@ test "network initialization and layer addition" {
 
     try testing.expectEqual(@as(usize, 2), try network.getInputSize());
     try testing.expectEqual(@as(usize, 1), try network.getOutputSize());
+}
+
+test "network rejects disconnected layer topology" {
+    var network = Network.init(testing.allocator, 0.1, .MeanSquaredError);
+    defer network.deinit();
+    try network.addLayer(2, 3, Activation.relu, Activation.relu_derivative);
+
+    try testing.expectError(
+        error.InvalidLayerTopology,
+        network.addGatedLayer(4, 1, false),
+    );
+    try testing.expectEqual(@as(usize, 1), network.layers.items.len);
+}
+
+test "network layer addition and forward propagation clean up allocation failures" {
+    try testing.checkAllAllocationFailures(testing.allocator, checkNetworkLayerAllocationFailure, .{});
+    try testing.checkAllAllocationFailures(testing.allocator, checkNetworkForwardAllocationFailure, .{});
 }
 
 test "network with gated layers" {
@@ -2737,6 +2910,10 @@ test "backend train batch reduces simple linear loss" {
 
 test "model persistence" {
     const allocator = testing.allocator;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const model_path = try temporaryModelPath(allocator, &tmp, "model.bin");
+    defer allocator.free(model_path);
 
     // Create a network with mixed layer types
     var network = Network.init(allocator, 0.1, .MeanSquaredError);
@@ -2745,7 +2922,7 @@ test "model persistence" {
     try network.addLayer(2, 4, Activation.relu, Activation.relu_derivative);
     try network.addGatedLayer(4, 3, false); // GLU layer
     try network.addGatedLayer(3, 2, true); // SwiGLU layer
-    try network.addLayer(2, 1, Activation.sigmoid, Activation.sigmoid_derivative);
+    try network.addLayer(2, 1, Activation.linear, Activation.linear_derivative);
 
     // Set up input (1x2 matrix)
     var input = try Matrix.init(allocator, 1, 2);
@@ -2758,13 +2935,15 @@ test "model persistence" {
     defer initial_output.deinit();
 
     // Save network to file
-    try network.saveToFile("test_model.bin");
+    try network.saveToFile(model_path);
 
     // Load network from file
-    var loaded_network = try Network.loadFromFile(allocator, "test_model.bin");
+    var loaded_network = try Network.loadFromFile(allocator, model_path);
     defer loaded_network.deinit();
     try testing.expectApproxEqAbs(network.learning_rate, loaded_network.learning_rate, 1e-12);
     try testing.expectEqual(network.loss_function, loaded_network.loss_function);
+    try testing.expect(loaded_network.layers.items[3].Standard.activation_fn == Activation.linear);
+    try testing.expect(loaded_network.layers.items[3].Standard.activation_derivative_fn == Activation.linear_derivative);
 
     // Get prediction from loaded network
     var loaded_output = try loaded_network.forward(input);
@@ -2775,6 +2954,84 @@ test "model persistence" {
     try testing.expectEqual(initial_output.cols, loaded_output.cols);
     try testing.expectApproxEqAbs(try initial_output.get(0, 0), try loaded_output.get(0, 0), 1e-10);
 
-    // Clean up test file
-    try std.Io.Dir.cwd().deleteFile(std.Options.debug_io, "test_model.bin");
+    try testing.checkAllAllocationFailures(
+        allocator,
+        checkNetworkLoadAllocationFailure,
+        .{model_path},
+    );
+
+    var empty_network = Network.init(allocator, 0.1, .MeanSquaredError);
+    defer empty_network.deinit();
+    try testing.expectError(error.EmptyNetwork, empty_network.saveToFile(model_path));
+    var preserved_network = try Network.loadFromFile(allocator, model_path);
+    defer preserved_network.deinit();
+    try testing.expectEqual(network.layers.items.len, preserved_network.layers.items.len);
+}
+
+test "model persistence rejects unsupported and invalid activation tags" {
+    const allocator = testing.allocator;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const model_path = try temporaryModelPath(allocator, &tmp, "invalid-activation.bin");
+    defer allocator.free(model_path);
+
+    const custom = struct {
+        fn activate(x: f64) f64 {
+            return x;
+        }
+
+        fn derivative(_: f64) f64 {
+            return 1.0;
+        }
+    };
+
+    var custom_network = Network.init(allocator, 0.1, .MeanSquaredError);
+    defer custom_network.deinit();
+    try custom_network.addLayer(1, 1, custom.activate, custom.derivative);
+    try testing.expectError(error.UnsupportedActivation, custom_network.saveToFile(model_path));
+
+    var network = Network.init(allocator, 0.1, .MeanSquaredError);
+    defer network.deinit();
+    try network.addLayer(1, 1, Activation.relu, Activation.relu_derivative);
+    try network.saveToFile(model_path);
+
+    const io = std.Options.debug_io;
+    const file = try std.Io.Dir.cwd().openFile(io, model_path, .{ .mode = .read_write });
+    defer file.close(io);
+
+    // The v3 header is 37 bytes; the first layer's activation tag follows its
+    // type and two u32 dimensions at byte 46.
+    const invalid_tag = [_]u8{255};
+    try file.writePositionalAll(io, &invalid_tag, 46);
+    try testing.expectError(error.InvalidActivationType, Network.loadFromFile(allocator, model_path));
+
+    const gated_layer_type = [_]u8{1};
+    const standard_activation_tag = [_]u8{@intFromEnum(Activation.PersistenceTag.sigmoid)};
+    try file.writePositionalAll(io, &gated_layer_type, 37);
+    try file.writePositionalAll(io, &standard_activation_tag, 46);
+    try testing.expectError(error.InvalidActivationType, Network.loadFromFile(allocator, model_path));
+}
+
+test "model persistence loads version 1 and version 2 files" {
+    const allocator = testing.allocator;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const version_1_path = try temporaryModelPath(allocator, &tmp, "version-1.bin");
+    defer allocator.free(version_1_path);
+    const version_2_path = try temporaryModelPath(allocator, &tmp, "version-2.bin");
+    defer allocator.free(version_2_path);
+
+    try writeLegacyTestModel(version_1_path, 1);
+    var version_1_network = try Network.loadFromFile(allocator, version_1_path);
+    defer version_1_network.deinit();
+    try testing.expectApproxEqAbs(@as(f64, 0.1), version_1_network.learning_rate, 1e-12);
+    try testing.expectEqual(LossFunction.MeanSquaredError, version_1_network.loss_function);
+    try testing.expect(version_1_network.layers.items[0].Standard.activation_fn == Activation.sigmoid);
+
+    try writeLegacyTestModel(version_2_path, 2);
+    var version_2_network = try Network.loadFromFile(allocator, version_2_path);
+    defer version_2_network.deinit();
+    try testing.expectApproxEqAbs(@as(f64, 0.025), version_2_network.learning_rate, 1e-12);
+    try testing.expectEqual(LossFunction.CrossEntropy, version_2_network.loss_function);
+    try testing.expect(version_2_network.layers.items[0].Standard.activation_fn == Activation.sigmoid);
 }

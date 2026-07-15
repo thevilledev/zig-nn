@@ -1,6 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const backend = @import("backend.zig");
+const dimensions = @import("dimensions.zig");
 const ComputeBackend = backend.ComputeBackend;
 const BackendType = backend.BackendType;
 const Matrix = backend.Matrix;
@@ -245,16 +246,19 @@ const MetalMatrix = struct {
     gpu_dirty: bool, // GPU data needs to be downloaded to CPU
 
     pub fn init(allocator: Allocator, rows: usize, cols: usize, owner: *MetalBackend) !*MetalMatrix {
+        const element_count = dimensions.elementCount(rows, cols) catch return error.OutOfMemory;
+        if (element_count == 0) return error.OutOfMemory;
+        const buffer_size = dimensions.product(&.{ element_count, @sizeOf(f32) }) catch return error.OutOfMemory;
+
         const metal_matrix = try allocator.create(MetalMatrix);
         errdefer allocator.destroy(metal_matrix);
 
         // Allocate host memory
-        const host_data = try allocator.alloc(f32, rows * cols);
+        const host_data = try allocator.alloc(f32, element_count);
         errdefer allocator.free(host_data);
         @memset(host_data, 0);
 
         // Allocate GPU buffer (using sizeof(float) since Metal uses 32-bit floats)
-        const buffer_size = rows * cols * @sizeOf(f32);
         const buffer = Metal.deviceCreateBuffer(owner.device.?, buffer_size, Metal.BufferOptions.StorageModeShared) orelse return error.BufferCreationFailed;
         errdefer Metal.release(buffer);
 
@@ -634,7 +638,7 @@ pub const MetalBackend = struct {
 
     fn ensureHostData(metal_matrix: *MetalMatrix) void {
         if (!metal_matrix.syncToCPU()) {
-            std.log.warn("Metal buffer download failed; using existing host data", .{});
+            @panic("Metal buffer download failed");
         }
     }
 
@@ -1304,6 +1308,7 @@ pub const MetalBackend = struct {
             std.log.warn("Metal matrix initialization failed: {s}", .{@errorName(err)});
             return error.OutOfMemory;
         };
+        errdefer metal_matrix.deinit();
 
         // Create abstract Matrix
         const matrix = try allocator.create(Matrix);
@@ -1354,10 +1359,7 @@ pub const MetalBackend = struct {
         const index = row * matrix.cols + col;
         if (index >= metal_matrix.host_data.len) return 0.0;
 
-        // Ensure CPU data is up to date
-        if (!metal_matrix.syncToCPU()) {
-            std.log.warn("Metal buffer download failed while reading matrix element", .{});
-        }
+        ensureHostData(metal_matrix);
 
         // Return element
         return @floatCast(metal_matrix.host_data[index]);
@@ -1380,7 +1382,12 @@ pub const MetalBackend = struct {
     }
 
     pub fn setMatrixElement(_: *anyopaque, matrix: *Matrix, row: usize, col: usize, value: f64) void {
+        if (row >= matrix.rows or col >= matrix.cols) {
+            @panic("Index out of bounds");
+        }
+
         const metal_matrix = getMetalMatrix(matrix);
+        ensureHostData(metal_matrix);
 
         // Update CPU data
         metal_matrix.host_data[row * matrix.cols + col] = @floatCast(value);
@@ -1454,15 +1461,18 @@ pub const MetalBackend = struct {
         const inner_a = if (transpose_a) a_rows else a_cols;
         const inner_b = if (transpose_b) b_cols else b_rows;
         const output_cols = if (transpose_b) b_rows else b_cols;
+        const a_elements = dimensions.elementCount(a.rows, a.cols) catch return error.DimensionMismatch;
+        const b_elements = dimensions.elementCount(b.rows, b.cols) catch return error.DimensionMismatch;
         if (batch == 0 or inner_a != inner_b or
-            a.rows * a.cols != batch * a_rows * a_cols or
-            b.rows * b.cols != batch * b_rows * b_cols)
+            !dimensions.matches(a_elements, &.{ batch, a_rows, a_cols }) or
+            !dimensions.matches(b_elements, &.{ batch, b_rows, b_cols }))
         {
             return error.DimensionMismatch;
         }
 
         const self = @as(*MetalBackend, @ptrCast(@alignCast(ptr)));
-        const result = try initMatrix(ptr, allocator, batch * output_rows, output_cols);
+        const result_rows = dimensions.product(&.{ batch, output_rows }) catch return error.OutOfMemory;
+        const result = try initMatrix(ptr, allocator, result_rows, output_cols);
         const a_metal = getMetalMatrix(a);
         const b_metal = getMetalMatrix(b);
         const result_metal = getMetalMatrix(result);
@@ -1493,14 +1503,19 @@ pub const MetalBackend = struct {
     }
 
     pub fn permuteBatchHeads(ptr: *anyopaque, input: *const Matrix, allocator: Allocator, batch: usize, tokens: usize, heads: usize, width: usize, split: bool) error{ OutOfMemory, DimensionMismatch }!*Matrix {
-        if (batch == 0 or tokens == 0 or heads == 0 or width == 0 or input.rows * input.cols != batch * tokens * heads * width) return error.DimensionMismatch;
+        const input_elements = dimensions.elementCount(input.rows, input.cols) catch return error.DimensionMismatch;
+        if (batch == 0 or tokens == 0 or heads == 0 or width == 0 or
+            !dimensions.matches(input_elements, &.{ batch, tokens, heads, width }))
+        {
+            return error.DimensionMismatch;
+        }
+        const result_rows = dimensions.product(if (split) &.{ batch, heads, tokens } else &.{ batch, tokens }) catch return error.OutOfMemory;
+        const result_cols = if (split)
+            width
+        else
+            dimensions.product(&.{ heads, width }) catch return error.OutOfMemory;
         const self = @as(*MetalBackend, @ptrCast(@alignCast(ptr)));
-        const result = try initMatrix(
-            ptr,
-            allocator,
-            if (split) batch * heads * tokens else batch * tokens,
-            if (split) width else heads * width,
-        );
+        const result = try initMatrix(ptr, allocator, result_rows, result_cols);
         const source = getMetalMatrix(input);
         const destination = getMetalMatrix(result);
         if (self.dispatchPermuteBatchHeads(input, result, batch, tokens, heads, width, split)) return result;
@@ -2011,6 +2026,7 @@ pub const MetalBackend = struct {
 
         const self = @as(*MetalBackend, @ptrCast(@alignCast(ptr)));
         const result = try initMatrix(ptr, allocator, query.rows, query.cols);
+        errdefer deinitMatrix(ptr, result);
         const query_data = getMetalMatrix(query);
         const key_data = getMetalMatrix(key);
         const value_data = getMetalMatrix(value);

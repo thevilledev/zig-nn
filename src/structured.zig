@@ -1,4 +1,5 @@
 const std = @import("std");
+const dimensions = @import("dimensions.zig");
 
 /// Exact gradients for a batched linear-chain CRF objective.
 pub const CrfGradients = struct {
@@ -43,7 +44,8 @@ pub const LinearChainCrf = struct {
         if (tags < 2) return error.InvalidTagCount;
         const start = try allocator.alloc(f32, tags);
         errdefer allocator.free(start);
-        const transitions = try allocator.alloc(f32, tags * tags);
+        const transition_count = try dimensions.elementCount(tags, tags);
+        const transitions = try allocator.alloc(f32, transition_count);
         errdefer allocator.free(transitions);
         const end = try allocator.alloc(f32, tags);
         @memset(start, 0);
@@ -73,7 +75,7 @@ pub const LinearChainCrf = struct {
         const start_gradients = try self.allocator.alloc(f32, self.tags);
         errdefer self.allocator.free(start_gradients);
         @memset(start_gradients, 0);
-        const transition_gradients = try self.allocator.alloc(f32, self.tags * self.tags);
+        const transition_gradients = try self.allocator.alloc(f32, self.transitions.len);
         errdefer self.allocator.free(transition_gradients);
         @memset(transition_gradients, 0);
         const end_gradients = try self.allocator.alloc(f32, self.tags);
@@ -82,9 +84,11 @@ pub const LinearChainCrf = struct {
 
         var total_loss: f32 = 0;
         for (lengths, 0..) |length, batch_index| {
-            const alpha = try self.allocator.alloc(f32, length * self.tags);
+            const state_count = dimensions.elementCount(length, self.tags) catch
+                return error.DimensionMismatch;
+            const alpha = try self.allocator.alloc(f32, state_count);
             defer self.allocator.free(alpha);
-            const beta = try self.allocator.alloc(f32, length * self.tags);
+            const beta = try self.allocator.alloc(f32, state_count);
             defer self.allocator.free(beta);
             const emission_offset = batch_index * maximum_tokens * self.tags;
             const target_offset = batch_index * maximum_tokens;
@@ -156,7 +160,7 @@ pub const LinearChainCrf = struct {
 
     pub fn applyGradient(self: *LinearChainCrf, gradients: CrfGradients, learning_rate: f32) !void {
         if (!std.math.isFinite(learning_rate) or learning_rate <= 0 or
-            gradients.start.len != self.tags or gradients.end.len != self.tags or gradients.transitions.len != self.tags * self.tags)
+            gradients.start.len != self.tags or gradients.end.len != self.tags or gradients.transitions.len != self.transitions.len)
         {
             return error.InvalidGradient;
         }
@@ -167,10 +171,12 @@ pub const LinearChainCrf = struct {
 
     /// Viterbi decoding for one unpadded sequence. Returns its path score.
     pub fn decode(self: LinearChainCrf, emissions: []const f32, length: usize, output: []usize) !f32 {
-        if (length == 0 or emissions.len < length * self.tags or output.len < length) return error.DimensionMismatch;
-        const scores = try self.allocator.alloc(f32, length * self.tags);
+        const state_count = dimensions.elementCount(length, self.tags) catch
+            return error.DimensionMismatch;
+        if (length == 0 or emissions.len < state_count or output.len < length) return error.DimensionMismatch;
+        const scores = try self.allocator.alloc(f32, state_count);
         defer self.allocator.free(scores);
-        const backpointers = try self.allocator.alloc(usize, length * self.tags);
+        const backpointers = try self.allocator.alloc(usize, state_count);
         defer self.allocator.free(backpointers);
         for (0..self.tags) |tag| scores[tag] = self.start[tag] + emissions[tag];
         for (1..length) |token| {
@@ -250,7 +256,12 @@ pub const LinearChainCrf = struct {
     }
 
     fn validateBatch(self: LinearChainCrf, emissions: []const f32, targets: []const usize, lengths: []const usize, maximum_tokens: usize) !usize {
-        if (maximum_tokens == 0 or lengths.len == 0 or emissions.len != lengths.len * maximum_tokens * self.tags or targets.len != lengths.len * maximum_tokens) return error.DimensionMismatch;
+        if (maximum_tokens == 0 or lengths.len == 0 or
+            !dimensions.matches(emissions.len, &.{ lengths.len, maximum_tokens, self.tags }) or
+            !dimensions.matches(targets.len, &.{ lengths.len, maximum_tokens }))
+        {
+            return error.DimensionMismatch;
+        }
         for (lengths, 0..) |length, batch_index| {
             if (length == 0 or length > maximum_tokens) return error.InvalidSequenceLength;
             for (targets[batch_index * maximum_tokens .. batch_index * maximum_tokens + length]) |tag| if (tag >= self.tags) return error.InvalidTag;
@@ -300,4 +311,13 @@ test "Viterbi uses transition structure instead of local argmax" {
     var decoded: [3]usize = undefined;
     _ = try crf.decode(&.{ 1, 0, 1, 0, 1, 0 }, 3, &decoded);
     try testing.expectEqualSlices(usize, &.{ 0, 1, 0 }, &decoded);
+}
+
+test "CRF rejects overflowing batch dimensions" {
+    var crf = try LinearChainCrf.init(std.testing.allocator, 2);
+    defer crf.deinit();
+    try std.testing.expectError(
+        error.DimensionMismatch,
+        crf.negativeLogLikelihood(&.{}, &.{}, &.{1}, std.math.maxInt(usize)),
+    );
 }

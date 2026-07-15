@@ -1,10 +1,12 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const testing = std.testing;
+const dimensions = @import("dimensions.zig");
 
 pub const MatrixError = error{
     IndexOutOfBounds,
     DimensionMismatch,
+    DimensionOverflow,
     InvalidBatchIndices,
 };
 
@@ -33,10 +35,11 @@ pub const Matrix = struct {
     ///   - rows: Number of rows in the matrix
     ///   - cols: Number of columns in the matrix
     pub fn init(allocator: Allocator, rows: usize, cols: usize) !Matrix {
-        const data = try allocator.alloc(f64, rows * cols);
-        // Initialize with zeros
+        const element_count = dimensions.elementCount(rows, cols) catch
+            return MatrixError.DimensionOverflow;
+        const data = try allocator.alloc(f64, element_count);
         @memset(data, 0);
-        return Matrix{
+        return .{
             .rows = rows,
             .cols = cols,
             .data = data,
@@ -50,9 +53,7 @@ pub const Matrix = struct {
     /// Parameters:
     ///   - value: Value to fill the matrix with
     pub fn fill(self: *Matrix, value: f64) void {
-        for (self.data) |*element| {
-            element.* = value;
-        }
+        @memset(self.data, value);
     }
 
     /// Creates a deep copy of an existing matrix
@@ -64,14 +65,8 @@ pub const Matrix = struct {
     ///   - source: Matrix to copy
     ///   - allocator: Memory allocator for the new matrix
     pub fn copy(source: Matrix, allocator: Allocator) !Matrix {
-        var result = try Matrix.init(allocator, source.rows, source.cols);
-
-        for (0..source.rows) |i| {
-            for (0..source.cols) |j| {
-                try result.set(i, j, try source.get(i, j));
-            }
-        }
-
+        const result = try Matrix.init(allocator, source.rows, source.cols);
+        @memcpy(result.data, source.data);
         return result;
     }
 
@@ -123,12 +118,8 @@ pub const Matrix = struct {
         var prng = std.Random.DefaultPrng.init(randomSeed());
         const rand = prng.random();
 
-        for (0..self.rows) |i| {
-            for (0..self.cols) |j| {
-                const rand_float = rand.float(f64);
-                const value = min + (rand_float * (max - min));
-                self.set(i, j, value) catch unreachable;
-            }
+        for (self.data) |*element| {
+            element.* = min + rand.float(f64) * (max - min);
         }
     }
 
@@ -147,15 +138,15 @@ pub const Matrix = struct {
             return MatrixError.DimensionMismatch;
         }
 
-        var result = try Matrix.init(allocator, self.rows, other.cols);
+        const result = try Matrix.init(allocator, self.rows, other.cols);
 
         for (0..self.rows) |i| {
             for (0..other.cols) |j| {
                 var sum: f64 = 0;
                 for (0..self.cols) |k| {
-                    sum += (try self.get(i, k)) * (try other.get(k, j));
+                    sum += self.data[i * self.cols + k] * other.data[k * other.cols + j];
                 }
-                try result.set(i, j, sum);
+                result.data[i * result.cols + j] = sum;
             }
         }
 
@@ -176,15 +167,10 @@ pub const Matrix = struct {
             return MatrixError.DimensionMismatch;
         }
 
-        var result = try Matrix.init(allocator, self.rows, self.cols);
-
-        for (0..self.rows) |i| {
-            for (0..self.cols) |j| {
-                const sum = (try self.get(i, j)) + (try other.get(i, j));
-                try result.set(i, j, sum);
-            }
+        const result = try Matrix.init(allocator, self.rows, self.cols);
+        for (result.data, self.data, other.data) |*output, left, right| {
+            output.* = left + right;
         }
-
         return result;
     }
 
@@ -202,15 +188,10 @@ pub const Matrix = struct {
             return MatrixError.DimensionMismatch;
         }
 
-        var result = try Matrix.init(allocator, self.rows, self.cols);
-
-        for (0..self.rows) |i| {
-            for (0..self.cols) |j| {
-                const diff = (try self.get(i, j)) - (try other.get(i, j));
-                try result.set(i, j, diff);
-            }
+        const result = try Matrix.init(allocator, self.rows, self.cols);
+        for (result.data, self.data, other.data) |*output, left, right| {
+            output.* = left - right;
         }
-
         return result;
     }
 
@@ -229,15 +210,10 @@ pub const Matrix = struct {
             return MatrixError.DimensionMismatch;
         }
 
-        var result = try Matrix.init(allocator, self.rows, self.cols);
-
-        for (0..self.rows) |i| {
-            for (0..self.cols) |j| {
-                const product = (try self.get(i, j)) * (try other.get(i, j));
-                try result.set(i, j, product);
-            }
+        const result = try Matrix.init(allocator, self.rows, self.cols);
+        for (result.data, self.data, other.data) |*output, left, right| {
+            output.* = left * right;
         }
-
         return result;
     }
 
@@ -252,15 +228,10 @@ pub const Matrix = struct {
     ///   - allocator: Memory allocator for result matrix
     /// Returns: Scaled matrix with same dimensions as input
     pub fn scale(self: Matrix, scalar: f64, allocator: Allocator) !Matrix {
-        var result = try Matrix.init(allocator, self.rows, self.cols);
-
-        for (0..self.rows) |i| {
-            for (0..self.cols) |j| {
-                const scaled_value = (try self.get(i, j)) * scalar;
-                try result.set(i, j, scaled_value);
-            }
+        const result = try Matrix.init(allocator, self.rows, self.cols);
+        for (result.data, self.data) |*output, value| {
+            output.* = value * scalar;
         }
-
         return result;
     }
 
@@ -275,14 +246,14 @@ pub const Matrix = struct {
     ///   - allocator: Memory allocator for result matrix
     /// Returns: 1×cols matrix containing column sums
     pub fn sumRows(self: Matrix, allocator: Allocator) !Matrix {
-        var result = try Matrix.init(allocator, 1, self.cols);
+        const result = try Matrix.init(allocator, 1, self.cols);
 
         for (0..self.cols) |j| {
             var sum: f64 = 0;
             for (0..self.rows) |i| {
-                sum += try self.get(i, j);
+                sum += self.data[i * self.cols + j];
             }
-            try result.set(0, j, sum);
+            result.data[j] = sum;
         }
 
         return result;
@@ -298,11 +269,11 @@ pub const Matrix = struct {
     ///   - allocator: Memory allocator for result matrix
     /// Returns: Transposed matrix with dimensions (cols × rows)
     pub fn transpose(self: Matrix, allocator: Allocator) !Matrix {
-        var result = try Matrix.init(allocator, self.cols, self.rows);
+        const result = try Matrix.init(allocator, self.cols, self.rows);
 
         for (0..self.rows) |i| {
             for (0..self.cols) |j| {
-                try result.set(j, i, try self.get(i, j));
+                result.data[j * result.cols + i] = self.data[i * self.cols + j];
             }
         }
 
@@ -325,19 +296,19 @@ pub const Matrix = struct {
         }
 
         const batch_size = end - start;
-        var batch = try Matrix.init(allocator, batch_size, self.cols);
-
-        var i: usize = 0;
-        while (i < batch_size) : (i += 1) {
-            var j: usize = 0;
-            while (j < self.cols) : (j += 1) {
-                try batch.set(i, j, try self.get(start + i, j));
-            }
-        }
-
+        const batch = try Matrix.init(allocator, batch_size, self.cols);
+        const source_start = start * self.cols;
+        @memcpy(batch.data, self.data[source_start..][0..batch.data.len]);
         return batch;
     }
 };
+
+test "matrix rejects overflowing dimensions" {
+    try testing.expectError(
+        MatrixError.DimensionOverflow,
+        Matrix.init(testing.allocator, std.math.maxInt(usize), 2),
+    );
+}
 
 // Tests
 test "matrix basic operations" {

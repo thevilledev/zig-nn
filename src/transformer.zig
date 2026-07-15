@@ -1,4 +1,5 @@
 const std = @import("std");
+const dimension_utils = @import("dimensions.zig");
 const modules = @import("modules.zig");
 const tensor = @import("tensor.zig");
 
@@ -840,7 +841,7 @@ pub const MaskedMultiHeadSelfAttention = struct {
     pub fn forward(self: *const MaskedMultiHeadSelfAttention, context: *ExecutionContext, input: Tensor, attention_mask: Tensor, token_mask: Tensor) !Tensor {
         const dimensions = try self.validate(input, attention_mask, token_mask);
         var input_flat = input;
-        input_flat.shape = try tensor.Shape.init(&.{ dimensions.batch * dimensions.tokens, self.channels });
+        input_flat.shape = try tensor.Shape.init(&.{ dimensions.flat_tokens, self.channels });
         var query = try self.projectHeads(context, &self.query, input_flat, dimensions.batch, dimensions.tokens);
         defer query.deinit();
         var key = try self.projectHeads(context, &self.key, input_flat, dimensions.batch, dimensions.tokens);
@@ -857,7 +858,7 @@ pub const MaskedMultiHeadSelfAttention = struct {
         defer attended.deinit();
         var merged = try context.mergeHeads(attended, dimensions.batch, self.heads);
         defer merged.deinit();
-        try merged.reshape(&.{ dimensions.batch * dimensions.tokens, self.channels });
+        try merged.reshape(&.{ dimensions.flat_tokens, self.channels });
         var projected = try self.output.forward(context, merged);
         defer projected.deinit();
         try projected.reshape(input.shape.slice());
@@ -868,7 +869,7 @@ pub const MaskedMultiHeadSelfAttention = struct {
         const dimensions = try self.validate(input, attention_mask, token_mask);
         if (!input.shape.eql(output_gradient.shape)) return error.DimensionMismatch;
         var input_flat = input;
-        input_flat.shape = try tensor.Shape.init(&.{ dimensions.batch * dimensions.tokens, self.channels });
+        input_flat.shape = try tensor.Shape.init(&.{ dimensions.flat_tokens, self.channels });
         var query = try self.projectHeads(context, &self.query, input_flat, dimensions.batch, dimensions.tokens);
         defer query.deinit();
         var key = try self.projectHeads(context, &self.key, input_flat, dimensions.batch, dimensions.tokens);
@@ -886,11 +887,11 @@ pub const MaskedMultiHeadSelfAttention = struct {
         defer attended.deinit();
         var merged = try context.mergeHeads(attended, dimensions.batch, self.heads);
         defer merged.deinit();
-        try merged.reshape(&.{ dimensions.batch * dimensions.tokens, self.channels });
+        try merged.reshape(&.{ dimensions.flat_tokens, self.channels });
 
         var masked_output_gradient = try context.multiply(output_gradient, token_mask);
         defer masked_output_gradient.deinit();
-        try masked_output_gradient.reshape(&.{ dimensions.batch * dimensions.tokens, self.channels });
+        try masked_output_gradient.reshape(&.{ dimensions.flat_tokens, self.channels });
         var output_gradients = try self.output.backward(context, merged, masked_output_gradient);
         errdefer output_gradients.deinit();
         try output_gradients.input.reshape(&.{ dimensions.batch, dimensions.tokens, self.heads, self.head_width });
@@ -911,13 +912,13 @@ pub const MaskedMultiHeadSelfAttention = struct {
 
         var query_merged = try context.mergeHeads(query_gradient, dimensions.batch, self.heads);
         defer query_merged.deinit();
-        try query_merged.reshape(&.{ dimensions.batch * dimensions.tokens, self.channels });
+        try query_merged.reshape(&.{ dimensions.flat_tokens, self.channels });
         var key_merged = try context.mergeHeads(key_gradient, dimensions.batch, self.heads);
         defer key_merged.deinit();
-        try key_merged.reshape(&.{ dimensions.batch * dimensions.tokens, self.channels });
+        try key_merged.reshape(&.{ dimensions.flat_tokens, self.channels });
         var value_merged = try context.mergeHeads(value_gradient, dimensions.batch, self.heads);
         defer value_merged.deinit();
-        try value_merged.reshape(&.{ dimensions.batch * dimensions.tokens, self.channels });
+        try value_merged.reshape(&.{ dimensions.flat_tokens, self.channels });
         var query_gradients = try self.query.backward(context, input_flat, query_merged);
         errdefer query_gradients.deinit();
         var key_gradients = try self.key.backward(context, input_flat, key_merged);
@@ -959,12 +960,22 @@ pub const MaskedMultiHeadSelfAttention = struct {
         return context.splitHeads(projected);
     }
 
-    fn validate(self: MaskedMultiHeadSelfAttention, input: Tensor, attention_mask: Tensor, token_mask: Tensor) !struct { batch: usize, tokens: usize } {
+    fn validate(self: MaskedMultiHeadSelfAttention, input: Tensor, attention_mask: Tensor, token_mask: Tensor) !struct { batch: usize, tokens: usize, flat_tokens: usize } {
         if (input.shape.rank != 3 or input.shape.dims[2] != self.channels or !input.shape.eql(token_mask.shape)) return error.DimensionMismatch;
         const batch = input.shape.dims[0];
         const tokens = input.shape.dims[1];
-        if (attention_mask.shape.rank != 3 or attention_mask.shape.dims[0] != batch * self.heads or attention_mask.shape.dims[1] != tokens or attention_mask.shape.dims[2] != tokens) return error.DimensionMismatch;
-        return .{ .batch = batch, .tokens = tokens };
+        if (attention_mask.shape.rank != 3 or
+            !dimension_utils.matches(attention_mask.shape.dims[0], &.{ batch, self.heads }) or
+            attention_mask.shape.dims[1] != tokens or
+            attention_mask.shape.dims[2] != tokens)
+        {
+            return error.DimensionMismatch;
+        }
+        return .{
+            .batch = batch,
+            .tokens = tokens,
+            .flat_tokens = try dimension_utils.product(&.{ batch, tokens }),
+        };
     }
 };
 
@@ -982,11 +993,14 @@ pub const PaddingMasks = struct {
 
     pub fn init(allocator: Allocator, lengths: []const usize, maximum_tokens: usize, heads: usize, channels: usize) !PaddingMasks {
         if (lengths.len == 0 or maximum_tokens == 0 or heads == 0 or channels == 0) return error.InvalidDimension;
-        const attention = try allocator.alloc(f32, lengths.len * heads * maximum_tokens * maximum_tokens);
+        const attention_count = try dimension_utils.product(&.{ lengths.len, heads, maximum_tokens, maximum_tokens });
+        const token_count = try dimension_utils.product(&.{ lengths.len, maximum_tokens, channels });
+        const mean_pool_count = try dimension_utils.product(&.{ lengths.len, maximum_tokens });
+        const attention = try allocator.alloc(f32, attention_count);
         errdefer allocator.free(attention);
-        const tokens = try allocator.alloc(f32, lengths.len * maximum_tokens * channels);
+        const tokens = try allocator.alloc(f32, token_count);
         errdefer allocator.free(tokens);
-        const mean_pool = try allocator.alloc(f32, lengths.len * maximum_tokens);
+        const mean_pool = try allocator.alloc(f32, mean_pool_count);
         errdefer allocator.free(mean_pool);
         @memset(attention, 0);
         @memset(tokens, 0);
@@ -1025,6 +1039,13 @@ pub const PaddingMasks = struct {
         self.* = undefined;
     }
 };
+
+test "padding masks reject overflowing dimensions" {
+    try std.testing.expectError(
+        error.DimensionOverflow,
+        PaddingMasks.init(std.testing.allocator, &.{1}, std.math.maxInt(usize), 2, 1),
+    );
+}
 
 /// Position-wise GELU feed-forward network.
 pub const FeedForward = struct {
@@ -1320,7 +1341,7 @@ pub const MaskedEncoderBlock = struct {
     pub fn forward(self: *const MaskedEncoderBlock, context: *ExecutionContext, input: Tensor, attention_mask: Tensor, token_mask: Tensor) !Tensor {
         const dimensions = try self.validate(input, token_mask);
         var input_flat = input;
-        input_flat.shape = try tensor.Shape.init(&.{ dimensions.batch * dimensions.tokens, self.channels });
+        input_flat.shape = try tensor.Shape.init(&.{ dimensions.flat_tokens, self.channels });
         var normalized_attention = try self.attention_norm.forward(context, input_flat);
         defer normalized_attention.deinit();
         try normalized_attention.reshape(input.shape.slice());
@@ -1346,7 +1367,7 @@ pub const MaskedEncoderBlock = struct {
         const dimensions = try self.validate(input, token_mask);
         if (!input.shape.eql(output_gradient.shape)) return error.DimensionMismatch;
         var input_flat = input;
-        input_flat.shape = try tensor.Shape.init(&.{ dimensions.batch * dimensions.tokens, self.channels });
+        input_flat.shape = try tensor.Shape.init(&.{ dimensions.flat_tokens, self.channels });
         var normalized_attention = try self.attention_norm.forward(context, input_flat);
         defer normalized_attention.deinit();
         try normalized_attention.reshape(input.shape.slice());
@@ -1436,9 +1457,13 @@ pub const MaskedEncoderBlock = struct {
         return output[0..16];
     }
 
-    fn validate(self: MaskedEncoderBlock, input: Tensor, token_mask: Tensor) !struct { batch: usize, tokens: usize } {
+    fn validate(self: MaskedEncoderBlock, input: Tensor, token_mask: Tensor) !struct { batch: usize, tokens: usize, flat_tokens: usize } {
         if (input.shape.rank != 3 or input.shape.dims[2] != self.channels or !input.shape.eql(token_mask.shape)) return error.DimensionMismatch;
-        return .{ .batch = input.shape.dims[0], .tokens = input.shape.dims[1] };
+        return .{
+            .batch = input.shape.dims[0],
+            .tokens = input.shape.dims[1],
+            .flat_tokens = try dimension_utils.product(&.{ input.shape.dims[0], input.shape.dims[1] }),
+        };
     }
 };
 
@@ -1701,14 +1726,13 @@ pub const Decoder = struct {
         var position_values = try self.position_embedding.forward(context, positions);
         defer position_values.deinit();
         var current = try context.add(token_values, position_values);
-        errdefer current.deinit();
+        defer current.deinit();
         for (self.blocks) |*block| {
             const next = try block.forward(context, current);
             current.deinit();
             current = next;
         }
         var normalized = try self.final_norm.forward(context, current);
-        current.deinit();
         defer normalized.deinit();
         return self.language_model_head.forward(context, normalized);
     }
@@ -1824,14 +1848,13 @@ pub const Decoder = struct {
         var position_embedding = try self.position_embedding.forward(context, position);
         defer position_embedding.deinit();
         var current = try context.add(token_value, position_embedding);
-        errdefer current.deinit();
+        defer current.deinit();
         for (self.blocks, 0..) |*block, index| {
             const next = try block.forwardCached(context, current, &cache.keys[index], &cache.values[index], cache.position);
             current.deinit();
             current = next;
         }
         var normalized = try self.final_norm.forward(context, current);
-        current.deinit();
         defer normalized.deinit();
         const logits = try self.language_model_head.forward(context, normalized);
         cache.position += 1;

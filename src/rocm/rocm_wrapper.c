@@ -1,4 +1,5 @@
 #include "rocm_wrapper.h"
+#include "../gpu/gpu_wrapper_common.h"
 
 #include <hip/hip_runtime_api.h>
 #include <rocblas/rocblas.h>
@@ -10,7 +11,7 @@
 
 typedef struct ZigNNROCmBuffer {
     void* device_ptr;
-    unsigned long count;
+    size_t count;
 } ZigNNROCmBuffer;
 
 typedef struct ZigNNROCmBackend {
@@ -56,7 +57,7 @@ typedef struct ZigNNROCmBackend {
     char gcn_arch_name[128];
 } ZigNNROCmBackend;
 
-static void rocm_copy_message(char* buffer, unsigned long buffer_len, const char* message) {
+static void rocm_copy_message(char* buffer, size_t buffer_len, const char* message) {
     if (buffer == NULL || buffer_len == 0) {
         return;
     }
@@ -74,13 +75,13 @@ static void rocm_copy_message(char* buffer, unsigned long buffer_len, const char
     buffer[copy_len] = '\0';
 }
 
-static void rocm_copy_driver_error(char* buffer, unsigned long buffer_len, const char* prefix, hipError_t result) {
+static void rocm_copy_driver_error(char* buffer, size_t buffer_len, const char* prefix, hipError_t result) {
     char message[1024];
     snprintf(message, sizeof(message), "%s: %s", prefix, hipGetErrorString(result));
     rocm_copy_message(buffer, buffer_len, message);
 }
 
-static int rocm_check(hipError_t result, char* buffer, unsigned long buffer_len, const char* prefix) {
+static int rocm_check(hipError_t result, char* buffer, size_t buffer_len, const char* prefix) {
     if (result == hipSuccess) {
         return 1;
     }
@@ -88,7 +89,7 @@ static int rocm_check(hipError_t result, char* buffer, unsigned long buffer_len,
     return 0;
 }
 
-static int rocm_check_hiprtc(hiprtcResult result, char* buffer, unsigned long buffer_len, const char* prefix) {
+static int rocm_check_hiprtc(hiprtcResult result, char* buffer, size_t buffer_len, const char* prefix) {
     if (result == HIPRTC_SUCCESS) {
         return 1;
     }
@@ -99,7 +100,7 @@ static int rocm_check_hiprtc(hiprtcResult result, char* buffer, unsigned long bu
     return 0;
 }
 
-static int rocm_compile_module(ZigNNROCmBackend* backend, const char* kernel_source, char* error_buffer, unsigned long error_buffer_len) {
+static int rocm_compile_module(ZigNNROCmBackend* backend, const char* kernel_source, char* error_buffer, size_t error_buffer_len) {
     if (kernel_source == NULL || kernel_source[0] == '\0') {
         rocm_copy_message(error_buffer, error_buffer_len, "missing ROCm kernel source");
         return 0;
@@ -179,7 +180,7 @@ static int rocm_compile_module(ZigNNROCmBackend* backend, const char* kernel_sou
     return 1;
 }
 
-static int rocm_get_function(hipModule_t module, hipFunction_t* function, const char* name, char* error_buffer, unsigned long error_buffer_len) {
+static int rocm_get_function(hipModule_t module, hipFunction_t* function, const char* name, char* error_buffer, size_t error_buffer_len) {
     hipError_t result = hipModuleGetFunction(function, module, name);
     if (result == hipSuccess) {
         return 1;
@@ -191,7 +192,7 @@ static int rocm_get_function(hipModule_t module, hipFunction_t* function, const 
     return 0;
 }
 
-static int rocm_load_functions(ZigNNROCmBackend* backend, char* error_buffer, unsigned long error_buffer_len) {
+static int rocm_load_functions(ZigNNROCmBackend* backend, char* error_buffer, size_t error_buffer_len) {
     return rocm_get_function(backend->module, &backend->matrix_multiply, "matrix_multiply", error_buffer, error_buffer_len) &&
         rocm_get_function(backend->module, &backend->batched_matrix_multiply, "batched_matrix_multiply", error_buffer, error_buffer_len) &&
         rocm_get_function(backend->module, &backend->permute_batch_heads, "permute_batch_heads", error_buffer, error_buffer_len) &&
@@ -283,7 +284,7 @@ static int rocm_set_context(ZigNNROCmBackend* backend) {
     return hipSetDevice(backend->device) == hipSuccess;
 }
 
-ROCmBackendRef rocm_backend_create(const char* kernel_source, char* error_buffer, unsigned long error_buffer_len) {
+ROCmBackendRef rocm_backend_create(const char* kernel_source, char* error_buffer, size_t error_buffer_len) {
     rocm_copy_message(error_buffer, error_buffer_len, NULL);
 
     if (!rocm_check(hipInit(0), error_buffer, error_buffer_len, "ROCm initialization failed")) {
@@ -358,7 +359,7 @@ void rocm_backend_destroy(ROCmBackendRef backend_ref) {
     free(backend);
 }
 
-int rocm_backend_device_name(ROCmBackendRef backend_ref, char* output, unsigned long output_len) {
+int rocm_backend_device_name(ROCmBackendRef backend_ref, char* output, size_t output_len) {
     ZigNNROCmBackend* backend = (ZigNNROCmBackend*)backend_ref;
     if (backend == NULL || output == NULL || output_len == 0) {
         return 0;
@@ -376,9 +377,10 @@ int rocm_backend_synchronize(ROCmBackendRef backend_ref) {
     return hipDeviceSynchronize() == hipSuccess;
 }
 
-ROCmBufferRef rocm_backend_create_buffer(ROCmBackendRef backend_ref, unsigned long count) {
+ROCmBufferRef rocm_backend_create_buffer(ROCmBackendRef backend_ref, size_t count) {
     ZigNNROCmBackend* backend = (ZigNNROCmBackend*)backend_ref;
-    if (!rocm_set_context(backend)) {
+    size_t byte_count = 0;
+    if (count == 0 || !zig_nn_f32_byte_count(count, &byte_count) || !rocm_set_context(backend)) {
         return NULL;
     }
 
@@ -387,14 +389,19 @@ ROCmBufferRef rocm_backend_create_buffer(ROCmBackendRef backend_ref, unsigned lo
         return NULL;
     }
 
-    hipError_t result = hipMalloc(&buffer->device_ptr, count * sizeof(float));
+    hipError_t result = hipMalloc(&buffer->device_ptr, byte_count);
     if (result != hipSuccess) {
         free(buffer);
         return NULL;
     }
 
     buffer->count = count;
-    hipMemset(buffer->device_ptr, 0, count * sizeof(float));
+    result = hipMemset(buffer->device_ptr, 0, byte_count);
+    if (result != hipSuccess) {
+        hipFree(buffer->device_ptr);
+        free(buffer);
+        return NULL;
+    }
     return (ROCmBufferRef)buffer;
 }
 
@@ -411,24 +418,28 @@ void rocm_backend_destroy_buffer(ROCmBackendRef backend_ref, ROCmBufferRef buffe
     free(buffer);
 }
 
-int rocm_buffer_upload_f32(ROCmBackendRef backend_ref, ROCmBufferRef buffer_ref, const float* source, unsigned long count) {
+int rocm_buffer_upload_f32(ROCmBackendRef backend_ref, ROCmBufferRef buffer_ref, const float* source, size_t count) {
     ZigNNROCmBackend* backend = (ZigNNROCmBackend*)backend_ref;
     ZigNNROCmBuffer* buffer = (ZigNNROCmBuffer*)buffer_ref;
-    if (!rocm_set_context(backend) || buffer == NULL || source == NULL || count > buffer->count) {
+    size_t byte_count = 0;
+    if (!rocm_set_context(backend) || buffer == NULL || source == NULL || count > buffer->count ||
+        !zig_nn_f32_byte_count(count, &byte_count)) {
         return 0;
     }
 
-    return hipMemcpy(buffer->device_ptr, source, count * sizeof(float), hipMemcpyHostToDevice) == hipSuccess;
+    return hipMemcpy(buffer->device_ptr, source, byte_count, hipMemcpyHostToDevice) == hipSuccess;
 }
 
-int rocm_buffer_download_f32(ROCmBackendRef backend_ref, ROCmBufferRef buffer_ref, float* destination, unsigned long count) {
+int rocm_buffer_download_f32(ROCmBackendRef backend_ref, ROCmBufferRef buffer_ref, float* destination, size_t count) {
     ZigNNROCmBackend* backend = (ZigNNROCmBackend*)backend_ref;
     ZigNNROCmBuffer* buffer = (ZigNNROCmBuffer*)buffer_ref;
-    if (!rocm_set_context(backend) || buffer == NULL || destination == NULL || count > buffer->count) {
+    size_t byte_count = 0;
+    if (!rocm_set_context(backend) || buffer == NULL || destination == NULL || count > buffer->count ||
+        !zig_nn_f32_byte_count(count, &byte_count)) {
         return 0;
     }
 
-    return hipMemcpy(destination, buffer->device_ptr, count * sizeof(float), hipMemcpyDeviceToHost) == hipSuccess;
+    return hipMemcpy(destination, buffer->device_ptr, byte_count, hipMemcpyDeviceToHost) == hipSuccess;
 }
 
 static int rocm_launch_1d(ZigNNROCmBackend* backend, hipFunction_t function, unsigned int width, void** args) {

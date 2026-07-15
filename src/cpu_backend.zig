@@ -5,6 +5,7 @@ const ComputeBackend = backend.ComputeBackend;
 const BackendType = backend.BackendType;
 const Matrix = backend.Matrix;
 const randomSeed = @import("matrix.zig").randomSeed;
+const dimensions = @import("dimensions.zig");
 
 /// CPU-specific implementation of a matrix
 const CPUMatrix = struct {
@@ -44,7 +45,9 @@ pub const CPUBackend = struct {
         errdefer allocator.destroy(cpu_data);
 
         // Allocate the data array
-        const data = try allocator.alloc(f32, rows * cols);
+        const element_count = dimensions.elementCount(rows, cols) catch
+            return error.OutOfMemory;
+        const data = try allocator.alloc(f32, element_count);
         errdefer allocator.free(data);
 
         // Initialize with zeros
@@ -133,9 +136,7 @@ pub const CPUBackend = struct {
 
     pub fn fillMatrix(_: *anyopaque, matrix: *Matrix, value: f64) void {
         const cpu_data = @as(*CPUMatrix, @ptrCast(@alignCast(matrix.impl_data)));
-        for (cpu_data.data) |*element| {
-            element.* = @floatCast(value);
-        }
+        @memset(cpu_data.data, @as(f32, @floatCast(value)));
     }
 
     pub fn copyMatrix(ptr: *anyopaque, source: *const Matrix, allocator: Allocator) error{OutOfMemory}!*Matrix {
@@ -196,14 +197,20 @@ pub const CPUBackend = struct {
         const inner_a = if (transpose_a) a_rows else a_cols;
         const inner_b = if (transpose_b) b_cols else b_rows;
         const output_cols = if (transpose_b) b_rows else b_cols;
+        const a_elements = dimensions.elementCount(a.rows, a.cols) catch
+            return error.DimensionMismatch;
+        const b_elements = dimensions.elementCount(b.rows, b.cols) catch
+            return error.DimensionMismatch;
         if (batch == 0 or inner_a != inner_b or
-            a.rows * a.cols != batch * a_rows * a_cols or
-            b.rows * b.cols != batch * b_rows * b_cols)
+            !dimensions.matches(a_elements, &.{ batch, a_rows, a_cols }) or
+            !dimensions.matches(b_elements, &.{ batch, b_rows, b_cols }))
         {
             return error.DimensionMismatch;
         }
 
-        const result = try initMatrix(ptr, allocator, batch * output_rows, output_cols);
+        const result_rows = dimensions.product(&.{ batch, output_rows }) catch
+            return error.DimensionMismatch;
+        const result = try initMatrix(ptr, allocator, result_rows, output_cols);
         errdefer deinitMatrix(undefined, result);
         const a_cpu = @as(*const CPUMatrix, @ptrCast(@alignCast(a.impl_data)));
         const b_cpu = @as(*const CPUMatrix, @ptrCast(@alignCast(b.impl_data)));
@@ -235,12 +242,24 @@ pub const CPUBackend = struct {
     }
 
     pub fn permuteBatchHeads(ptr: *anyopaque, input: *const Matrix, allocator: Allocator, batch: usize, tokens: usize, heads: usize, width: usize, split: bool) error{ OutOfMemory, DimensionMismatch }!*Matrix {
-        if (batch == 0 or tokens == 0 or heads == 0 or width == 0 or input.rows * input.cols != batch * tokens * heads * width) return error.DimensionMismatch;
+        const input_elements = dimensions.elementCount(input.rows, input.cols) catch
+            return error.DimensionMismatch;
+        if (batch == 0 or tokens == 0 or heads == 0 or width == 0 or
+            !dimensions.matches(input_elements, &.{ batch, tokens, heads, width }))
+        {
+            return error.DimensionMismatch;
+        }
+        const result_rows = dimensions.product(
+            if (split) &.{ batch, heads, tokens } else &.{ batch, tokens },
+        ) catch return error.DimensionMismatch;
+        const result_cols = dimensions.product(
+            if (split) &.{width} else &.{ heads, width },
+        ) catch return error.DimensionMismatch;
         const result = try initMatrix(
             ptr,
             allocator,
-            if (split) batch * heads * tokens else batch * tokens,
-            if (split) width else heads * width,
+            result_rows,
+            result_cols,
         );
         errdefer deinitMatrix(undefined, result);
         const source = @as(*const CPUMatrix, @ptrCast(@alignCast(input.impl_data)));
@@ -277,7 +296,7 @@ pub const CPUBackend = struct {
         const b_cpu = @as(*const CPUMatrix, @ptrCast(@alignCast(b.impl_data)));
         const result_cpu = @as(*CPUMatrix, @ptrCast(@alignCast(result.impl_data)));
 
-        for (0..a.rows * a.cols) |i| {
+        for (0..result_cpu.data.len) |i| {
             result_cpu.data[i] = a_cpu.data[i] + b_cpu.data[i];
         }
 
@@ -315,7 +334,7 @@ pub const CPUBackend = struct {
         const b_cpu = @as(*const CPUMatrix, @ptrCast(@alignCast(b.impl_data)));
         const result_cpu = @as(*CPUMatrix, @ptrCast(@alignCast(result.impl_data)));
 
-        for (0..a.rows * a.cols) |i| {
+        for (0..result_cpu.data.len) |i| {
             result_cpu.data[i] = a_cpu.data[i] - b_cpu.data[i];
         }
 
@@ -336,7 +355,7 @@ pub const CPUBackend = struct {
         const b_cpu = @as(*const CPUMatrix, @ptrCast(@alignCast(b.impl_data)));
         const result_cpu = @as(*CPUMatrix, @ptrCast(@alignCast(result.impl_data)));
 
-        for (0..a.rows * a.cols) |i| {
+        for (0..result_cpu.data.len) |i| {
             result_cpu.data[i] = a_cpu.data[i] * b_cpu.data[i];
         }
 
@@ -352,7 +371,7 @@ pub const CPUBackend = struct {
         const matrix_cpu = @as(*const CPUMatrix, @ptrCast(@alignCast(matrix.impl_data)));
         const result_cpu = @as(*CPUMatrix, @ptrCast(@alignCast(result.impl_data)));
 
-        for (0..matrix.rows * matrix.cols) |i| {
+        for (0..result_cpu.data.len) |i| {
             result_cpu.data[i] = matrix_cpu.data[i] * @as(f32, @floatCast(scalar));
         }
 
@@ -455,7 +474,7 @@ pub const CPUBackend = struct {
 
         const matrix_cpu = @as(*CPUMatrix, @ptrCast(@alignCast(matrix.impl_data)));
 
-        for (0..matrix.rows * matrix.cols) |i| {
+        for (0..matrix_cpu.data.len) |i| {
             const rand_float = rand.float(f64);
             matrix_cpu.data[i] = @floatCast(min + (rand_float * (max - min)));
         }
@@ -470,7 +489,7 @@ pub const CPUBackend = struct {
         const matrix_cpu = @as(*const CPUMatrix, @ptrCast(@alignCast(matrix.impl_data)));
         const result_cpu = @as(*CPUMatrix, @ptrCast(@alignCast(result.impl_data)));
 
-        for (0..matrix.rows * matrix.cols) |i| {
+        for (0..result_cpu.data.len) |i| {
             result_cpu.data[i] = @floatCast(activation(@floatCast(matrix_cpu.data[i])));
         }
 

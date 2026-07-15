@@ -10,6 +10,7 @@ const root = @import("root.zig");
 const BackendInstance = root.BackendInstance;
 const CpuMatrix = matrix_mod.Matrix;
 const build_options = @import("build_options");
+const dimensions = @import("dimensions.zig");
 
 /// BackendType enum represents the available computation backends
 pub const BackendType = enum {
@@ -219,6 +220,8 @@ pub const Matrix = struct {
 
     /// Creates a new matrix using the specified backend instance
     pub fn init(backend_instance: BackendInstance, allocator: Allocator, rows: usize, cols: usize) !*Matrix {
+        _ = dimensions.elementCount(rows, cols) catch return error.DimensionOverflow;
+
         // Call the initMatrix method on the BackendInstance union
         const matrix = try backend_instance.initMatrix(allocator, rows, cols);
         // The backend implementation (cpu/metal initMatrix) should have already created
@@ -282,7 +285,9 @@ pub const Matrix = struct {
     /// a kernel. Keeping this operation bulk-oriented prevents callers from
     /// coupling tensor construction to per-element backend access.
     pub fn writeF32(self: *Matrix, values: []const f32) !void {
-        if (values.len != self.rows * self.cols) {
+        const element_count = dimensions.elementCount(self.rows, self.cols) catch
+            return error.DimensionMismatch;
+        if (values.len != element_count) {
             return error.DimensionMismatch;
         }
         if (!self.backend.writeMatrixF32(self, values)) return error.DataTransferFailed;
@@ -293,7 +298,9 @@ pub const Matrix = struct {
     /// GPU backends synchronize their host mirror at most once before the
     /// element loop, so this remains one logical readback operation.
     pub fn readF32(self: *const Matrix, values: []f32) !void {
-        if (values.len != self.rows * self.cols) {
+        const element_count = dimensions.elementCount(self.rows, self.cols) catch
+            return error.DimensionMismatch;
+        if (values.len != element_count) {
             return error.DimensionMismatch;
         }
 

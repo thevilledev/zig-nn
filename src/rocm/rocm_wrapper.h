@@ -1,6 +1,8 @@
 #ifndef ZIG_NN_ROCM_WRAPPER_H
 #define ZIG_NN_ROCM_WRAPPER_H
 
+#include <stddef.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -29,15 +31,15 @@ enum ZigNNROCmKernelId {
     ZIG_NN_ROCM_KERNEL_APPLY_GELU_DERIVATIVE = 17,
 };
 
-ROCmBackendRef rocm_backend_create(const char* kernel_source, char* error_buffer, unsigned long error_buffer_len);
+ROCmBackendRef rocm_backend_create(const char* kernel_source, char* error_buffer, size_t error_buffer_len);
 void rocm_backend_destroy(ROCmBackendRef backend_ref);
-int rocm_backend_device_name(ROCmBackendRef backend_ref, char* output, unsigned long output_len);
+int rocm_backend_device_name(ROCmBackendRef backend_ref, char* output, size_t output_len);
 int rocm_backend_synchronize(ROCmBackendRef backend_ref);
 
-ROCmBufferRef rocm_backend_create_buffer(ROCmBackendRef backend_ref, unsigned long count);
+ROCmBufferRef rocm_backend_create_buffer(ROCmBackendRef backend_ref, size_t count);
 void rocm_backend_destroy_buffer(ROCmBackendRef backend_ref, ROCmBufferRef buffer_ref);
-int rocm_buffer_upload_f32(ROCmBackendRef backend_ref, ROCmBufferRef buffer_ref, const float* source, unsigned long count);
-int rocm_buffer_download_f32(ROCmBackendRef backend_ref, ROCmBufferRef buffer_ref, float* destination, unsigned long count);
+int rocm_buffer_upload_f32(ROCmBackendRef backend_ref, ROCmBufferRef buffer_ref, const float* source, size_t count);
+int rocm_buffer_download_f32(ROCmBackendRef backend_ref, ROCmBufferRef buffer_ref, float* destination, size_t count);
 
 int rocm_launch_matrix_multiply(ROCmBackendRef backend_ref, ROCmBufferRef a_ref, ROCmBufferRef b_ref, ROCmBufferRef result_ref, unsigned int a_rows, unsigned int a_cols, unsigned int b_cols);
 int rocm_launch_batched_matrix_multiply(ROCmBackendRef backend_ref, ROCmBufferRef a_ref, ROCmBufferRef b_ref, ROCmBufferRef result_ref, unsigned int batch, unsigned int a_rows, unsigned int a_cols, unsigned int b_rows, unsigned int b_cols, unsigned int transpose_a, unsigned int transpose_b);

@@ -1,6 +1,8 @@
 #ifndef METAL_WRAPPER_H
 #define METAL_WRAPPER_H
 
+#include <stddef.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -24,26 +26,26 @@ MTLCommandBufferRef metal_command_queue_create_command_buffer(MTLCommandQueueRef
 
 // Command buffer synchronization
 void metal_command_buffer_commit(MTLCommandBufferRef command_buffer);
-int metal_command_buffer_wait_until_completed(MTLCommandBufferRef command_buffer, char* error_buffer, unsigned long error_buffer_len);
+int metal_command_buffer_wait_until_completed(MTLCommandBufferRef command_buffer, char* error_buffer, size_t error_buffer_len);
 
 // Buffer creation
-MTLBufferRef metal_device_create_buffer(MTLDeviceRef device, unsigned long length, unsigned int options);
-unsigned long metal_buffer_length(MTLBufferRef buffer);
-int metal_buffer_upload_f32(MTLBufferRef buffer, const float* source, unsigned long count);
-int metal_buffer_download_f32(MTLBufferRef buffer, float* destination, unsigned long count);
-int metal_encode_matrix_multiply(MTLDeviceRef device, MTLCommandBufferRef command_buffer, MTLBufferRef left, MTLBufferRef right, MTLBufferRef result, unsigned long rows, unsigned long inner, unsigned long cols);
+MTLBufferRef metal_device_create_buffer(MTLDeviceRef device, size_t length, unsigned int options);
+size_t metal_buffer_length(MTLBufferRef buffer);
+int metal_buffer_upload_f32(MTLBufferRef buffer, const float* source, size_t count);
+int metal_buffer_download_f32(MTLBufferRef buffer, float* destination, size_t count);
+int metal_encode_matrix_multiply(MTLDeviceRef device, MTLCommandBufferRef command_buffer, MTLBufferRef left, MTLBufferRef right, MTLBufferRef result, size_t rows, size_t inner, size_t cols);
 
 // Shader library and pipeline creation
-MTLLibraryRef metal_device_create_library_from_source(MTLDeviceRef device, const char* source, char* error_buffer, unsigned long error_buffer_len);
+MTLLibraryRef metal_device_create_library_from_source(MTLDeviceRef device, const char* source, char* error_buffer, size_t error_buffer_len);
 MTLFunctionRef metal_library_create_function(MTLLibraryRef library, const char* function_name);
-MTLComputePipelineStateRef metal_device_create_compute_pipeline_state(MTLDeviceRef device, MTLFunctionRef function, char* error_buffer, unsigned long error_buffer_len);
+MTLComputePipelineStateRef metal_device_create_compute_pipeline_state(MTLDeviceRef device, MTLFunctionRef function, char* error_buffer, size_t error_buffer_len);
 
 // Compute encoder
 MTLComputeCommandEncoderRef metal_command_buffer_create_compute_command_encoder(MTLCommandBufferRef command_buffer);
 void metal_compute_encoder_set_pipeline_state(MTLComputeCommandEncoderRef encoder, MTLComputePipelineStateRef pipeline_state);
-void metal_compute_encoder_set_buffer(MTLComputeCommandEncoderRef encoder, MTLBufferRef buffer, unsigned long offset, unsigned int index);
-void metal_compute_encoder_set_bytes(MTLComputeCommandEncoderRef encoder, const void* bytes, unsigned long length, unsigned int index);
-void metal_compute_encoder_dispatch_threads(MTLComputeCommandEncoderRef encoder, MTLComputePipelineStateRef pipeline_state, unsigned long width, unsigned long height, unsigned long depth);
+void metal_compute_encoder_set_buffer(MTLComputeCommandEncoderRef encoder, MTLBufferRef buffer, size_t offset, unsigned int index);
+void metal_compute_encoder_set_bytes(MTLComputeCommandEncoderRef encoder, const void* bytes, size_t length, unsigned int index);
+void metal_compute_encoder_dispatch_threads(MTLComputeCommandEncoderRef encoder, MTLComputePipelineStateRef pipeline_state, size_t width, size_t height, size_t depth);
 void metal_compute_encoder_end_encoding(MTLComputeCommandEncoderRef encoder);
 
 // Retained Objective-C object release

@@ -1,4 +1,5 @@
 #include "cuda_wrapper.h"
+#include "../gpu/gpu_wrapper_common.h"
 
 #include <cuda.h>
 #include <cublas_v2.h>
@@ -10,7 +11,7 @@
 
 typedef struct ZigNNCUDABuffer {
     CUdeviceptr device_ptr;
-    unsigned long count;
+    size_t count;
 } ZigNNCUDABuffer;
 
 typedef struct ZigNNCUDABackend {
@@ -56,7 +57,7 @@ typedef struct ZigNNCUDABackend {
     char device_name[256];
 } ZigNNCUDABackend;
 
-static void cuda_copy_message(char* buffer, unsigned long buffer_len, const char* message) {
+static void cuda_copy_message(char* buffer, size_t buffer_len, const char* message) {
     if (buffer == NULL || buffer_len == 0) {
         return;
     }
@@ -74,7 +75,7 @@ static void cuda_copy_message(char* buffer, unsigned long buffer_len, const char
     buffer[copy_len] = '\0';
 }
 
-static void cuda_copy_driver_error(char* buffer, unsigned long buffer_len, const char* prefix, CUresult result) {
+static void cuda_copy_driver_error(char* buffer, size_t buffer_len, const char* prefix, CUresult result) {
     const char* name = NULL;
     const char* description = NULL;
     cuGetErrorName(result, &name);
@@ -85,7 +86,7 @@ static void cuda_copy_driver_error(char* buffer, unsigned long buffer_len, const
     cuda_copy_message(buffer, buffer_len, message);
 }
 
-static int cuda_check(CUresult result, char* buffer, unsigned long buffer_len, const char* prefix) {
+static int cuda_check(CUresult result, char* buffer, size_t buffer_len, const char* prefix) {
     if (result == CUDA_SUCCESS) {
         return 1;
     }
@@ -93,7 +94,7 @@ static int cuda_check(CUresult result, char* buffer, unsigned long buffer_len, c
     return 0;
 }
 
-static int cuda_check_nvrtc(nvrtcResult result, char* buffer, unsigned long buffer_len, const char* prefix) {
+static int cuda_check_nvrtc(nvrtcResult result, char* buffer, size_t buffer_len, const char* prefix) {
     if (result == NVRTC_SUCCESS) {
         return 1;
     }
@@ -104,7 +105,7 @@ static int cuda_check_nvrtc(nvrtcResult result, char* buffer, unsigned long buff
     return 0;
 }
 
-static int cuda_compile_module(ZigNNCUDABackend* backend, const char* kernel_source, int compute_major, int compute_minor, char* error_buffer, unsigned long error_buffer_len) {
+static int cuda_compile_module(ZigNNCUDABackend* backend, const char* kernel_source, int compute_major, int compute_minor, char* error_buffer, size_t error_buffer_len) {
     if (kernel_source == NULL || kernel_source[0] == '\0') {
         cuda_copy_message(error_buffer, error_buffer_len, "missing CUDA kernel source");
         return 0;
@@ -186,7 +187,7 @@ static int cuda_compile_module(ZigNNCUDABackend* backend, const char* kernel_sou
     return 1;
 }
 
-static int cuda_get_function(CUmodule module, CUfunction* function, const char* name, char* error_buffer, unsigned long error_buffer_len) {
+static int cuda_get_function(CUmodule module, CUfunction* function, const char* name, char* error_buffer, size_t error_buffer_len) {
     CUresult result = cuModuleGetFunction(function, module, name);
     if (result == CUDA_SUCCESS) {
         return 1;
@@ -198,7 +199,7 @@ static int cuda_get_function(CUmodule module, CUfunction* function, const char* 
     return 0;
 }
 
-static int cuda_load_functions(ZigNNCUDABackend* backend, char* error_buffer, unsigned long error_buffer_len) {
+static int cuda_load_functions(ZigNNCUDABackend* backend, char* error_buffer, size_t error_buffer_len) {
     return cuda_get_function(backend->module, &backend->matrix_multiply, "matrix_multiply", error_buffer, error_buffer_len) &&
         cuda_get_function(backend->module, &backend->batched_matrix_multiply, "batched_matrix_multiply", error_buffer, error_buffer_len) &&
         cuda_get_function(backend->module, &backend->permute_batch_heads, "permute_batch_heads", error_buffer, error_buffer_len) &&
@@ -290,7 +291,7 @@ static int cuda_set_context(ZigNNCUDABackend* backend) {
     return cuCtxSetCurrent(backend->context) == CUDA_SUCCESS;
 }
 
-CUDABackendRef cuda_backend_create(const char* kernel_source, char* error_buffer, unsigned long error_buffer_len) {
+CUDABackendRef cuda_backend_create(const char* kernel_source, char* error_buffer, size_t error_buffer_len) {
     cuda_copy_message(error_buffer, error_buffer_len, NULL);
 
     if (!cuda_check(cuInit(0), error_buffer, error_buffer_len, "CUDA initialization failed")) {
@@ -386,7 +387,7 @@ void cuda_backend_destroy(CUDABackendRef backend_ref) {
     free(backend);
 }
 
-int cuda_backend_device_name(CUDABackendRef backend_ref, char* output, unsigned long output_len) {
+int cuda_backend_device_name(CUDABackendRef backend_ref, char* output, size_t output_len) {
     ZigNNCUDABackend* backend = (ZigNNCUDABackend*)backend_ref;
     if (backend == NULL || output == NULL || output_len == 0) {
         return 0;
@@ -404,9 +405,10 @@ int cuda_backend_synchronize(CUDABackendRef backend_ref) {
     return cuCtxSynchronize() == CUDA_SUCCESS;
 }
 
-CUDABufferRef cuda_backend_create_buffer(CUDABackendRef backend_ref, unsigned long count) {
+CUDABufferRef cuda_backend_create_buffer(CUDABackendRef backend_ref, size_t count) {
     ZigNNCUDABackend* backend = (ZigNNCUDABackend*)backend_ref;
-    if (!cuda_set_context(backend)) {
+    size_t byte_count = 0;
+    if (count == 0 || !zig_nn_f32_byte_count(count, &byte_count) || !cuda_set_context(backend)) {
         return NULL;
     }
 
@@ -415,14 +417,19 @@ CUDABufferRef cuda_backend_create_buffer(CUDABackendRef backend_ref, unsigned lo
         return NULL;
     }
 
-    CUresult result = cuMemAlloc(&buffer->device_ptr, count * sizeof(float));
+    CUresult result = cuMemAlloc(&buffer->device_ptr, byte_count);
     if (result != CUDA_SUCCESS) {
         free(buffer);
         return NULL;
     }
 
     buffer->count = count;
-    cuMemsetD8(buffer->device_ptr, 0, count * sizeof(float));
+    result = cuMemsetD8(buffer->device_ptr, 0, byte_count);
+    if (result != CUDA_SUCCESS) {
+        cuMemFree(buffer->device_ptr);
+        free(buffer);
+        return NULL;
+    }
     return (CUDABufferRef)buffer;
 }
 
@@ -439,24 +446,28 @@ void cuda_backend_destroy_buffer(CUDABackendRef backend_ref, CUDABufferRef buffe
     free(buffer);
 }
 
-int cuda_buffer_upload_f32(CUDABackendRef backend_ref, CUDABufferRef buffer_ref, const float* source, unsigned long count) {
+int cuda_buffer_upload_f32(CUDABackendRef backend_ref, CUDABufferRef buffer_ref, const float* source, size_t count) {
     ZigNNCUDABackend* backend = (ZigNNCUDABackend*)backend_ref;
     ZigNNCUDABuffer* buffer = (ZigNNCUDABuffer*)buffer_ref;
-    if (!cuda_set_context(backend) || buffer == NULL || source == NULL || count > buffer->count) {
+    size_t byte_count = 0;
+    if (!cuda_set_context(backend) || buffer == NULL || source == NULL || count > buffer->count ||
+        !zig_nn_f32_byte_count(count, &byte_count)) {
         return 0;
     }
 
-    return cuMemcpyHtoD(buffer->device_ptr, source, count * sizeof(float)) == CUDA_SUCCESS;
+    return cuMemcpyHtoD(buffer->device_ptr, source, byte_count) == CUDA_SUCCESS;
 }
 
-int cuda_buffer_download_f32(CUDABackendRef backend_ref, CUDABufferRef buffer_ref, float* destination, unsigned long count) {
+int cuda_buffer_download_f32(CUDABackendRef backend_ref, CUDABufferRef buffer_ref, float* destination, size_t count) {
     ZigNNCUDABackend* backend = (ZigNNCUDABackend*)backend_ref;
     ZigNNCUDABuffer* buffer = (ZigNNCUDABuffer*)buffer_ref;
-    if (!cuda_set_context(backend) || buffer == NULL || destination == NULL || count > buffer->count) {
+    size_t byte_count = 0;
+    if (!cuda_set_context(backend) || buffer == NULL || destination == NULL || count > buffer->count ||
+        !zig_nn_f32_byte_count(count, &byte_count)) {
         return 0;
     }
 
-    return cuMemcpyDtoH(destination, buffer->device_ptr, count * sizeof(float)) == CUDA_SUCCESS;
+    return cuMemcpyDtoH(destination, buffer->device_ptr, byte_count) == CUDA_SUCCESS;
 }
 
 static int cuda_launch_1d(ZigNNCUDABackend* backend, CUfunction function, unsigned int width, void** args) {
