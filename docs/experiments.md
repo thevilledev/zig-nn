@@ -14,6 +14,21 @@ The convention in this repo is:
 
 ## Current Experiments
 
+### Optimizer Lab
+
+Location: [examples/optimizer_lab](../examples/optimizer_lab/optimizer_lab.zig)
+
+Run:
+
+```bash
+nnctl run optimizer-lab
+```
+
+This trains identically initialized MLPs on a deterministic two-moons dataset
+with SGD, momentum, and AdamW. It reports loss reduction, held-out accuracy,
+kernel counts, and any training-time readbacks. Learning rates are
+optimizer-specific so the comparison also makes tuning part of the lesson.
+
 ### TurboQuant
 
 Location: [examples/quantization](../examples/quantization/README.md)

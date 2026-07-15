@@ -21,3 +21,16 @@ func TestResolveTinyGPTOpenAIExample(t *testing.T) {
 		t.Fatalf("unexpected step: %s", example.Step)
 	}
 }
+
+func TestResolveOptimizerLabExample(t *testing.T) {
+	example, ok := ResolveExample("optimizer_lab")
+	if !ok {
+		t.Fatal("expected optimizer_lab to resolve")
+	}
+	if example.Step != "run_optimizer_lab" {
+		t.Fatalf("unexpected step: %s", example.Step)
+	}
+	if example.DefaultGPU != "auto" || !example.Quick {
+		t.Fatalf("unexpected optimizer lab defaults: %+v", example)
+	}
+}
