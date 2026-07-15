@@ -44,3 +44,13 @@ func TestResolveCNNExample(t *testing.T) {
 		t.Fatalf("unexpected cnn example: %+v", example)
 	}
 }
+
+func TestResolveAutoencoderExample(t *testing.T) {
+	example, ok := ResolveExample("autoencoder")
+	if !ok {
+		t.Fatal("expected autoencoder to resolve")
+	}
+	if example.Step != "run_autoencoder" || example.DefaultGPU != "auto" || !example.Quick {
+		t.Fatalf("unexpected autoencoder example: %+v", example)
+	}
+}

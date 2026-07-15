@@ -14,6 +14,21 @@ The convention in this repo is:
 
 ## Current Experiments
 
+### Denoising Autoencoder
+
+Location: [examples/autoencoder](../examples/autoencoder/autoencoder.zig)
+
+Run:
+
+```bash
+nnctl run autoencoder
+```
+
+This compresses noisy 4x4 patterns through a two-value bottleneck and learns
+to reconstruct their clean forms. It reports held-out reconstruction error,
+pixel accuracy, bottleneck centers for four pattern families, kernel counts,
+and training-time readbacks.
+
 ### Optimizer Lab
 
 Location: [examples/optimizer_lab](../examples/optimizer_lab/optimizer_lab.zig)
