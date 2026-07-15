@@ -337,6 +337,208 @@ pub const CausalSelfAttentionGradients = struct {
     }
 };
 
+/// Parameter and input gradients produced by unmasked self-attention.
+pub const FullSelfAttentionGradients = CausalSelfAttentionGradients;
+
+/// Single-head, unmasked self-attention for bidirectional encoder blocks.
+/// The implementation is expressed through Tensor matmuls and softmax so it
+/// stays on every supported device without a separate attention kernel.
+pub const FullSelfAttention = struct {
+    query: Linear,
+    key: Linear,
+    value: Linear,
+    output: Linear,
+    ones: Tensor,
+    tokens: usize,
+    channels: usize,
+
+    pub fn init(
+        context: *ExecutionContext,
+        tokens: usize,
+        channels: usize,
+        random: std.Random,
+    ) !FullSelfAttention {
+        if (tokens == 0 or channels == 0) return error.InvalidDimension;
+        var query = try Linear.init(context, channels, channels, random);
+        errdefer query.deinit();
+        var key = try Linear.init(context, channels, channels, random);
+        errdefer key.deinit();
+        var value = try Linear.init(context, channels, channels, random);
+        errdefer value.deinit();
+        var output = try Linear.init(context, channels, channels, random);
+        errdefer output.deinit();
+        var ones = try context.createTensor(&.{ 1, tokens });
+        ones.fill(1);
+        return .{
+            .query = query,
+            .key = key,
+            .value = value,
+            .output = output,
+            .ones = ones,
+            .tokens = tokens,
+            .channels = channels,
+        };
+    }
+
+    pub fn deinit(self: *FullSelfAttention) void {
+        self.query.deinit();
+        self.key.deinit();
+        self.value.deinit();
+        self.output.deinit();
+        self.ones.deinit();
+        self.* = undefined;
+    }
+
+    pub fn forward(
+        self: *const FullSelfAttention,
+        context: *ExecutionContext,
+        input: Tensor,
+    ) !Tensor {
+        try self.validateInput(input);
+        var query = try self.query.forward(context, input);
+        defer query.deinit();
+        var key = try self.key.forward(context, input);
+        defer key.deinit();
+        var value = try self.value.forward(context, input);
+        defer value.deinit();
+        var key_transpose = try context.transpose(key);
+        defer key_transpose.deinit();
+        var scores = try context.matmul(query, key_transpose);
+        defer scores.deinit();
+        var scaled_scores = try context.scale(
+            scores,
+            1.0 / @sqrt(@as(f32, @floatFromInt(self.channels))),
+        );
+        defer scaled_scores.deinit();
+        var probabilities = try context.softmax(scaled_scores);
+        defer probabilities.deinit();
+        var attended = try context.matmul(probabilities, value);
+        defer attended.deinit();
+        return self.output.forward(context, attended);
+    }
+
+    pub fn backward(
+        self: *const FullSelfAttention,
+        context: *ExecutionContext,
+        input: Tensor,
+        output_gradient: Tensor,
+    ) !FullSelfAttentionGradients {
+        try self.validateInput(input);
+        if (!input.shape.eql(output_gradient.shape)) return error.DimensionMismatch;
+        var query = try self.query.forward(context, input);
+        defer query.deinit();
+        var key = try self.key.forward(context, input);
+        defer key.deinit();
+        var value = try self.value.forward(context, input);
+        defer value.deinit();
+        var key_transpose = try context.transpose(key);
+        defer key_transpose.deinit();
+        var scores = try context.matmul(query, key_transpose);
+        defer scores.deinit();
+        const attention_scale = 1.0 / @sqrt(@as(f32, @floatFromInt(self.channels)));
+        var scaled_scores = try context.scale(scores, attention_scale);
+        defer scaled_scores.deinit();
+        var probabilities = try context.softmax(scaled_scores);
+        defer probabilities.deinit();
+        var attended = try context.matmul(probabilities, value);
+        defer attended.deinit();
+
+        var output_gradients = try self.output.backward(context, attended, output_gradient);
+        errdefer output_gradients.deinit();
+        var value_transpose = try context.transpose(value);
+        defer value_transpose.deinit();
+        var probability_gradient = try context.matmul(
+            output_gradients.input,
+            value_transpose,
+        );
+        defer probability_gradient.deinit();
+        var weighted_probability_gradient = try context.multiply(
+            probabilities,
+            probability_gradient,
+        );
+        defer weighted_probability_gradient.deinit();
+        var weighted_transpose = try context.transpose(weighted_probability_gradient);
+        defer weighted_transpose.deinit();
+        var row_sums_transpose = try context.sumRows(weighted_transpose);
+        defer row_sums_transpose.deinit();
+        var row_sums = try context.transpose(row_sums_transpose);
+        defer row_sums.deinit();
+        var broadcast_row_sums = try context.matmul(row_sums, self.ones);
+        defer broadcast_row_sums.deinit();
+        var centered_probability_gradient = try context.subtract(
+            probability_gradient,
+            broadcast_row_sums,
+        );
+        defer centered_probability_gradient.deinit();
+        var unscaled_score_gradient = try context.multiply(
+            probabilities,
+            centered_probability_gradient,
+        );
+        defer unscaled_score_gradient.deinit();
+        var score_gradient = try context.scale(
+            unscaled_score_gradient,
+            attention_scale,
+        );
+        defer score_gradient.deinit();
+
+        var query_gradient = try context.matmul(score_gradient, key);
+        defer query_gradient.deinit();
+        var score_gradient_transpose = try context.transpose(score_gradient);
+        defer score_gradient_transpose.deinit();
+        var key_gradient = try context.matmul(score_gradient_transpose, query);
+        defer key_gradient.deinit();
+        var probabilities_transpose = try context.transpose(probabilities);
+        defer probabilities_transpose.deinit();
+        var value_gradient = try context.matmul(
+            probabilities_transpose,
+            output_gradients.input,
+        );
+        defer value_gradient.deinit();
+
+        var query_gradients = try self.query.backward(context, input, query_gradient);
+        errdefer query_gradients.deinit();
+        var key_gradients = try self.key.backward(context, input, key_gradient);
+        errdefer key_gradients.deinit();
+        var value_gradients = try self.value.backward(context, input, value_gradient);
+        errdefer value_gradients.deinit();
+        var query_key_gradient = try context.add(
+            query_gradients.input,
+            key_gradients.input,
+        );
+        defer query_key_gradient.deinit();
+        const input_gradient = try context.add(query_key_gradient, value_gradients.input);
+
+        output_gradients.input.deinit();
+        query_gradients.input.deinit();
+        key_gradients.input.deinit();
+        value_gradients.input.deinit();
+        return .{
+            .input = input_gradient,
+            .query_weights = query_gradients.weights,
+            .query_bias = query_gradients.bias,
+            .key_weights = key_gradients.weights,
+            .key_bias = key_gradients.bias,
+            .value_weights = value_gradients.weights,
+            .value_bias = value_gradients.bias,
+            .output_weights = output_gradients.weights,
+            .output_bias = output_gradients.bias,
+        };
+    }
+
+    pub fn parameterCount(self: FullSelfAttention) usize {
+        return self.query.parameterCount() + self.key.parameterCount() +
+            self.value.parameterCount() + self.output.parameterCount();
+    }
+
+    fn validateInput(self: FullSelfAttention, input: Tensor) !void {
+        if (input.shape.rank != 2 or input.shape.dims[0] != self.tokens or
+            input.shape.dims[1] != self.channels)
+        {
+            return error.DimensionMismatch;
+        }
+    }
+};
+
 /// Position-wise GELU feed-forward network.
 pub const FeedForward = struct {
     expand: Linear,
@@ -408,6 +610,235 @@ pub const FeedForwardGradients = struct {
         self.project_weights.deinit();
         self.project_bias.deinit();
         self.* = undefined;
+    }
+};
+
+/// Pre-normalization Transformer encoder block with unmasked attention.
+pub const EncoderBlock = struct {
+    attention_norm: LayerNorm,
+    attention: FullSelfAttention,
+    feed_forward_norm: LayerNorm,
+    feed_forward: FeedForward,
+    tokens: usize,
+    channels: usize,
+
+    pub fn init(
+        context: *ExecutionContext,
+        tokens: usize,
+        channels: usize,
+        hidden_features: usize,
+        random: std.Random,
+    ) !EncoderBlock {
+        var attention_norm = try LayerNorm.init(context, channels, 1e-5);
+        errdefer attention_norm.deinit();
+        var attention = try FullSelfAttention.init(context, tokens, channels, random);
+        errdefer attention.deinit();
+        var feed_forward_norm = try LayerNorm.init(context, channels, 1e-5);
+        errdefer feed_forward_norm.deinit();
+        const feed_forward = try FeedForward.init(
+            context,
+            channels,
+            hidden_features,
+            random,
+        );
+        return .{
+            .attention_norm = attention_norm,
+            .attention = attention,
+            .feed_forward_norm = feed_forward_norm,
+            .feed_forward = feed_forward,
+            .tokens = tokens,
+            .channels = channels,
+        };
+    }
+
+    pub fn deinit(self: *EncoderBlock) void {
+        self.attention_norm.deinit();
+        self.attention.deinit();
+        self.feed_forward_norm.deinit();
+        self.feed_forward.deinit();
+        self.* = undefined;
+    }
+
+    pub fn forward(
+        self: *const EncoderBlock,
+        context: *ExecutionContext,
+        input: Tensor,
+    ) !Tensor {
+        try self.validateInput(input);
+        var normalized_attention = try self.attention_norm.forward(context, input);
+        defer normalized_attention.deinit();
+        var attention_output = try self.attention.forward(context, normalized_attention);
+        defer attention_output.deinit();
+        var attention_residual = try context.add(input, attention_output);
+        defer attention_residual.deinit();
+        var normalized_feed_forward = try self.feed_forward_norm.forward(
+            context,
+            attention_residual,
+        );
+        defer normalized_feed_forward.deinit();
+        var feed_forward_output = try self.feed_forward.forward(
+            context,
+            normalized_feed_forward,
+        );
+        defer feed_forward_output.deinit();
+        return context.add(attention_residual, feed_forward_output);
+    }
+
+    pub fn backward(
+        self: *const EncoderBlock,
+        context: *ExecutionContext,
+        input: Tensor,
+        output_gradient: Tensor,
+    ) !EncoderBlockGradients {
+        try self.validateInput(input);
+        if (!input.shape.eql(output_gradient.shape)) return error.DimensionMismatch;
+        var normalized_attention = try self.attention_norm.forward(context, input);
+        defer normalized_attention.deinit();
+        var attention_output = try self.attention.forward(context, normalized_attention);
+        defer attention_output.deinit();
+        var attention_residual = try context.add(input, attention_output);
+        defer attention_residual.deinit();
+        var normalized_feed_forward = try self.feed_forward_norm.forward(
+            context,
+            attention_residual,
+        );
+        defer normalized_feed_forward.deinit();
+
+        const feed_forward_gradients = try self.feed_forward.backward(
+            context,
+            normalized_feed_forward,
+            output_gradient,
+        );
+        errdefer {
+            var owned = feed_forward_gradients;
+            owned.deinit();
+        }
+        const feed_forward_norm_gradients = try self.feed_forward_norm.backward(
+            context,
+            attention_residual,
+            feed_forward_gradients.input,
+        );
+        errdefer {
+            var owned = feed_forward_norm_gradients;
+            owned.deinit();
+        }
+        var attention_residual_gradient = try context.add(
+            output_gradient,
+            feed_forward_norm_gradients.input,
+        );
+        defer attention_residual_gradient.deinit();
+        const attention_gradients = try self.attention.backward(
+            context,
+            normalized_attention,
+            attention_residual_gradient,
+        );
+        errdefer {
+            var owned = attention_gradients;
+            owned.deinit();
+        }
+        const attention_norm_gradients = try self.attention_norm.backward(
+            context,
+            input,
+            attention_gradients.input,
+        );
+        errdefer {
+            var owned = attention_norm_gradients;
+            owned.deinit();
+        }
+        const input_gradient = try context.add(
+            attention_residual_gradient,
+            attention_norm_gradients.input,
+        );
+        return .{
+            .input = input_gradient,
+            .attention_norm = attention_norm_gradients,
+            .attention = attention_gradients,
+            .feed_forward_norm = feed_forward_norm_gradients,
+            .feed_forward = feed_forward_gradients,
+        };
+    }
+
+    pub fn parameterTensorCount(_: EncoderBlock) usize {
+        return 16;
+    }
+
+    pub fn parameterCount(self: EncoderBlock) usize {
+        return self.attention_norm.parameterCount() + self.attention.parameterCount() +
+            self.feed_forward_norm.parameterCount() + self.feed_forward.parameterCount();
+    }
+
+    pub fn parameters(self: *EncoderBlock, output: []*Tensor) ![]*Tensor {
+        if (output.len < self.parameterTensorCount()) return error.InsufficientBuffer;
+        output[0] = &self.attention_norm.gamma;
+        output[1] = &self.attention_norm.beta;
+        output[2] = &self.attention.query.weights;
+        output[3] = &self.attention.query.bias;
+        output[4] = &self.attention.key.weights;
+        output[5] = &self.attention.key.bias;
+        output[6] = &self.attention.value.weights;
+        output[7] = &self.attention.value.bias;
+        output[8] = &self.attention.output.weights;
+        output[9] = &self.attention.output.bias;
+        output[10] = &self.feed_forward_norm.gamma;
+        output[11] = &self.feed_forward_norm.beta;
+        output[12] = &self.feed_forward.expand.weights;
+        output[13] = &self.feed_forward.expand.bias;
+        output[14] = &self.feed_forward.project.weights;
+        output[15] = &self.feed_forward.project.bias;
+        return output[0..16];
+    }
+
+    fn validateInput(self: EncoderBlock, input: Tensor) !void {
+        if (input.shape.rank != 2 or input.shape.dims[0] != self.tokens or
+            input.shape.dims[1] != self.channels)
+        {
+            return error.DimensionMismatch;
+        }
+    }
+};
+
+pub const EncoderBlockGradients = struct {
+    input: Tensor,
+    attention_norm: tensor.LayerNormGradients,
+    attention: FullSelfAttentionGradients,
+    feed_forward_norm: tensor.LayerNormGradients,
+    feed_forward: FeedForwardGradients,
+
+    pub fn deinit(self: *EncoderBlockGradients) void {
+        self.input.deinit();
+        self.attention_norm.deinit();
+        self.attention.deinit();
+        self.feed_forward_norm.deinit();
+        self.feed_forward.deinit();
+        self.* = undefined;
+    }
+
+    pub fn parameterTensorCount(_: EncoderBlockGradients) usize {
+        return 16;
+    }
+
+    pub fn parameterGradients(
+        self: EncoderBlockGradients,
+        output: []Tensor,
+    ) ![]Tensor {
+        if (output.len < self.parameterTensorCount()) return error.InsufficientBuffer;
+        output[0] = self.attention_norm.gamma;
+        output[1] = self.attention_norm.beta;
+        output[2] = self.attention.query_weights;
+        output[3] = self.attention.query_bias;
+        output[4] = self.attention.key_weights;
+        output[5] = self.attention.key_bias;
+        output[6] = self.attention.value_weights;
+        output[7] = self.attention.value_bias;
+        output[8] = self.attention.output_weights;
+        output[9] = self.attention.output_bias;
+        output[10] = self.feed_forward_norm.gamma;
+        output[11] = self.feed_forward_norm.beta;
+        output[12] = self.feed_forward.expand_weights;
+        output[13] = self.feed_forward.expand_bias;
+        output[14] = self.feed_forward.project_weights;
+        output[15] = self.feed_forward.project_bias;
+        return output[0..16];
     }
 };
 
@@ -798,6 +1229,160 @@ pub const DecoderCache = struct {
         self.position = 0;
     }
 };
+
+fn setIdentityLinear2(linear: *Linear) !void {
+    try linear.weights.writeF32(&.{
+        1, 0,
+        0, 1,
+    });
+    linear.bias.fill(0);
+}
+
+test "unmasked attention can use future tokens" {
+    const testing = std.testing;
+    var device = try tensor.Device.init(testing.allocator, .cpu);
+    defer device.deinit();
+    var context = ExecutionContext.init(&device);
+    var full_prng = std.Random.DefaultPrng.init(1);
+    var full = try FullSelfAttention.init(&context, 3, 2, full_prng.random());
+    defer full.deinit();
+    var causal_prng = std.Random.DefaultPrng.init(1);
+    var causal = try CausalSelfAttention.init(&context, 2, 1, causal_prng.random());
+    defer causal.deinit();
+
+    try setIdentityLinear2(&full.query);
+    try setIdentityLinear2(&full.key);
+    try setIdentityLinear2(&full.value);
+    try setIdentityLinear2(&full.output);
+    try setIdentityLinear2(&causal.query);
+    try setIdentityLinear2(&causal.key);
+    try setIdentityLinear2(&causal.value);
+    try setIdentityLinear2(&causal.output);
+
+    var input_a = try context.upload(&.{ 3, 2 }, &.{
+        1, 0,
+        0, 1,
+        4, 0,
+    });
+    defer input_a.deinit();
+    var input_b = try context.upload(&.{ 3, 2 }, &.{
+        1,  0,
+        0,  1,
+        -4, 0,
+    });
+    defer input_b.deinit();
+    var full_a = try full.forward(&context, input_a);
+    defer full_a.deinit();
+    var full_b = try full.forward(&context, input_b);
+    defer full_b.deinit();
+    var causal_a = try causal.forward(&context, input_a);
+    defer causal_a.deinit();
+    var causal_b = try causal.forward(&context, input_b);
+    defer causal_b.deinit();
+
+    var full_a_values: [6]f32 = undefined;
+    var full_b_values: [6]f32 = undefined;
+    var causal_a_values: [6]f32 = undefined;
+    var causal_b_values: [6]f32 = undefined;
+    try context.readback(full_a, &full_a_values);
+    try context.readback(full_b, &full_b_values);
+    try context.readback(causal_a, &causal_a_values);
+    try context.readback(causal_b, &causal_b_values);
+
+    try testing.expect(@abs(full_a_values[0] - full_b_values[0]) > 1);
+    try testing.expectApproxEqAbs(causal_a_values[0], causal_b_values[0], 1e-6);
+    try testing.expectApproxEqAbs(causal_a_values[1], causal_b_values[1], 1e-6);
+}
+
+test "unmasked attention input gradients match finite differences" {
+    const testing = std.testing;
+    var device = try tensor.Device.init(testing.allocator, .cpu);
+    defer device.deinit();
+    var context = ExecutionContext.init(&device);
+    var prng = std.Random.DefaultPrng.init(23);
+    var attention = try FullSelfAttention.init(&context, 2, 2, prng.random());
+    defer attention.deinit();
+    const input_values = [_]f32{ 0.2, -0.35, 0.5, 0.1 };
+    var input = try context.upload(&.{ 2, 2 }, &input_values);
+    defer input.deinit();
+    var output_gradient = try context.upload(&.{ 2, 2 }, &.{ 1, 1, 1, 1 });
+    defer output_gradient.deinit();
+    var gradients = try attention.backward(&context, input, output_gradient);
+    defer gradients.deinit();
+    var analytical: [4]f32 = undefined;
+    try context.readback(gradients.input, &analytical);
+
+    const epsilon: f32 = 1e-3;
+    for (0..input_values.len) |input_index| {
+        var plus_values = input_values;
+        plus_values[input_index] += epsilon;
+        var plus_input = try context.upload(&.{ 2, 2 }, &plus_values);
+        defer plus_input.deinit();
+        var plus_output = try attention.forward(&context, plus_input);
+        defer plus_output.deinit();
+        var plus_result: [4]f32 = undefined;
+        try context.readback(plus_output, &plus_result);
+
+        var minus_values = input_values;
+        minus_values[input_index] -= epsilon;
+        var minus_input = try context.upload(&.{ 2, 2 }, &minus_values);
+        defer minus_input.deinit();
+        var minus_output = try attention.forward(&context, minus_input);
+        defer minus_output.deinit();
+        var minus_result: [4]f32 = undefined;
+        try context.readback(minus_output, &minus_result);
+
+        const plus_sum = plus_result[0] + plus_result[1] + plus_result[2] + plus_result[3];
+        const minus_sum = minus_result[0] + minus_result[1] + minus_result[2] + minus_result[3];
+        const numerical = (plus_sum - minus_sum) / (2 * epsilon);
+        try testing.expectApproxEqAbs(numerical, analytical[input_index], 3e-3);
+    }
+}
+
+test "encoder block forward and backward stay on each available device" {
+    const testing = std.testing;
+    const preferences = [_]tensor.DevicePreference{ .cpu, .metal, .cuda, .rocm };
+    for (preferences) |preference| {
+        var device = tensor.Device.init(testing.allocator, preference) catch |err| switch (err) {
+            error.BackendUnavailable => continue,
+            else => return err,
+        };
+        defer device.deinit();
+        var context = ExecutionContext.init(&device);
+        var prng = std.Random.DefaultPrng.init(29);
+        var block = try EncoderBlock.init(&context, 3, 2, 4, prng.random());
+        defer block.deinit();
+        try testing.expectEqual(@as(usize, 54), block.parameterCount());
+        try testing.expectEqual(@as(usize, 16), block.parameterTensorCount());
+        var input = try context.upload(&.{ 3, 2 }, &.{
+            0.2,  -0.1,
+            0.5,  0.3,
+            -0.4, 0.7,
+        });
+        defer input.deinit();
+        var output_gradient = try context.upload(&.{ 3, 2 }, &.{
+            1, 1,
+            1, 1,
+            1, 1,
+        });
+        defer output_gradient.deinit();
+
+        var output = try block.forward(&context, input);
+        defer output.deinit();
+        var gradients = try block.backward(&context, input, output_gradient);
+        defer gradients.deinit();
+        var parameter_storage: [16]*Tensor = undefined;
+        const parameters = try block.parameters(&parameter_storage);
+        var gradient_storage: [16]Tensor = undefined;
+        const parameter_gradients = try gradients.parameterGradients(&gradient_storage);
+        for (parameters, parameter_gradients) |parameter, gradient| {
+            try testing.expect(parameter.shape.eql(gradient.shape));
+        }
+        try testing.expect(output.shape.eql(input.shape));
+        try testing.expect(gradients.input.shape.eql(input.shape));
+        try testing.expectEqual(@as(usize, 0), context.stats.readbacks);
+    }
+}
 
 test "decoder block runs a finite device-resident forward pass" {
     const testing = std.testing;
