@@ -20,6 +20,7 @@ const cuda_backend_mod = @import("cuda_backend.zig");
 const rocm_backend_mod = @import("rocm_backend.zig");
 const quantization_mod = @import("quantization.zig");
 const tensor_mod = @import("tensor.zig");
+const modules_mod = @import("modules.zig");
 const transformer_mod = @import("transformer.zig");
 
 /// Library usage example:
@@ -72,6 +73,7 @@ pub const DevicePreference = tensor_mod.DevicePreference;
 pub const ExecutionContext = tensor_mod.ExecutionContext;
 pub const ExecutionStats = tensor_mod.ExecutionStats;
 pub const BackendRuntimeStats = backend_mod.RuntimeStats;
+pub const Modules = modules_mod;
 pub const Transformer = transformer_mod;
 
 // Export backend interface types
