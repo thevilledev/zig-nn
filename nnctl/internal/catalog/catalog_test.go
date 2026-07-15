@@ -74,3 +74,13 @@ func TestResolveTransformerEncoderExample(t *testing.T) {
 		t.Fatalf("unexpected transformer encoder example: %+v", example)
 	}
 }
+
+func TestResolveDQNExample(t *testing.T) {
+	example, ok := ResolveExample("dqn")
+	if !ok {
+		t.Fatal("expected dqn to resolve")
+	}
+	if example.Step != "run_dqn" || example.DefaultGPU != "auto" || example.Quick {
+		t.Fatalf("unexpected dqn example: %+v", example)
+	}
+}
