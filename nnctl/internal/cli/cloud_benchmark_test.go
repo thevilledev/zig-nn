@@ -43,6 +43,25 @@ func TestNormalizeCloudBenchmarkDeployOptionsAllowsSourceID(t *testing.T) {
 	}
 }
 
+func TestCloudBenchmarkProgressReportsNumberedPhases(t *testing.T) {
+	var output strings.Builder
+	progress := newCloudBenchmarkProgress(&output)
+	progress.phase(cloudBenchmarkPhasePrepare, "Prepare benchmark workflow")
+	progress.detail("Revision: abc123")
+	progress.phase(cloudBenchmarkPhaseImage, "Resolve golden OS volume")
+	progress.detail("Using existing volume")
+
+	want := `[1/9] Prepare benchmark workflow
+      Revision: abc123
+
+[2/9] Resolve golden OS volume
+      Using existing volume
+`
+	if output.String() != want {
+		t.Fatalf("progress output:\n%s\nwant:\n%s", output.String(), want)
+	}
+}
+
 func TestReusableCloudBenchmarkSourceVolumeUsesNewestActiveOSVolume(t *testing.T) {
 	volumes := []verdacloud.Volume{
 		{ID: "vol-old", Name: defaultCloudBenchmarkSourceName, Location: "FIN-01", IsOSVolume: true, CreatedAt: "2026-07-10T00:00:00Z"},

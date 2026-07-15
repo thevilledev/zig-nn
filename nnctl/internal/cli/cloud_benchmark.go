@@ -31,6 +31,16 @@ const (
 	cloudBenchmarkDocsHeading            = "## Automated Cloud Benchmark Runs"
 	cloudBenchmarkPackerBuildLocation    = "FIN-01"
 	cloudBenchmarkPackerArtifactLocation = "FIN-02"
+	cloudBenchmarkPhaseCount             = 9
+	cloudBenchmarkPhasePrepare           = 1
+	cloudBenchmarkPhaseImage             = 2
+	cloudBenchmarkPhaseDeploy            = 3
+	cloudBenchmarkPhaseReady             = 4
+	cloudBenchmarkPhaseUpload            = 5
+	cloudBenchmarkPhaseSmoke             = 6
+	cloudBenchmarkPhaseRun               = 7
+	cloudBenchmarkPhaseResults           = 8
+	cloudBenchmarkPhaseCleanup           = 9
 )
 
 type cloudBenchmarkDeployOptions struct {
@@ -86,6 +96,27 @@ type cloudBenchmarkMetadata struct {
 	ZigVersion        string
 }
 
+type cloudBenchmarkProgress struct {
+	dst     io.Writer
+	started bool
+}
+
+func newCloudBenchmarkProgress(dst io.Writer) *cloudBenchmarkProgress {
+	return &cloudBenchmarkProgress{dst: dst}
+}
+
+func (p *cloudBenchmarkProgress) phase(number int, title string) {
+	if p.started {
+		fmt.Fprintln(p.dst)
+	}
+	fmt.Fprintf(p.dst, "[%d/%d] %s\n", number, cloudBenchmarkPhaseCount, title)
+	p.started = true
+}
+
+func (p *cloudBenchmarkProgress) detail(format string, args ...any) {
+	fmt.Fprintf(p.dst, "      "+format+"\n", args...)
+}
+
 func defaultCloudBenchmarkDeployOptions() cloudBenchmarkDeployOptions {
 	deployOpts := verdacloud.DefaultDeployOptions("")
 	deployOpts.Image = defaultCloudBenchmarkPackerImage
@@ -111,6 +142,9 @@ func (a *App) runCloudBenchmarkDeploy(ctx context.Context, opts cloudBenchmarkDe
 	if err := normalizeCloudBenchmarkDeployOptions(&opts); err != nil {
 		return err
 	}
+	progress := newCloudBenchmarkProgress(a.stderr())
+	progress.phase(cloudBenchmarkPhasePrepare, "Prepare benchmark workflow")
+	progress.detail("Checking git state and resolving %s", opts.ref)
 
 	if !opts.ignoreDirty {
 		status, err := a.gitStatusPorcelain(ctx, opts.git)
@@ -127,20 +161,22 @@ func (a *App) runCloudBenchmarkDeploy(ctx context.Context, opts cloudBenchmarkDe
 		return err
 	}
 	stamp := time.Now().UTC()
+	progress.detail("Revision: %s", commit)
 	if opts.authorizedKeysFile != "" {
 		opts.authorizedKeysFile = resolveRepoPath(a.repoRoot, opts.authorizedKeysFile)
 	}
 
+	progress.phase(cloudBenchmarkPhaseImage, "Resolve golden OS volume")
 	packerDir := resolveRepoPath(a.repoRoot, opts.packerDir)
 	written, err := ensureCloudPackerTemplate(packerDir, opts.refreshPackerTemplate)
 	if err != nil {
 		return err
 	}
 	for _, path := range written {
-		fmt.Fprintf(a.stderr(), "==> wrote %s\n", path)
+		progress.detail("Wrote Packer file: %s", path)
 	}
 	if len(written) == 0 {
-		fmt.Fprintf(a.stderr(), "==> using Packer template in %s\n", packerDir)
+		progress.detail("Packer template: %s", packerDir)
 	}
 
 	client, creds, err := a.newVerdaSDKClientWithCredentials(ctx, opts.BaseURL)
@@ -154,7 +190,7 @@ func (a *App) runCloudBenchmarkDeploy(ctx context.Context, opts cloudBenchmarkDe
 	}
 	defer os.RemoveAll(workflowDir)
 
-	sourceVolume, err := a.prepareCloudBenchmarkSourceVolume(ctx, client, creds, packerDir, workflowDir, &opts)
+	sourceVolume, err := a.prepareCloudBenchmarkSourceVolume(ctx, client, creds, packerDir, workflowDir, &opts, progress)
 	if err != nil {
 		return err
 	}
@@ -164,8 +200,10 @@ func (a *App) runCloudBenchmarkDeploy(ctx context.Context, opts cloudBenchmarkDe
 	opts.SourceOSVolumeID = sourceVolume.ID
 	opts.SourceOSVolumeName = ""
 	opts.LocationCode = sourceVolume.Location
-	fmt.Fprintf(a.stderr(), "==> using source OS volume %s (%s in %s)\n", sourceVolume.ID, sourceVolume.Name, sourceVolume.Location)
+	progress.detail("Using volume: %s (%s in %s)", sourceVolume.ID, sourceVolume.Name, sourceVolume.Location)
 
+	progress.phase(cloudBenchmarkPhaseDeploy, "Deploy cloud worker")
+	progress.detail("Instance: %s, market: %s, location: %s", opts.InstanceType, opts.Market, opts.LocationCode)
 	result, err := verdacloud.Deploy(ctx, client, opts.DeployOptions)
 	if err != nil {
 		return err
@@ -179,21 +217,28 @@ func (a *App) runCloudBenchmarkDeploy(ctx context.Context, opts cloudBenchmarkDe
 	if result.OSVolumeClone != nil {
 		cloneID = result.OSVolumeClone.VolumeID
 	}
-	if !opts.keepInstance {
-		defer func() {
-			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
-			defer cancel()
-			cleanupErr := cleanupCloudBenchmark(cleanupCtx, client, opts.BaseURL, instanceID, cloneID, sourceVolume.ID)
-			if cleanupErr != nil {
-				runErr = errors.Join(runErr, cleanupErr)
-				return
-			}
-			fmt.Fprintf(a.stderr(), "==> destroyed benchmark instance %s and cloned OS volume %s\n", instanceID, cloneID)
-		}()
-	} else {
-		fmt.Fprintf(a.stderr(), "==> keeping benchmark instance %s and cloned OS volume %s\n", instanceID, cloneID)
-	}
+	progress.detail("Worker: %s, cloned volume: %s", instanceID, cloneID)
+	defer func() {
+		progress.phase(cloudBenchmarkPhaseCleanup, "Clean up cloud resources")
+		if opts.keepInstance {
+			progress.detail("Skipped because --keep-instance was set")
+			progress.detail("Worker: %s, cloned volume: %s", instanceID, cloneID)
+			return
+		}
+		progress.detail("Destroying worker %s and cloned volume %s", instanceID, cloneID)
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
+		cleanupErr := cleanupCloudBenchmark(cleanupCtx, client, opts.BaseURL, instanceID, cloneID, sourceVolume.ID)
+		cancel()
+		if cleanupErr != nil {
+			progress.detail("Cleanup failed: %v", cleanupErr)
+			runErr = errors.Join(runErr, cleanupErr)
+			return
+		}
+		progress.detail("Cleanup complete")
+	}()
 
+	progress.phase(cloudBenchmarkPhaseReady, "Wait for worker readiness")
+	progress.detail("Waiting for an IP address and SSH access")
 	instance, err := waitForCloudBenchmarkInstance(ctx, client, instanceID, opts.timeout, opts.pollInterval)
 	if err != nil {
 		return err
@@ -204,6 +249,7 @@ func (a *App) runCloudBenchmarkDeploy(ctx context.Context, opts cloudBenchmarkDe
 	if err := waitForCloudBenchmarkSSH(ctx, opts.ssh, sshArgs, host, opts.timeout, opts.pollInterval); err != nil {
 		return err
 	}
+	progress.detail("Worker ready: %s", host)
 
 	remoteDir := strings.TrimSpace(opts.remoteDir)
 	if remoteDir == "" {
@@ -222,22 +268,36 @@ func (a *App) runCloudBenchmarkDeploy(ctx context.Context, opts cloudBenchmarkDe
 	deployOpts.git = opts.git
 	deployOpts.tar = opts.tar
 	deployOpts.rsync = opts.rsync
+	progress.phase(cloudBenchmarkPhaseUpload, "Upload source snapshot")
+	progress.detail("%s -> %s", opts.ref, deployOpts.target)
 	if err := a.runDeploy(ctx, deployOpts); err != nil {
 		return err
 	}
 
-	if !opts.quick && !opts.skipSmoke {
-		fmt.Fprintln(a.stderr(), "==> running remote quick benchmark smoke test")
+	progress.phase(cloudBenchmarkPhaseSmoke, "Run quick smoke benchmark")
+	if opts.quick {
+		progress.detail("Skipped because --quick makes the captured run smoke-sized")
+	} else if opts.skipSmoke {
+		progress.detail("Skipped because --skip-smoke was set")
+	} else {
 		if err := a.runCloudBenchmarkSSH(ctx, opts.ssh, sshArgs, host, remoteBenchmarkCommand(remoteDir, opts.backend, "", true), a.stdout()); err != nil {
 			return fmt.Errorf("remote quick benchmark failed: %w", err)
 		}
+		progress.detail("Smoke benchmark passed")
 	}
 
-	fmt.Fprintln(a.stderr(), "==> running remote benchmark")
+	progress.phase(cloudBenchmarkPhaseRun, "Run captured benchmark")
+	if opts.filter != "" {
+		progress.detail("Backend: %s, filter: %s, quick: %t", opts.backend, opts.filter, opts.quick)
+	} else {
+		progress.detail("Backend: %s, filter: all default suites, quick: %t", opts.backend, opts.quick)
+	}
 	benchmarkOutput, err := a.captureCloudBenchmarkSSH(ctx, opts.ssh, sshArgs, host, remoteBenchmarkCommand(remoteDir, opts.backend, opts.filter, opts.quick))
 	if err != nil {
 		return fmt.Errorf("remote benchmark failed: %w", err)
 	}
+
+	progress.phase(cloudBenchmarkPhaseResults, "Collect and save results")
 	rows, err := parseBenchmarkCSV(benchmarkOutput)
 	if err != nil {
 		return err
@@ -264,7 +324,7 @@ func (a *App) runCloudBenchmarkDeploy(ctx context.Context, opts cloudBenchmarkDe
 		metadata.GPU = result.InstanceType.Model
 	}
 	if remoteMetadata, metadataErr := a.captureCloudBenchmarkSSH(ctx, opts.ssh, sshArgs, host, remoteBenchmarkMetadataCommand()); metadataErr != nil {
-		fmt.Fprintf(a.stderr(), "warning: remote benchmark metadata could not be collected: %v\n", metadataErr)
+		progress.detail("Warning: remote metadata could not be collected: %v", metadataErr)
 	} else {
 		mergeCloudBenchmarkRemoteMetadata(&metadata, remoteMetadata)
 	}
@@ -278,6 +338,7 @@ func (a *App) runCloudBenchmarkDeploy(ctx context.Context, opts cloudBenchmarkDe
 	if err := writeCloudBenchmarkCSV(outputPath, metadata, benchmarkOutput); err != nil {
 		return err
 	}
+	progress.detail("CSV: %s", outputPath)
 	fmt.Fprintf(a.stdout(), "benchmark CSV: %s\n", outputPath)
 
 	if opts.updateDocs {
@@ -285,6 +346,7 @@ func (a *App) runCloudBenchmarkDeploy(ctx context.Context, opts cloudBenchmarkDe
 		if err := updateCloudBenchmarkDocs(docsPath, outputPath, metadata, rows); err != nil {
 			return err
 		}
+		progress.detail("Docs: %s", docsPath)
 		fmt.Fprintf(a.stdout(), "updated benchmark docs: %s\n", docsPath)
 	}
 	return nil
@@ -353,6 +415,7 @@ func (a *App) prepareCloudBenchmarkSourceVolume(
 	packerDir string,
 	workflowDir string,
 	opts *cloudBenchmarkDeployOptions,
+	progress *cloudBenchmarkProgress,
 ) (verdacloud.Volume, error) {
 	if opts.SourceOSVolumeID != "" {
 		volume, err := client.GetVolume(ctx, opts.SourceOSVolumeID)
@@ -386,7 +449,8 @@ func (a *App) prepareCloudBenchmarkSourceVolume(
 		return source, nil
 	}
 
-	fmt.Fprintf(a.stderr(), "==> no reusable OS volume named %q in %s; building it with Packer\n", opts.SourceOSVolumeName, targetLocation)
+	progress.detail("No reusable volume named %q in %s", opts.SourceOSVolumeName, targetLocation)
+	progress.detail("Building a golden volume with Packer")
 	keysFile, err := a.cloudBenchmarkAuthorizedKeysFile(ctx, client, workflowDir, opts.authorizedKeysFile, opts.SSHKeyIDs)
 	if err != nil {
 		return verdacloud.Volume{}, err
