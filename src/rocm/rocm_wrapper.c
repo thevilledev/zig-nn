@@ -23,6 +23,7 @@ typedef struct ZigNNROCmBackend {
     hipFunction_t matrix_subtract;
     hipFunction_t matrix_element_wise_multiply;
     hipFunction_t matrix_scale;
+    hipFunction_t optimizer_update;
     hipFunction_t matrix_transpose;
     hipFunction_t matrix_sum_rows;
     hipFunction_t matrix_extract_batch;
@@ -195,6 +196,7 @@ static int rocm_load_functions(ZigNNROCmBackend* backend, char* error_buffer, un
         rocm_get_function(backend->module, &backend->matrix_subtract, "matrix_subtract", error_buffer, error_buffer_len) &&
         rocm_get_function(backend->module, &backend->matrix_element_wise_multiply, "matrix_element_wise_multiply", error_buffer, error_buffer_len) &&
         rocm_get_function(backend->module, &backend->matrix_scale, "matrix_scale", error_buffer, error_buffer_len) &&
+        rocm_get_function(backend->module, &backend->optimizer_update, "optimizer_update", error_buffer, error_buffer_len) &&
         rocm_get_function(backend->module, &backend->matrix_transpose, "matrix_transpose", error_buffer, error_buffer_len) &&
         rocm_get_function(backend->module, &backend->matrix_sum_rows, "matrix_sum_rows", error_buffer, error_buffer_len) &&
         rocm_get_function(backend->module, &backend->matrix_extract_batch, "matrix_extract_batch", error_buffer, error_buffer_len) &&
@@ -542,6 +544,31 @@ int rocm_launch_scale(ROCmBackendRef backend_ref, ROCmBufferRef input_ref, ROCmB
     void* result_ptr = result->device_ptr;
     void* args[] = { &input_ptr, &result_ptr, &scalar, &rows, &cols };
     return rocm_launch_2d(backend, backend != NULL ? backend->matrix_scale : NULL, cols, rows, args);
+}
+
+int rocm_launch_optimizer_update(ROCmBackendRef backend_ref, ROCmBufferRef parameter_ref, ROCmBufferRef gradient_ref, ROCmBufferRef first_moment_ref, ROCmBufferRef second_moment_ref, ROCmBufferRef total_squares_ref, unsigned int kind, unsigned int size, float learning_rate, float beta1, float beta2, float epsilon, float weight_decay, float bias_correction1, float bias_correction2, float max_gradient_norm) {
+    ZigNNROCmBackend* backend = (ZigNNROCmBackend*)backend_ref;
+    ZigNNROCmBuffer* parameter = (ZigNNROCmBuffer*)parameter_ref;
+    ZigNNROCmBuffer* gradient = (ZigNNROCmBuffer*)gradient_ref;
+    ZigNNROCmBuffer* first_moment = (ZigNNROCmBuffer*)first_moment_ref;
+    ZigNNROCmBuffer* second_moment = (ZigNNROCmBuffer*)second_moment_ref;
+    ZigNNROCmBuffer* total_squares = (ZigNNROCmBuffer*)total_squares_ref;
+    if (parameter == NULL || gradient == NULL || first_moment == NULL || second_moment == NULL || total_squares == NULL) {
+        return 0;
+    }
+
+    void* parameter_ptr = parameter->device_ptr;
+    void* gradient_ptr = gradient->device_ptr;
+    void* first_moment_ptr = first_moment->device_ptr;
+    void* second_moment_ptr = second_moment->device_ptr;
+    void* total_squares_ptr = total_squares->device_ptr;
+    void* args[] = {
+        &parameter_ptr, &gradient_ptr, &first_moment_ptr, &second_moment_ptr,
+        &total_squares_ptr, &kind, &size, &learning_rate, &beta1, &beta2,
+        &epsilon, &weight_decay, &bias_correction1, &bias_correction2,
+        &max_gradient_norm,
+    };
+    return rocm_launch_1d(backend, backend != NULL ? backend->optimizer_update : NULL, size, args);
 }
 
 int rocm_launch_transpose(ROCmBackendRef backend_ref, ROCmBufferRef input_ref, ROCmBufferRef result_ref, unsigned int rows, unsigned int cols) {

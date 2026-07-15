@@ -283,6 +283,23 @@ pub const BackendInstance = union(BackendType) {
         return self.attachBackend(result);
     }
 
+    pub fn optimizerUpdate(
+        self: BackendInstance,
+        parameter: *BackendMatrix,
+        gradient: *const BackendMatrix,
+        first_moment: *BackendMatrix,
+        second_moment: *BackendMatrix,
+        total_squares: *const BackendMatrix,
+        config: backend_mod.OptimizerUpdateConfig,
+    ) !void {
+        return switch (self) {
+            .CPU => |ptr| CPUBackend.optimizerUpdate(ptr, parameter, gradient, first_moment, second_moment, total_squares, config),
+            .Metal => |ptr| MetalBackend.optimizerUpdate(ptr, parameter, gradient, first_moment, second_moment, total_squares, config),
+            .CUDA => |ptr| CUDABackend.optimizerUpdate(ptr, parameter, gradient, first_moment, second_moment, total_squares, config),
+            .ROCm => |ptr| ROCmBackend.optimizerUpdate(ptr, parameter, gradient, first_moment, second_moment, total_squares, config),
+        };
+    }
+
     pub fn sumRows(self: BackendInstance, matrix: *const BackendMatrix, allocator: std.mem.Allocator) !*BackendMatrix {
         const result = try switch (self) {
             .CPU => |ptr| CPUBackend.sumRows(ptr, matrix, allocator),

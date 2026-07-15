@@ -86,6 +86,49 @@ extern "C" __global__ void matrix_scale(
     B[index] = A[index] * scalar;
 }
 
+extern "C" __global__ void optimizer_update(
+    float* parameter,
+    const float* gradient,
+    float* first_moment,
+    float* second_moment,
+    const float* total_squares,
+    unsigned int kind,
+    unsigned int size,
+    float learning_rate,
+    float beta1,
+    float beta2,
+    float epsilon,
+    float weight_decay,
+    float bias_correction1,
+    float bias_correction2,
+    float max_gradient_norm
+) {
+    unsigned int position = blockIdx.x * blockDim.x + threadIdx.x;
+    if (position >= size) return;
+
+    float clip_scale = 1.0f;
+    float max_norm_squared = max_gradient_norm * max_gradient_norm;
+    if (max_gradient_norm > 0.0f && total_squares[0] > max_norm_squared) {
+        clip_scale = max_gradient_norm / sqrtf(total_squares[0]);
+    }
+    float clipped_gradient = gradient[position] * clip_scale;
+    float direction = clipped_gradient;
+    if (kind == 1) {
+        first_moment[position] = beta1 * first_moment[position] + clipped_gradient;
+        direction = first_moment[position];
+    } else if (kind == 2) {
+        first_moment[position] = beta1 * first_moment[position] +
+            (1.0f - beta1) * clipped_gradient;
+        second_moment[position] = beta2 * second_moment[position] +
+            (1.0f - beta2) * clipped_gradient * clipped_gradient;
+        float corrected_first = first_moment[position] / bias_correction1;
+        float corrected_second = second_moment[position] / bias_correction2;
+        direction = corrected_first / (sqrtf(corrected_second) + epsilon);
+    }
+    float decay = 1.0f - learning_rate * weight_decay;
+    parameter[position] = parameter[position] * decay - learning_rate * direction;
+}
+
 extern "C" __global__ void matrix_transpose(
     const float* A,
     float* B,

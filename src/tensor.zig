@@ -26,6 +26,9 @@ pub const ActivationKind = enum {
     gelu,
 };
 
+pub const OptimizerUpdateKind = backend_mod.OptimizerUpdateKind;
+pub const OptimizerUpdateConfig = backend_mod.OptimizerUpdateConfig;
+
 /// User-facing backend selection policy.
 pub const DevicePreference = enum {
     cpu,
@@ -384,6 +387,40 @@ pub const ExecutionContext = struct {
         var column_vector = try self.transpose(column_sums);
         defer column_vector.deinit();
         return self.sumRows(column_vector);
+    }
+
+    pub fn optimizerUpdate(
+        self: *ExecutionContext,
+        parameter: *Tensor,
+        gradient: Tensor,
+        first_moment: *Tensor,
+        second_moment: *Tensor,
+        total_squares: Tensor,
+        config: OptimizerUpdateConfig,
+    ) !void {
+        if (!parameter.shape.eql(gradient.shape) or
+            !parameter.shape.eql(first_moment.shape) or
+            !parameter.shape.eql(second_moment.shape) or
+            total_squares.shape.rank != 2 or total_squares.shape.dims[0] != 1 or
+            total_squares.shape.dims[1] != 1)
+        {
+            return error.DimensionMismatch;
+        }
+        if (parameter.backendType() != gradient.backendType() or
+            parameter.backendType() != first_moment.backendType() or
+            parameter.backendType() != second_moment.backendType() or
+            parameter.backendType() != total_squares.backendType())
+        {
+            return error.BackendMismatch;
+        }
+        try parameter.matrix.optimizerUpdate(
+            gradient.matrix,
+            first_moment.matrix,
+            second_moment.matrix,
+            total_squares.matrix,
+            config,
+        );
+        self.stats.kernels += 1;
     }
 
     pub fn addRowBias(self: *ExecutionContext, input: Tensor, bias: Tensor) !Tensor {
@@ -915,6 +952,59 @@ test "sum squares reduces every logical rank on device" {
     var actual: [1]f32 = undefined;
     try context.readback(total, &actual);
     try testing.expectApproxEqAbs(@as(f32, 30), actual[0], 1e-5);
+}
+
+test "fused optimizer update clips gradients on every available device" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const preferences = [_]DevicePreference{ .cpu, .metal, .cuda, .rocm };
+    for (preferences) |preference| {
+        var device = Device.init(allocator, preference) catch |err| switch (err) {
+            error.BackendUnavailable => continue,
+            else => return err,
+        };
+        defer device.deinit();
+        var context = ExecutionContext.init(&device);
+        var parameter = try context.upload(&.{ 1, 2 }, &.{ 1, 2 });
+        defer parameter.deinit();
+        var gradient = try context.upload(&.{ 1, 2 }, &.{ 3, 4 });
+        defer gradient.deinit();
+        var first_moment = try context.createTensor(&.{ 1, 2 });
+        defer first_moment.deinit();
+        var second_moment = try context.createTensor(&.{ 1, 2 });
+        defer second_moment.deinit();
+        var total_squares = try context.upload(&.{ 1, 1 }, &.{25});
+        defer total_squares.deinit();
+
+        context.resetStats();
+        try context.beginBatch();
+        try context.optimizerUpdate(
+            &parameter,
+            gradient,
+            &first_moment,
+            &second_moment,
+            total_squares,
+            .{
+                .kind = .sgd,
+                .learning_rate = 0.1,
+                .beta1 = 0,
+                .beta2 = 0,
+                .epsilon = 1e-8,
+                .weight_decay = 0,
+                .bias_correction1 = 1,
+                .bias_correction2 = 1,
+                .max_gradient_norm = 1,
+            },
+        );
+        try context.endBatch();
+        try testing.expectEqual(@as(usize, 0), context.stats.readbacks);
+
+        var actual: [2]f32 = undefined;
+        try context.readback(parameter, &actual);
+        try testing.expectApproxEqAbs(@as(f32, 0.94), actual[0], 1e-5);
+        try testing.expectApproxEqAbs(@as(f32, 1.92), actual[1], 1e-5);
+    }
 }
 
 test "transformer pipeline stays device resident within a batch" {

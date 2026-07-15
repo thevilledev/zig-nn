@@ -275,6 +275,38 @@ pub const CPUBackend = struct {
         return result;
     }
 
+    pub fn optimizerUpdate(
+        _: *anyopaque,
+        parameter: *Matrix,
+        gradient: *const Matrix,
+        first_moment: *Matrix,
+        second_moment: *Matrix,
+        total_squares: *const Matrix,
+        config: backend.OptimizerUpdateConfig,
+    ) error{DimensionMismatch}!void {
+        if (parameter.rows != gradient.rows or parameter.cols != gradient.cols or
+            parameter.rows != first_moment.rows or parameter.cols != first_moment.cols or
+            parameter.rows != second_moment.rows or parameter.cols != second_moment.cols or
+            total_squares.rows != 1 or total_squares.cols != 1)
+        {
+            return error.DimensionMismatch;
+        }
+
+        const parameter_data = @as(*CPUMatrix, @ptrCast(@alignCast(parameter.impl_data)));
+        const gradient_data = @as(*const CPUMatrix, @ptrCast(@alignCast(gradient.impl_data)));
+        const first_moment_data = @as(*CPUMatrix, @ptrCast(@alignCast(first_moment.impl_data)));
+        const second_moment_data = @as(*CPUMatrix, @ptrCast(@alignCast(second_moment.impl_data)));
+        const total_squares_data = @as(*const CPUMatrix, @ptrCast(@alignCast(total_squares.impl_data)));
+        backend.applyOptimizerUpdate(
+            parameter_data.data,
+            gradient_data.data,
+            first_moment_data.data,
+            second_moment_data.data,
+            total_squares_data.data[0],
+            config,
+        );
+    }
+
     pub fn sumRows(ptr: *anyopaque, matrix: *const Matrix, allocator: Allocator) error{OutOfMemory}!*Matrix {
         _ = @as(*CPUBackend, @ptrCast(@alignCast(ptr)));
 

@@ -42,6 +42,7 @@ int cuda_buffer_download_f32(CUDABackendRef backend_ref, CUDABufferRef buffer_re
 int cuda_launch_matrix_multiply(CUDABackendRef backend_ref, CUDABufferRef a_ref, CUDABufferRef b_ref, CUDABufferRef result_ref, unsigned int a_rows, unsigned int a_cols, unsigned int b_cols);
 int cuda_launch_binary_kernel(CUDABackendRef backend_ref, int kernel_id, CUDABufferRef a_ref, CUDABufferRef b_ref, CUDABufferRef result_ref, unsigned int rows, unsigned int cols);
 int cuda_launch_scale(CUDABackendRef backend_ref, CUDABufferRef input_ref, CUDABufferRef result_ref, float scalar, unsigned int rows, unsigned int cols);
+int cuda_launch_optimizer_update(CUDABackendRef backend_ref, CUDABufferRef parameter_ref, CUDABufferRef gradient_ref, CUDABufferRef first_moment_ref, CUDABufferRef second_moment_ref, CUDABufferRef total_squares_ref, unsigned int kind, unsigned int size, float learning_rate, float beta1, float beta2, float epsilon, float weight_decay, float bias_correction1, float bias_correction2, float max_gradient_norm);
 int cuda_launch_transpose(CUDABackendRef backend_ref, CUDABufferRef input_ref, CUDABufferRef result_ref, unsigned int rows, unsigned int cols);
 int cuda_launch_sum_rows(CUDABackendRef backend_ref, CUDABufferRef input_ref, CUDABufferRef result_ref, unsigned int rows, unsigned int cols);
 int cuda_launch_extract_batch(CUDABackendRef backend_ref, CUDABufferRef input_ref, CUDABufferRef result_ref, unsigned int start, unsigned int batch_rows, unsigned int cols);

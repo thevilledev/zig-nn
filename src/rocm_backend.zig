@@ -130,6 +130,10 @@ const ROCm = if (enable_rocm) struct {
         return c.rocm_launch_scale(toC(backend_ref), toC(input), toC(result), scalar, rows, cols) != 0;
     }
 
+    pub fn launchOptimizerUpdate(backend_ref: *Backend, parameter: *Buffer, gradient: *Buffer, first_moment: *Buffer, second_moment: *Buffer, total_squares: *Buffer, config: backend.OptimizerUpdateConfig, size: u32) bool {
+        return c.rocm_launch_optimizer_update(toC(backend_ref), toC(parameter), toC(gradient), toC(first_moment), toC(second_moment), toC(total_squares), @intFromEnum(config.kind), size, config.learning_rate, config.beta1, config.beta2, config.epsilon, config.weight_decay, config.bias_correction1, config.bias_correction2, config.max_gradient_norm) != 0;
+    }
+
     pub fn launchTranspose(backend_ref: *Backend, input: *Buffer, result: *Buffer, rows: u32, cols: u32) bool {
         return c.rocm_launch_transpose(toC(backend_ref), toC(input), toC(result), rows, cols) != 0;
     }
@@ -253,6 +257,10 @@ const ROCm = if (enable_rocm) struct {
     }
 
     pub fn launchScale(_: *Backend, _: *Buffer, _: *Buffer, _: f32, _: u32, _: u32) bool {
+        return false;
+    }
+
+    pub fn launchOptimizerUpdate(_: *Backend, _: *Buffer, _: *Buffer, _: *Buffer, _: *Buffer, _: *Buffer, _: backend.OptimizerUpdateConfig, _: u32) bool {
         return false;
     }
 
@@ -583,6 +591,32 @@ pub const ROCmBackend = struct {
 
         if (!self.completeSubmittedKernel()) return false;
         result_rocm.markGPUModified();
+        return true;
+    }
+
+    fn dispatchOptimizerUpdate(self: *ROCmBackend, parameter: *Matrix, gradient: *const Matrix, first_moment: *Matrix, second_moment: *Matrix, total_squares: *const Matrix, config: backend.OptimizerUpdateConfig) bool {
+        const backend_ref = self.backend orelse return false;
+        const parameter_data = getROCmMatrix(parameter);
+        const gradient_data = getROCmMatrix(gradient);
+        const first_moment_data = getROCmMatrix(first_moment);
+        const second_moment_data = getROCmMatrix(second_moment);
+        const total_squares_data = getROCmMatrix(total_squares);
+        if (!parameter_data.syncToGPU() or !gradient_data.syncToGPU() or
+            !first_moment_data.syncToGPU() or !second_moment_data.syncToGPU() or
+            !total_squares_data.syncToGPU())
+        {
+            return false;
+        }
+        const parameter_buffer = parameter_data.buffer orelse return false;
+        const gradient_buffer = gradient_data.buffer orelse return false;
+        const first_moment_buffer = first_moment_data.buffer orelse return false;
+        const second_moment_buffer = second_moment_data.buffer orelse return false;
+        const total_squares_buffer = total_squares_data.buffer orelse return false;
+        if (!ROCm.launchOptimizerUpdate(backend_ref, parameter_buffer, gradient_buffer, first_moment_buffer, second_moment_buffer, total_squares_buffer, config, toU32(parameter.rows * parameter.cols))) return false;
+        if (!self.completeSubmittedKernel()) return false;
+        parameter_data.markGPUModified();
+        first_moment_data.markGPUModified();
+        second_moment_data.markGPUModified();
         return true;
     }
 
@@ -1093,6 +1127,33 @@ pub const ROCmBackend = struct {
         }
         result_rocm.markHostModified();
         return result;
+    }
+
+    pub fn optimizerUpdate(ptr: *anyopaque, parameter: *Matrix, gradient: *const Matrix, first_moment: *Matrix, second_moment: *Matrix, total_squares: *const Matrix, config: backend.OptimizerUpdateConfig) error{DimensionMismatch}!void {
+        if (parameter.rows != gradient.rows or parameter.cols != gradient.cols or
+            parameter.rows != first_moment.rows or parameter.cols != first_moment.cols or
+            parameter.rows != second_moment.rows or parameter.cols != second_moment.cols or
+            total_squares.rows != 1 or total_squares.cols != 1)
+        {
+            return error.DimensionMismatch;
+        }
+        const self = @as(*ROCmBackend, @ptrCast(@alignCast(ptr)));
+        if (self.dispatchOptimizerUpdate(parameter, gradient, first_moment, second_moment, total_squares, config)) return;
+
+        const parameter_data = getROCmMatrix(parameter);
+        const gradient_data = getROCmMatrix(gradient);
+        const first_moment_data = getROCmMatrix(first_moment);
+        const second_moment_data = getROCmMatrix(second_moment);
+        const total_squares_data = getROCmMatrix(total_squares);
+        ensureHostData(parameter_data);
+        ensureHostData(gradient_data);
+        ensureHostData(first_moment_data);
+        ensureHostData(second_moment_data);
+        ensureHostData(total_squares_data);
+        backend.applyOptimizerUpdate(parameter_data.host_data, gradient_data.host_data, first_moment_data.host_data, second_moment_data.host_data, total_squares_data.host_data[0], config);
+        parameter_data.markHostModified();
+        first_moment_data.markHostModified();
+        second_moment_data.markHostModified();
     }
 
     pub fn sumRows(ptr: *anyopaque, matrix: *const Matrix, allocator: Allocator) error{OutOfMemory}!*Matrix {

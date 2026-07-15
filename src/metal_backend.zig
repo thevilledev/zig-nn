@@ -346,6 +346,7 @@ pub const MetalBackend = struct {
     element_wise_subtract_pipeline: ?*Metal.ComputePipelineState,
     element_wise_multiply_pipeline: ?*Metal.ComputePipelineState,
     matrix_scale_pipeline: ?*Metal.ComputePipelineState,
+    optimizer_update_pipeline: ?*Metal.ComputePipelineState,
     matrix_transpose_pipeline: ?*Metal.ComputePipelineState,
     matrix_sum_rows_pipeline: ?*Metal.ComputePipelineState,
     matrix_extract_batch_pipeline: ?*Metal.ComputePipelineState,
@@ -409,6 +410,7 @@ pub const MetalBackend = struct {
             .element_wise_subtract_pipeline = null,
             .element_wise_multiply_pipeline = null,
             .matrix_scale_pipeline = null,
+            .optimizer_update_pipeline = null,
             .matrix_transpose_pipeline = null,
             .matrix_sum_rows_pipeline = null,
             .matrix_extract_batch_pipeline = null,
@@ -459,6 +461,7 @@ pub const MetalBackend = struct {
         Metal.release(self.element_wise_subtract_pipeline);
         Metal.release(self.element_wise_multiply_pipeline);
         Metal.release(self.matrix_scale_pipeline);
+        Metal.release(self.optimizer_update_pipeline);
         Metal.release(self.matrix_transpose_pipeline);
         Metal.release(self.matrix_sum_rows_pipeline);
         Metal.release(self.matrix_extract_batch_pipeline);
@@ -501,6 +504,7 @@ pub const MetalBackend = struct {
         try self.loadPipeline(&self.element_wise_subtract_pipeline, "matrix_subtract");
         try self.loadPipeline(&self.element_wise_multiply_pipeline, "matrix_element_wise_multiply");
         try self.loadPipeline(&self.matrix_scale_pipeline, "matrix_scale");
+        try self.loadPipeline(&self.optimizer_update_pipeline, "optimizer_update");
         try self.loadPipeline(&self.matrix_transpose_pipeline, "matrix_transpose");
         try self.loadPipeline(&self.matrix_sum_rows_pipeline, "matrix_sum_rows");
         try self.loadPipeline(&self.matrix_extract_batch_pipeline, "matrix_extract_batch");
@@ -727,6 +731,60 @@ pub const MetalBackend = struct {
         Metal.commandBufferCommit(command_buffer);
         if (!self.completeSubmittedKernel(command_buffer)) return false;
         result_metal.markGPUModified();
+        return true;
+    }
+
+    fn dispatchOptimizerUpdate(
+        self: *MetalBackend,
+        parameter: *Matrix,
+        gradient: *const Matrix,
+        first_moment: *Matrix,
+        second_moment: *Matrix,
+        total_squares: *const Matrix,
+        config: backend.OptimizerUpdateConfig,
+    ) bool {
+        const pipeline = self.optimizer_update_pipeline orelse return false;
+        const command_queue = self.command_queue orelse return false;
+        const parameter_data = getMetalMatrix(parameter);
+        const gradient_data = getMetalMatrix(gradient);
+        const first_moment_data = getMetalMatrix(first_moment);
+        const second_moment_data = getMetalMatrix(second_moment);
+        const total_squares_data = getMetalMatrix(total_squares);
+        if (!parameter_data.syncToGPU() or !gradient_data.syncToGPU() or
+            !first_moment_data.syncToGPU() or !second_moment_data.syncToGPU() or
+            !total_squares_data.syncToGPU())
+        {
+            return false;
+        }
+
+        const command_buffer = Metal.commandQueueCreateCommandBuffer(command_queue) orelse return false;
+        defer Metal.release(command_buffer);
+        const encoder = Metal.commandBufferCreateComputeCommandEncoder(command_buffer) orelse return false;
+        defer Metal.release(encoder);
+
+        Metal.computeEncoderSetPipelineState(encoder, pipeline);
+        Metal.computeEncoderSetBuffer(encoder, parameter_data.buffer orelse return false, 0, 0);
+        Metal.computeEncoderSetBuffer(encoder, gradient_data.buffer orelse return false, 0, 1);
+        Metal.computeEncoderSetBuffer(encoder, first_moment_data.buffer orelse return false, 0, 2);
+        Metal.computeEncoderSetBuffer(encoder, second_moment_data.buffer orelse return false, 0, 3);
+        Metal.computeEncoderSetBuffer(encoder, total_squares_data.buffer orelse return false, 0, 4);
+        setU32(encoder, @intFromEnum(config.kind), 5);
+        setU32(encoder, toU32(parameter.rows * parameter.cols), 6);
+        setF32(encoder, config.learning_rate, 7);
+        setF32(encoder, config.beta1, 8);
+        setF32(encoder, config.beta2, 9);
+        setF32(encoder, config.epsilon, 10);
+        setF32(encoder, config.weight_decay, 11);
+        setF32(encoder, config.bias_correction1, 12);
+        setF32(encoder, config.bias_correction2, 13);
+        setF32(encoder, config.max_gradient_norm, 14);
+        Metal.computeEncoderDispatchThreads(encoder, pipeline, parameter.rows * parameter.cols, 1, 1);
+        Metal.computeEncoderEndEncoding(encoder);
+        Metal.commandBufferCommit(command_buffer);
+        if (!self.completeSubmittedKernel(command_buffer)) return false;
+        parameter_data.markGPUModified();
+        first_moment_data.markGPUModified();
+        second_moment_data.markGPUModified();
         return true;
     }
 
@@ -1430,6 +1488,49 @@ pub const MetalBackend = struct {
         result_metal.markHostModified();
 
         return result;
+    }
+
+    pub fn optimizerUpdate(
+        ptr: *anyopaque,
+        parameter: *Matrix,
+        gradient: *const Matrix,
+        first_moment: *Matrix,
+        second_moment: *Matrix,
+        total_squares: *const Matrix,
+        config: backend.OptimizerUpdateConfig,
+    ) error{DimensionMismatch}!void {
+        if (parameter.rows != gradient.rows or parameter.cols != gradient.cols or
+            parameter.rows != first_moment.rows or parameter.cols != first_moment.cols or
+            parameter.rows != second_moment.rows or parameter.cols != second_moment.cols or
+            total_squares.rows != 1 or total_squares.cols != 1)
+        {
+            return error.DimensionMismatch;
+        }
+
+        const self = @as(*MetalBackend, @ptrCast(@alignCast(ptr)));
+        if (self.dispatchOptimizerUpdate(parameter, gradient, first_moment, second_moment, total_squares, config)) return;
+
+        const parameter_data = getMetalMatrix(parameter);
+        const gradient_data = getMetalMatrix(gradient);
+        const first_moment_data = getMetalMatrix(first_moment);
+        const second_moment_data = getMetalMatrix(second_moment);
+        const total_squares_data = getMetalMatrix(total_squares);
+        ensureHostData(parameter_data);
+        ensureHostData(gradient_data);
+        ensureHostData(first_moment_data);
+        ensureHostData(second_moment_data);
+        ensureHostData(total_squares_data);
+        backend.applyOptimizerUpdate(
+            parameter_data.host_data,
+            gradient_data.host_data,
+            first_moment_data.host_data,
+            second_moment_data.host_data,
+            total_squares_data.host_data[0],
+            config,
+        );
+        parameter_data.markHostModified();
+        first_moment_data.markHostModified();
+        second_moment_data.markHostModified();
     }
 
     pub fn sumRows(ptr: *anyopaque, matrix: *const Matrix, allocator: Allocator) error{OutOfMemory}!*Matrix {

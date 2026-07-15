@@ -19,6 +19,25 @@ pub const BackendType = enum {
     ROCm, // AMD GPUs
 };
 
+pub const OptimizerUpdateKind = enum(u32) {
+    sgd,
+    momentum,
+    adamw,
+};
+
+/// Validated optimizer scalars consumed by one fused backend update.
+pub const OptimizerUpdateConfig = struct {
+    kind: OptimizerUpdateKind,
+    learning_rate: f32,
+    beta1: f32,
+    beta2: f32,
+    epsilon: f32,
+    weight_decay: f32,
+    bias_correction1: f32,
+    bias_correction2: f32,
+    max_gradient_norm: f32,
+};
+
 /// Cumulative backend work counters. GPU implementations update these at the
 /// point where buffers, transfers, kernels, and synchronization actually occur.
 pub const RuntimeStats = struct {
@@ -321,6 +340,25 @@ pub const Matrix = struct {
         return self.backend.scale(self, scalar, allocator);
     }
 
+    /// Updates this parameter and its optimizer moments in place.
+    pub fn optimizerUpdate(
+        self: *Matrix,
+        gradient: *const Matrix,
+        first_moment: *Matrix,
+        second_moment: *Matrix,
+        total_squares: *const Matrix,
+        config: OptimizerUpdateConfig,
+    ) !void {
+        return self.backend.optimizerUpdate(
+            self,
+            gradient,
+            first_moment,
+            second_moment,
+            total_squares,
+            config,
+        );
+    }
+
     /// Computes column-wise sum of matrix elements
     pub fn sumRows(self: *const Matrix, allocator: Allocator) !*Matrix {
         return self.backend.sumRows(self, allocator);
@@ -386,6 +424,71 @@ pub const Matrix = struct {
         return self.backend.applySwiGLU(self, gating_part, allocator);
     }
 };
+
+/// Shared host reference for fused optimizer semantics and GPU fallbacks.
+pub fn applyOptimizerUpdate(
+    parameter: []f32,
+    gradient: []const f32,
+    first_moment: []f32,
+    second_moment: []f32,
+    total_squares: f32,
+    config: OptimizerUpdateConfig,
+) void {
+    const max_norm_squared = config.max_gradient_norm * config.max_gradient_norm;
+    const clip_scale: f32 = if (config.max_gradient_norm > 0 and total_squares > max_norm_squared)
+        config.max_gradient_norm / @sqrt(total_squares)
+    else
+        1;
+    const decay = 1 - config.learning_rate * config.weight_decay;
+
+    for (parameter, gradient, first_moment, second_moment) |*value, raw_gradient, *first, *second| {
+        const clipped_gradient = raw_gradient * clip_scale;
+        const direction = switch (config.kind) {
+            .sgd => clipped_gradient,
+            .momentum => direction: {
+                first.* = config.beta1 * first.* + clipped_gradient;
+                break :direction first.*;
+            },
+            .adamw => direction: {
+                first.* = config.beta1 * first.* + (1 - config.beta1) * clipped_gradient;
+                second.* = config.beta2 * second.* +
+                    (1 - config.beta2) * clipped_gradient * clipped_gradient;
+                const corrected_first = first.* / config.bias_correction1;
+                const corrected_second = second.* / config.bias_correction2;
+                break :direction corrected_first / (@sqrt(corrected_second) + config.epsilon);
+            },
+        };
+        value.* = value.* * decay - config.learning_rate * direction;
+    }
+}
+
+test "optimizer reference applies AdamW bias correction" {
+    var parameter = [_]f32{1};
+    const gradient = [_]f32{2};
+    var first_moment = [_]f32{0};
+    var second_moment = [_]f32{0};
+    applyOptimizerUpdate(
+        &parameter,
+        &gradient,
+        &first_moment,
+        &second_moment,
+        4,
+        .{
+            .kind = .adamw,
+            .learning_rate = 0.1,
+            .beta1 = 0.9,
+            .beta2 = 0.999,
+            .epsilon = 1e-8,
+            .weight_decay = 0.01,
+            .bias_correction1 = 0.1,
+            .bias_correction2 = 0.001,
+            .max_gradient_norm = 0,
+        },
+    );
+    try testing.expectApproxEqAbs(@as(f32, 0.899), parameter[0], 1e-5);
+    try testing.expectApproxEqAbs(@as(f32, 0.2), first_moment[0], 1e-6);
+    try testing.expectApproxEqAbs(@as(f32, 0.004), second_moment[0], 1e-6);
+}
 
 /// This function creates an appropriate backend based on the requested type
 /// Falls back to CPU if the requested type is not available

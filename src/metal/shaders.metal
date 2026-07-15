@@ -128,6 +128,49 @@ kernel void matrix_scale(
     B[index] = A[index] * scalar;
 }
 
+kernel void optimizer_update(
+    device float* parameter [[buffer(0)]],
+    device const float* gradient [[buffer(1)]],
+    device float* first_moment [[buffer(2)]],
+    device float* second_moment [[buffer(3)]],
+    device const float* total_squares [[buffer(4)]],
+    constant uint& kind [[buffer(5)]],
+    constant uint& size [[buffer(6)]],
+    constant float& learning_rate [[buffer(7)]],
+    constant float& beta1 [[buffer(8)]],
+    constant float& beta2 [[buffer(9)]],
+    constant float& epsilon [[buffer(10)]],
+    constant float& weight_decay [[buffer(11)]],
+    constant float& bias_correction1 [[buffer(12)]],
+    constant float& bias_correction2 [[buffer(13)]],
+    constant float& max_gradient_norm [[buffer(14)]],
+    uint position [[thread_position_in_grid]]
+) {
+    if (position >= size) return;
+
+    float clip_scale = 1.0f;
+    float max_norm_squared = max_gradient_norm * max_gradient_norm;
+    if (max_gradient_norm > 0.0f && total_squares[0] > max_norm_squared) {
+        clip_scale = max_gradient_norm / sqrt(total_squares[0]);
+    }
+    float clipped_gradient = gradient[position] * clip_scale;
+    float direction = clipped_gradient;
+    if (kind == 1) {
+        first_moment[position] = beta1 * first_moment[position] + clipped_gradient;
+        direction = first_moment[position];
+    } else if (kind == 2) {
+        first_moment[position] = beta1 * first_moment[position] +
+            (1.0f - beta1) * clipped_gradient;
+        second_moment[position] = beta2 * second_moment[position] +
+            (1.0f - beta2) * clipped_gradient * clipped_gradient;
+        float corrected_first = first_moment[position] / bias_correction1;
+        float corrected_second = second_moment[position] / bias_correction2;
+        direction = corrected_first / (sqrt(corrected_second) + epsilon);
+    }
+    float decay = 1.0f - learning_rate * weight_decay;
+    parameter[position] = parameter[position] * decay - learning_rate * direction;
+}
+
 // Matrix transpose compute kernel
 // B = A^T
 kernel void matrix_transpose(

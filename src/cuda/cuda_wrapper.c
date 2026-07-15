@@ -24,6 +24,7 @@ typedef struct ZigNNCUDABackend {
     CUfunction matrix_subtract;
     CUfunction matrix_element_wise_multiply;
     CUfunction matrix_scale;
+    CUfunction optimizer_update;
     CUfunction matrix_transpose;
     CUfunction matrix_sum_rows;
     CUfunction matrix_extract_batch;
@@ -202,6 +203,7 @@ static int cuda_load_functions(ZigNNCUDABackend* backend, char* error_buffer, un
         cuda_get_function(backend->module, &backend->matrix_subtract, "matrix_subtract", error_buffer, error_buffer_len) &&
         cuda_get_function(backend->module, &backend->matrix_element_wise_multiply, "matrix_element_wise_multiply", error_buffer, error_buffer_len) &&
         cuda_get_function(backend->module, &backend->matrix_scale, "matrix_scale", error_buffer, error_buffer_len) &&
+        cuda_get_function(backend->module, &backend->optimizer_update, "optimizer_update", error_buffer, error_buffer_len) &&
         cuda_get_function(backend->module, &backend->matrix_transpose, "matrix_transpose", error_buffer, error_buffer_len) &&
         cuda_get_function(backend->module, &backend->matrix_sum_rows, "matrix_sum_rows", error_buffer, error_buffer_len) &&
         cuda_get_function(backend->module, &backend->matrix_extract_batch, "matrix_extract_batch", error_buffer, error_buffer_len) &&
@@ -570,6 +572,31 @@ int cuda_launch_scale(CUDABackendRef backend_ref, CUDABufferRef input_ref, CUDAB
     CUdeviceptr result_ptr = result->device_ptr;
     void* args[] = { &input_ptr, &result_ptr, &scalar, &rows, &cols };
     return cuda_launch_2d(backend, backend != NULL ? backend->matrix_scale : NULL, cols, rows, args);
+}
+
+int cuda_launch_optimizer_update(CUDABackendRef backend_ref, CUDABufferRef parameter_ref, CUDABufferRef gradient_ref, CUDABufferRef first_moment_ref, CUDABufferRef second_moment_ref, CUDABufferRef total_squares_ref, unsigned int kind, unsigned int size, float learning_rate, float beta1, float beta2, float epsilon, float weight_decay, float bias_correction1, float bias_correction2, float max_gradient_norm) {
+    ZigNNCUDABackend* backend = (ZigNNCUDABackend*)backend_ref;
+    ZigNNCUDABuffer* parameter = (ZigNNCUDABuffer*)parameter_ref;
+    ZigNNCUDABuffer* gradient = (ZigNNCUDABuffer*)gradient_ref;
+    ZigNNCUDABuffer* first_moment = (ZigNNCUDABuffer*)first_moment_ref;
+    ZigNNCUDABuffer* second_moment = (ZigNNCUDABuffer*)second_moment_ref;
+    ZigNNCUDABuffer* total_squares = (ZigNNCUDABuffer*)total_squares_ref;
+    if (parameter == NULL || gradient == NULL || first_moment == NULL || second_moment == NULL || total_squares == NULL) {
+        return 0;
+    }
+
+    CUdeviceptr parameter_ptr = parameter->device_ptr;
+    CUdeviceptr gradient_ptr = gradient->device_ptr;
+    CUdeviceptr first_moment_ptr = first_moment->device_ptr;
+    CUdeviceptr second_moment_ptr = second_moment->device_ptr;
+    CUdeviceptr total_squares_ptr = total_squares->device_ptr;
+    void* args[] = {
+        &parameter_ptr, &gradient_ptr, &first_moment_ptr, &second_moment_ptr,
+        &total_squares_ptr, &kind, &size, &learning_rate, &beta1, &beta2,
+        &epsilon, &weight_decay, &bias_correction1, &bias_correction2,
+        &max_gradient_norm,
+    };
+    return cuda_launch_1d(backend, backend != NULL ? backend->optimizer_update : NULL, size, args);
 }
 
 int cuda_launch_transpose(CUDABackendRef backend_ref, CUDABufferRef input_ref, CUDABufferRef result_ref, unsigned int rows, unsigned int cols) {
