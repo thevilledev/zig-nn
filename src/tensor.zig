@@ -371,6 +371,21 @@ pub const ExecutionContext = struct {
         };
     }
 
+    /// Returns a device-resident `[1, 1]` Tensor containing the sum of every
+    /// squared element, regardless of the input's logical rank.
+    pub fn sumSquares(self: *ExecutionContext, input: Tensor) !Tensor {
+        var matrix_view = input;
+        matrix_view.shape = try Shape.init(&.{ input.matrix.rows, input.matrix.cols });
+
+        var squared = try self.multiply(matrix_view, matrix_view);
+        defer squared.deinit();
+        var column_sums = try self.sumRows(squared);
+        defer column_sums.deinit();
+        var column_vector = try self.transpose(column_sums);
+        defer column_vector.deinit();
+        return self.sumRows(column_vector);
+    }
+
     pub fn addRowBias(self: *ExecutionContext, input: Tensor, bias: Tensor) !Tensor {
         if (input.shape.rank != 2 or bias.shape.rank != 2) return error.InvalidRank;
         if (bias.shape.dims[0] != 1 or bias.shape.dims[1] != input.shape.dims[1]) return error.DimensionMismatch;
@@ -878,6 +893,28 @@ test "tensor activation kinds match scalar references" {
             );
         }
     }
+}
+
+test "sum squares reduces every logical rank on device" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var device = try Device.init(allocator, .cpu);
+    defer device.deinit();
+    var context = ExecutionContext.init(&device);
+    var input = try context.upload(&.{ 1, 2, 2 }, &.{ 1, -2, 3, -4 });
+    defer input.deinit();
+
+    context.resetStats();
+    var total = try context.sumSquares(input);
+    defer total.deinit();
+    try testing.expectEqualSlices(usize, &.{ 1, 1 }, total.shape.slice());
+    try testing.expectEqual(@as(usize, 0), context.stats.readbacks);
+    try testing.expectEqual(@as(usize, 4), context.stats.kernels);
+
+    var actual: [1]f32 = undefined;
+    try context.readback(total, &actual);
+    try testing.expectApproxEqAbs(@as(f32, 30), actual[0], 1e-5);
 }
 
 test "transformer pipeline stays device resident within a batch" {
