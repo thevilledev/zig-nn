@@ -12,7 +12,7 @@ permissions:
 jobs:
   go:
     name: nnctl
-    runs-on: ubuntu-latest
+    runs-on: avrea-ubuntu-latest-2-vcpu
     defaults:
       run:
         working-directory: nnctl
