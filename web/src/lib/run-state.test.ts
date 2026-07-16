@@ -18,7 +18,7 @@ describe('reduceRunEvent', () => {
     state = reduceRunEvent(state, event('run_completed', 4, { final_loss: 0.75 }, 100));
 
     expect(state.status).toBe('completed');
-    expect(state.metrics).toEqual([{ step: 10, value: 0.75 }]);
+    expect(state.metrics).toEqual({ loss: [{ step: 10, value: 0.75, series: 'loss' }] });
     expect(state.snapshots).toHaveLength(1);
     expect(state.lastSequence).toBe(4);
   });

@@ -28,8 +28,14 @@ type ParameterSpec struct {
 	Flag    string        `json:"-"`
 }
 
+type MetricSpec struct {
+	Name  string `json:"name"`
+	Label string `json:"label"`
+}
+
 type ExperimentSpec struct {
 	ID             string          `json:"id"`
+	Category       string          `json:"category"`
 	Title          string          `json:"title"`
 	Description    string          `json:"description"`
 	Question       string          `json:"question"`
@@ -38,12 +44,18 @@ type ExperimentSpec struct {
 	Visualization  string          `json:"visualization"`
 	Sources        []string        `json:"sources"`
 	Parameters     []ParameterSpec `json:"parameters"`
+	Metrics        []MetricSpec    `json:"metrics"`
+	Backends       []string        `json:"backends"`
+	DefaultBackend string          `json:"default_backend"`
 	Step           string          `json:"-"`
+	BackendFlag    bool            `json:"-"`
+	Optimize       string          `json:"-"`
 }
 
 var learningSpecs = []ExperimentSpec{
 	{
 		ID:          "xor-training",
+		Category:    "Foundations",
 		Title:       "Learning XOR",
 		Description: "Watch a small multilayer network turn four contradictory-looking examples into a nonlinear rule.",
 		Question:    "How does backpropagation make a network solve a problem that no single straight boundary can represent?",
@@ -59,9 +71,13 @@ var learningSpecs = []ExperimentSpec{
 			numberParameter("learning_rate", "Learning rate", "Size of each gradient update.", 0.3, 0.001, 1, 0.001, "--learning-rate"),
 			integerParameter("seed", "Seed", "Reproduces initialization and shuffling.", 42, 0, math.MaxUint32, 1, "--seed"),
 		},
+		Metrics:        []MetricSpec{{Name: "loss", Label: "Training loss"}},
+		Backends:       []string{"cpu"},
+		DefaultBackend: "cpu",
 	},
 	{
 		ID:          "regression",
+		Category:    "Foundations",
 		Title:       "Approximating a Curve",
 		Description: "See a ReLU network approximate the nonlinear function f(x) = x² sin(x).",
 		Question:    "How does a network made from simple piecewise-linear units approximate a smooth nonlinear function?",
@@ -77,9 +93,13 @@ var learningSpecs = []ExperimentSpec{
 			numberParameter("learning_rate", "Learning rate", "Size of each gradient update.", 0.001, 0.00001, 0.1, 0.00001, "--learning-rate"),
 			integerParameter("seed", "Seed", "Reproduces the dataset and initialization.", 42, 0, math.MaxUint32, 1, "--seed"),
 		},
+		Metrics:        []MetricSpec{{Name: "loss", Label: "Training loss"}},
+		Backends:       []string{"cpu"},
+		DefaultBackend: "cpu",
 	},
 	{
 		ID:          "binary-classification",
+		Category:    "Foundations",
 		Title:       "Drawing a Decision Boundary",
 		Description: "Watch a classifier learn that points inside a circle belong to a different class.",
 		Question:    "How do layers of neurons bend a simple input plane into a nonlinear classification boundary?",
@@ -95,6 +115,78 @@ var learningSpecs = []ExperimentSpec{
 			numberParameter("learning_rate", "Learning rate", "Size of each gradient update.", 0.001, 0.00001, 0.1, 0.00001, "--learning-rate"),
 			integerParameter("seed", "Seed", "Reproduces the dataset and initialization.", 42, 0, math.MaxUint32, 1, "--seed"),
 		},
+		Metrics:        []MetricSpec{{Name: "loss", Label: "Training loss"}},
+		Backends:       []string{"cpu"},
+		DefaultBackend: "cpu",
+	},
+	{
+		ID:          "optimizer-lab",
+		Category:    "Training",
+		Title:       "Comparing Optimizers",
+		Description: "Train identical two-moons classifiers with SGD, momentum, and AdamW while keeping their updates on one selected backend.",
+		Question:    "How do optimizer state and update rules change the path a network takes toward the same decision boundary?",
+		Observe:     []string{"How quickly each loss series falls", "Whether optimizer speed also improves held-out accuracy", "Which work remains device-resident between reports"},
+		Interpretation: []string{
+			"The models start with identical parameters, so their different paths come from the optimizer updates rather than initialization.",
+			"Telemetry covers the training interval before each report; evaluation readbacks are deliberately kept outside that interval.",
+		},
+		Visualization: "optimizer_comparison",
+		Sources:       []string{"experiments/optimizer_lab/optimizer_lab.zig", "src/training.zig", "src/modules.zig"},
+		Parameters: []ParameterSpec{
+			integerParameter("steps", "Steps", "Full-batch updates applied to every optimizer.", 200, 20, 600, 10, "--steps"),
+			integerParameter("seed", "Seed", "Reproduces the dataset and shared initialization.", 42, 0, math.MaxUint32, 1, "--seed"),
+		},
+		Metrics: []MetricSpec{
+			{Name: "loss", Label: "Training loss"},
+			{Name: "accuracy", Label: "Held-out accuracy"},
+		},
+		Backends:       []string{"cpu", "metal"},
+		DefaultBackend: "cpu",
+		BackendFlag:    true,
+	},
+	{
+		ID:          "gpu-benchmark",
+		Category:    "Accelerators",
+		Title:       "When Metal Wins",
+		Description: "Compare complete CPU and Metal matrix multiplications at several sizes, including synchronization and a numerical agreement check.",
+		Question:    "When does enough parallel work offset the cost of preparing and synchronizing a GPU operation?",
+		Observe:     []string{"Whether small matrices favor CPU execution", "Where the timing curves cross", "How many transfers, kernels, and synchronizations Metal performs"},
+		Interpretation: []string{
+			"A GPU is not automatically faster: launch and synchronization overhead can dominate small operations.",
+			"Speedup is meaningful only alongside the sampled numerical error and the exact backend selected by the native process.",
+		},
+		Visualization:  "backend_benchmark",
+		Sources:        []string{"experiments/gpu_benchmark/gpu_benchmark.zig", "src/metal_backend.zig", "src/backend.zig"},
+		Metrics:        []MetricSpec{},
+		Backends:       []string{"metal"},
+		DefaultBackend: "metal",
+		Optimize:       "ReleaseFast",
+	},
+	{
+		ID:          "semantic-search",
+		Category:    "Language",
+		Title:       "Learning Semantic Search",
+		Description: "Watch paired query and document encoders turn a dense similarity grid into useful retrieval rankings.",
+		Question:    "How do in-batch negatives teach related texts to become closer than every mismatched pair?",
+		Observe:     []string{"Whether the correct diagonal becomes dominant", "How recall and reciprocal rank respond to falling loss", "Where embeddings cross from device training to host ranking"},
+		Interpretation: []string{
+			"Each row compares one held-out query with every document; a strong diagonal means the correct document outranks the mismatches.",
+			"Encoder training is backend-neutral, while final top-k ranking intentionally happens after one explicit embedding readback.",
+		},
+		Visualization: "semantic_similarity",
+		Sources:       []string{"experiments/semantic_search/semantic_search.zig", "src/retrieval.zig", "src/embeddings.zig"},
+		Parameters: []ParameterSpec{
+			integerParameter("steps", "Steps", "Full-batch contrastive updates.", 40, 10, 200, 10, "--steps"),
+			integerParameter("seed", "Seed", "Reproduces both encoder initializations.", 42, 0, math.MaxUint32, 1, "--seed"),
+		},
+		Metrics: []MetricSpec{
+			{Name: "loss", Label: "InfoNCE loss"},
+			{Name: "recall_at_one", Label: "Recall at one"},
+			{Name: "mean_reciprocal_rank", Label: "Mean reciprocal rank"},
+		},
+		Backends:       []string{"cpu", "metal"},
+		DefaultBackend: "cpu",
+		BackendFlag:    true,
 	},
 }
 
@@ -110,6 +202,12 @@ func Experiments() []ExperimentSpec {
 	specs := make([]ExperimentSpec, len(learningSpecs))
 	for i := range learningSpecs {
 		specs[i] = learningSpecs[i]
+		if specs[i].Parameters == nil {
+			specs[i].Parameters = []ParameterSpec{}
+		}
+		if specs[i].Metrics == nil {
+			specs[i].Metrics = []MetricSpec{}
+		}
 		experiment, ok := catalog.ResolveExperiment(specs[i].ID)
 		if ok {
 			specs[i].Step = experiment.Step
@@ -127,36 +225,59 @@ func ResolveExperiment(id string) (ExperimentSpec, bool) {
 	return ExperimentSpec{}, false
 }
 
-func BuildArguments(spec ExperimentSpec, values map[string]json.Number) ([]string, error) {
+type RunOptions struct {
+	Backend   string
+	Arguments []string
+}
+
+func BuildRunOptions(spec ExperimentSpec, backend string, values map[string]json.Number) (RunOptions, error) {
+	if backend == "" {
+		backend = spec.DefaultBackend
+	}
+	if !contains(spec.Backends, backend) {
+		return RunOptions{}, fmt.Errorf("backend %q is not supported by %s", backend, spec.ID)
+	}
 	parameters := make(map[string]ParameterSpec, len(spec.Parameters))
 	for _, parameter := range spec.Parameters {
 		parameters[parameter.Name] = parameter
 	}
 	for name := range values {
 		if _, ok := parameters[name]; !ok {
-			return nil, fmt.Errorf("unknown parameter %q", name)
+			return RunOptions{}, fmt.Errorf("unknown parameter %q", name)
 		}
 	}
 
 	args := []string{"--format", "ndjson"}
+	if spec.BackendFlag {
+		args = append(args, "--backend", backend)
+	}
 	for _, parameter := range spec.Parameters {
 		value := parameter.Default
 		if supplied, ok := values[parameter.Name]; ok {
 			parsed, err := supplied.Float64()
 			if err != nil || math.IsNaN(parsed) || math.IsInf(parsed, 0) {
-				return nil, fmt.Errorf("parameter %s must be a finite number", parameter.Name)
+				return RunOptions{}, fmt.Errorf("parameter %s must be a finite number", parameter.Name)
 			}
 			value = parsed
 		}
 		if value < parameter.Min || value > parameter.Max {
-			return nil, fmt.Errorf("parameter %s must be between %s and %s", parameter.Name, formatNumber(parameter.Min), formatNumber(parameter.Max))
+			return RunOptions{}, fmt.Errorf("parameter %s must be between %s and %s", parameter.Name, formatNumber(parameter.Min), formatNumber(parameter.Max))
 		}
 		if parameter.Kind == ParameterInteger && math.Trunc(value) != value {
-			return nil, fmt.Errorf("parameter %s must be an integer", parameter.Name)
+			return RunOptions{}, fmt.Errorf("parameter %s must be an integer", parameter.Name)
 		}
 		args = append(args, parameter.Flag, formatNumber(value))
 	}
-	return args, nil
+	return RunOptions{Backend: backend, Arguments: args}, nil
+}
+
+func contains(values []string, wanted string) bool {
+	for _, value := range values {
+		if value == wanted {
+			return true
+		}
+	}
+	return false
 }
 
 func formatNumber(value float64) string {

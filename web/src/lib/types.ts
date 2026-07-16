@@ -13,6 +13,7 @@ export interface ParameterSpec {
 
 export interface ExperimentSpec {
   id: string;
+  category: string;
   title: string;
   description: string;
   question: string;
@@ -21,6 +22,21 @@ export interface ExperimentSpec {
   visualization: SnapshotKind;
   sources: string[];
   parameters: ParameterSpec[];
+  metrics: MetricSpec[];
+  backends: Backend[];
+  default_backend: Backend;
+}
+
+export type Backend = 'cpu' | 'metal' | 'cuda' | 'rocm';
+
+export interface Capabilities {
+  platform: string;
+  backends: Backend[];
+}
+
+export interface MetricSpec {
+  name: string;
+  label: string;
 }
 
 export interface Point {
@@ -47,24 +63,83 @@ export interface RunStartedData {
   config: Record<string, number>;
   topology: number[];
   activations: string[];
+  execution?: ExecutionMetadata;
   target_curve?: Point[];
   training_samples?: Point[];
   samples?: Sample[];
   boundary_radius?: number;
   grid_size?: number;
+  queries?: string[];
+  documents?: string[];
 }
 
 export interface MetricData {
   name: string;
   value: number;
+  series?: string;
 }
 
-export type SnapshotKind = 'xor_predictions' | 'regression_curve' | 'decision_boundary';
+export interface ExecutionMetadata {
+  requested_backend: Backend;
+  selected_backend: Backend;
+  optimize: string;
+}
+
+export interface ExecutionStats {
+  uploads: number;
+  upload_bytes: number;
+  readbacks: number;
+  readback_bytes: number;
+  kernels: number;
+  synchronizations: number;
+}
+
+export interface BackendStats {
+  buffer_allocations: number;
+  host_to_device_transfers: number;
+  host_to_device_bytes: number;
+  device_to_host_transfers: number;
+  device_to_host_bytes: number;
+  kernel_launches: number;
+  vendor_gemm_launches: number;
+  synchronizations: number;
+}
+
+export interface RuntimeTelemetry {
+  execution: ExecutionStats;
+  backend: BackendStats;
+}
+
+export type SnapshotKind =
+  | 'xor_predictions'
+  | 'regression_curve'
+  | 'decision_boundary'
+  | 'optimizer_comparison'
+  | 'backend_benchmark'
+  | 'semantic_similarity';
+
+export interface OptimizerBoundary {
+  name: string;
+  predictions: Probability[];
+}
+
+export interface BenchmarkCaseResult {
+  size: number;
+  trials: number;
+  cpu_ms: number;
+  accelerator_ms: number;
+  speedup: number;
+  sample_error: number;
+  telemetry: RuntimeTelemetry;
+}
 
 export type SnapshotData =
   | { kind: 'xor_predictions'; predictions: XorPrediction[] }
   | { kind: 'regression_curve'; predictions: Point[] }
-  | { kind: 'decision_boundary'; probabilities: Probability[] };
+  | { kind: 'decision_boundary'; probabilities: Probability[] }
+  | { kind: 'optimizer_comparison'; optimizers: OptimizerBoundary[]; telemetry: RuntimeTelemetry }
+  | { kind: 'backend_benchmark'; cases: BenchmarkCaseResult[]; telemetry: RuntimeTelemetry }
+  | { kind: 'semantic_similarity'; similarities: number[]; rows: number; columns: number; telemetry: RuntimeTelemetry };
 
 export interface RunFailureData {
   message: string;
@@ -89,6 +164,7 @@ export interface RunEvent<T = unknown> {
 export interface MetricPoint {
   step: number;
   value: number;
+  series: string;
 }
 
 export interface SnapshotPoint {
@@ -106,7 +182,7 @@ export interface RunState {
   step: number;
   totalSteps: number;
   started: RunStartedData | null;
-  metrics: MetricPoint[];
+  metrics: Record<string, MetricPoint[]>;
   snapshots: SnapshotPoint[];
   logs: string[];
   result: Record<string, unknown> | null;

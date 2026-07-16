@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const nn = @import("nn");
 
 const Network = nn.Network;
@@ -69,6 +70,11 @@ pub fn main(init: std.process.Init) !void {
                 .activations = &[_][]const u8{ "relu", "relu", "linear" },
                 .target_curve = target_curve,
                 .training_samples = training_samples,
+                .execution = .{
+                    .requested_backend = "cpu",
+                    .selected_backend = "cpu",
+                    .optimize = @tagName(builtin.mode),
+                },
             },
         });
         try emitSnapshot(allocator, stdout, &network, 0, options.epochs);

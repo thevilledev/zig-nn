@@ -10,7 +10,7 @@ import (
 )
 
 func TestManagerOrdersAndReplaysEvents(t *testing.T) {
-	executor := ExecutorFunc(func(_ context.Context, spec ExperimentSpec, _ []string, stdout func([]byte) error, stderr func(string)) error {
+	executor := ExecutorFunc(func(_ context.Context, spec ExperimentSpec, _ RunOptions, stdout func([]byte) error, stderr func(string)) error {
 		stderr("building experiment")
 		for _, event := range []map[string]any{
 			{"v": 1, "type": "run_started", "experiment": spec.ID, "data": map[string]any{"config": map[string]any{}}},
@@ -27,7 +27,7 @@ func TestManagerOrdersAndReplaysEvents(t *testing.T) {
 	manager := NewManager(executor)
 	defer manager.Close()
 	spec, _ := ResolveExperiment("xor-training")
-	id, err := manager.Start(context.Background(), spec, nil)
+	id, err := manager.Start(context.Background(), spec, RunOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,19 +67,19 @@ func TestManagerOrdersAndReplaysEvents(t *testing.T) {
 
 func TestManagerRejectsConcurrentRunAndCancels(t *testing.T) {
 	started := make(chan struct{})
-	executor := ExecutorFunc(func(ctx context.Context, _ ExperimentSpec, _ []string, _ func([]byte) error, _ func(string)) error {
+	executor := ExecutorFunc(func(ctx context.Context, _ ExperimentSpec, _ RunOptions, _ func([]byte) error, _ func(string)) error {
 		close(started)
 		<-ctx.Done()
 		return ctx.Err()
 	})
 	manager := NewManager(executor)
 	spec, _ := ResolveExperiment("xor-training")
-	id, err := manager.Start(context.Background(), spec, nil)
+	id, err := manager.Start(context.Background(), spec, RunOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	<-started
-	if _, err := manager.Start(context.Background(), spec, nil); !errors.Is(err, ErrBusy) {
+	if _, err := manager.Start(context.Background(), spec, RunOptions{}); !errors.Is(err, ErrBusy) {
 		t.Fatalf("second Start error = %v", err)
 	}
 	if err := manager.Cancel(id); err != nil {
@@ -103,12 +103,12 @@ func TestManagerRejectsConcurrentRunAndCancels(t *testing.T) {
 }
 
 func TestManagerTurnsMalformedOutputIntoFailure(t *testing.T) {
-	manager := NewManager(ExecutorFunc(func(_ context.Context, _ ExperimentSpec, _ []string, stdout func([]byte) error, _ func(string)) error {
+	manager := NewManager(ExecutorFunc(func(_ context.Context, _ ExperimentSpec, _ RunOptions, stdout func([]byte) error, _ func(string)) error {
 		return stdout([]byte("not-json"))
 	}))
 	defer manager.Close()
 	spec, _ := ResolveExperiment("regression")
-	id, err := manager.Start(context.Background(), spec, nil)
+	id, err := manager.Start(context.Background(), spec, RunOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,12 +122,12 @@ func TestManagerTurnsMalformedOutputIntoFailure(t *testing.T) {
 }
 
 func TestManagerReportsChildFailure(t *testing.T) {
-	manager := NewManager(ExecutorFunc(func(_ context.Context, _ ExperimentSpec, _ []string, _ func([]byte) error, _ func(string)) error {
+	manager := NewManager(ExecutorFunc(func(_ context.Context, _ ExperimentSpec, _ RunOptions, _ func([]byte) error, _ func(string)) error {
 		return errors.New("native process failed")
 	}))
 	defer manager.Close()
 	spec, _ := ResolveExperiment("regression")
-	id, err := manager.Start(context.Background(), spec, nil)
+	id, err := manager.Start(context.Background(), spec, RunOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +141,7 @@ func TestManagerReportsChildFailure(t *testing.T) {
 }
 
 func TestManagerRejectsOutOfOrderProtocol(t *testing.T) {
-	manager := NewManager(ExecutorFunc(func(_ context.Context, spec ExperimentSpec, _ []string, stdout func([]byte) error, _ func(string)) error {
+	manager := NewManager(ExecutorFunc(func(_ context.Context, spec ExperimentSpec, _ RunOptions, stdout func([]byte) error, _ func(string)) error {
 		line, _ := json.Marshal(map[string]any{
 			"v": 1, "type": "metric", "experiment": spec.ID,
 			"step": 1, "total_steps": 10, "data": map[string]any{"name": "loss", "value": 1},
@@ -150,7 +150,7 @@ func TestManagerRejectsOutOfOrderProtocol(t *testing.T) {
 	}))
 	defer manager.Close()
 	spec, _ := ResolveExperiment("xor-training")
-	id, err := manager.Start(context.Background(), spec, nil)
+	id, err := manager.Start(context.Background(), spec, RunOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,13 +165,13 @@ func TestManagerRejectsOutOfOrderProtocol(t *testing.T) {
 
 func TestManagerCloseCancelsActiveExecutor(t *testing.T) {
 	stopped := make(chan struct{})
-	manager := NewManager(ExecutorFunc(func(ctx context.Context, _ ExperimentSpec, _ []string, _ func([]byte) error, _ func(string)) error {
+	manager := NewManager(ExecutorFunc(func(ctx context.Context, _ ExperimentSpec, _ RunOptions, _ func([]byte) error, _ func(string)) error {
 		<-ctx.Done()
 		close(stopped)
 		return ctx.Err()
 	}))
 	spec, _ := ResolveExperiment("xor-training")
-	if _, err := manager.Start(context.Background(), spec, nil); err != nil {
+	if _, err := manager.Start(context.Background(), spec, RunOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	manager.Close()

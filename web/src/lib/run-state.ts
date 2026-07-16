@@ -16,7 +16,7 @@ export function initialRunState(status: RunState['status'] = 'idle'): RunState {
     step: 0,
     totalSteps: 0,
     started: null,
-    metrics: [],
+    metrics: {},
     snapshots: [],
     logs: [],
     result: null,
@@ -39,8 +39,15 @@ export function reduceRunEvent(state: RunState, event: RunEvent): RunState {
       return { ...next, status: 'running', started: event.data as RunStartedData };
     case 'metric': {
       const metric = event.data as MetricData;
-      if (metric.name !== 'loss' || event.step === undefined) return next;
-      return { ...next, metrics: [...state.metrics, { step: event.step, value: metric.value }] };
+      if (!metric.name || event.step === undefined) return next;
+      const points = state.metrics[metric.name] ?? [];
+      return {
+        ...next,
+        metrics: {
+          ...state.metrics,
+          [metric.name]: [...points, { step: event.step, value: metric.value, series: metric.series ?? metric.name }]
+        }
+      };
     }
     case 'snapshot':
       if (event.step === undefined) return next;

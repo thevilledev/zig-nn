@@ -1,14 +1,19 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const nn = @import("nn");
+const events = @import("experiment_events");
 
 const default_seed: u64 = 42;
 const default_steps: usize = 200;
 const train_samples: usize = 256;
 const test_samples: usize = 128;
+const grid_size: usize = 24;
+const grid_count: usize = grid_size * grid_size;
 const layer_widths = [_]usize{ 2, 16, 1 };
 
 const Options = struct {
     backend: nn.DevicePreference = .auto,
+    format: events.Format = .human,
     steps: usize = default_steps,
     seed: u64 = default_seed,
 };
@@ -28,6 +33,18 @@ const Dataset = struct {
 const Evaluation = struct {
     loss: f32,
     accuracy: f32,
+};
+
+const Sample = struct {
+    x: f32,
+    y: f32,
+    label: f32,
+};
+
+const Probability = struct {
+    x: f32,
+    y: f32,
+    value: f32,
 };
 
 const OptimizerSpec = struct {
@@ -51,6 +68,118 @@ const ExperimentResult = struct {
     results: [3]TrainingResult,
 };
 
+const Boundary = struct {
+    name: []const u8,
+    predictions: [grid_count]Probability,
+};
+
+const Session = struct {
+    name: []const u8,
+    learning_rate: f32,
+    model: nn.Modules.Mlp,
+    optimizer: nn.Training.Optimizer,
+    parameter_buffer: []*nn.Tensor,
+    gradient_buffer: []nn.Tensor,
+    allocator: std.mem.Allocator,
+    initial_loss: f32 = 0,
+    training_kernels: usize = 0,
+    training_readbacks: usize = 0,
+
+    fn init(
+        self: *Session,
+        allocator: std.mem.Allocator,
+        context: *nn.ExecutionContext,
+        seed: u64,
+        spec: OptimizerSpec,
+    ) !void {
+        var prng = std.Random.DefaultPrng.init(seed);
+        const model = try nn.Modules.Mlp.init(context, .{
+            .widths = &layer_widths,
+            .hidden_activation = .tanh,
+            .output_activation = .sigmoid,
+        }, prng.random());
+        self.* = .{
+            .name = spec.name,
+            .learning_rate = spec.config.learning_rate,
+            .model = model,
+            .optimizer = undefined,
+            .parameter_buffer = undefined,
+            .gradient_buffer = undefined,
+            .allocator = allocator,
+        };
+        errdefer self.model.deinit();
+
+        self.parameter_buffer = try allocator.alloc(*nn.Tensor, self.model.parameterTensorCount());
+        errdefer allocator.free(self.parameter_buffer);
+        self.gradient_buffer = try allocator.alloc(nn.Tensor, self.model.parameterTensorCount());
+        errdefer allocator.free(self.gradient_buffer);
+        const parameters = try self.model.parameters(self.parameter_buffer);
+        self.optimizer = try nn.Training.Optimizer.init(context, spec.config, parameters);
+    }
+
+    fn deinit(self: *Session) void {
+        self.optimizer.deinit();
+        self.allocator.free(self.gradient_buffer);
+        self.allocator.free(self.parameter_buffer);
+        self.model.deinit();
+        self.* = undefined;
+    }
+
+    fn trainStep(
+        self: *Session,
+        context: *nn.ExecutionContext,
+        features: nn.Tensor,
+        labels: nn.Tensor,
+        label_count: usize,
+    ) !void {
+        const before = context.stats;
+        try context.beginBatch();
+        var batch_active = true;
+        errdefer if (batch_active) context.endBatch() catch {};
+
+        var forward = try self.model.forward(context, features);
+        defer forward.deinit();
+        var difference = try context.subtract(forward.output, labels);
+        defer difference.deinit();
+        var output_gradient = try context.scale(
+            difference,
+            2.0 / @as(f32, @floatFromInt(label_count)),
+        );
+        defer output_gradient.deinit();
+        var gradients = try self.model.backward(context, &forward.cache, output_gradient);
+        defer gradients.deinit();
+        const parameters = try self.model.parameters(self.parameter_buffer);
+        const parameter_gradients = try gradients.parameterGradients(self.gradient_buffer);
+        const update = try self.optimizer.step(context, parameters, parameter_gradients);
+        std.debug.assert(update.updated);
+
+        try context.endBatch();
+        batch_active = false;
+        self.training_kernels += context.stats.kernels - before.kernels;
+        self.training_readbacks += context.stats.readbacks - before.readbacks;
+    }
+};
+
+const optimizer_specs = [_]OptimizerSpec{
+    .{ .name = "sgd", .config = .{
+        .kind = .sgd,
+        .learning_rate = 0.3,
+        .max_gradient_norm = 5,
+    } },
+    .{ .name = "momentum", .config = .{
+        .kind = .momentum,
+        .learning_rate = 0.08,
+        .momentum = 0.9,
+        .max_gradient_norm = 5,
+    } },
+    .{ .name = "adamw", .config = .{
+        .kind = .adamw,
+        .learning_rate = 0.03,
+        .weight_decay = 0.001,
+        .max_gradient_norm = 5,
+    } },
+};
+
 pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
     const options = parseArgs(args[1..]) catch |err| {
@@ -61,37 +190,18 @@ pub fn main(init: std.process.Init) !void {
         printUsage();
         return err;
     };
-    const experiment = try runExperiment(init.gpa, options);
 
-    std.debug.print(
-        "Optimizer lab: two-moons classification on {s}\n" ++
-            "same initialization, data, and {d} full-batch updates\n\n",
-        .{ backendName(experiment.backend), options.steps },
+    var stdout_buffer: [64 * 1024]u8 = undefined;
+    var stdout_writer = std.Io.File.stdout().writerStreaming(std.Options.debug_io, &stdout_buffer);
+    const stdout = &stdout_writer.interface;
+    defer stdout.flush() catch {};
+
+    const result = try runExperimentStreaming(
+        init.gpa,
+        options,
+        if (options.format == .ndjson) stdout else null,
     );
-    std.debug.print(
-        "optimizer   lr       loss before -> after   accuracy   updates   kernels   readbacks\n",
-        .{},
-    );
-    for (experiment.results) |result| {
-        std.debug.print(
-            "{s: <10} {d:.4}   {d:.5} -> {d:.5}    {d:>6.2}%   {d:>7}   {d:>7}   {d:>9}\n",
-            .{
-                result.optimizer,
-                result.learning_rate,
-                result.initial_loss,
-                result.final_loss,
-                result.test_accuracy * 100,
-                result.update_steps,
-                result.training_kernels,
-                result.training_readbacks,
-            },
-        );
-    }
-    std.debug.print(
-        "\nThe learning rates are intentionally optimizer-specific; compare the\n" ++
-            "loss reduction and held-out accuracy, not only the raw step size.\n",
-        .{},
-    );
+    if (options.format == .human) try printHuman(stdout, options, result);
 }
 
 fn parseArgs(args: []const []const u8) !Options {
@@ -103,6 +213,10 @@ fn parseArgs(args: []const []const u8) !Options {
             index += 1;
             if (index >= args.len) return error.MissingArgument;
             options.backend = try parseBackend(args[index]);
+        } else if (std.mem.eql(u8, arg, "--format")) {
+            index += 1;
+            if (index >= args.len) return error.MissingArgument;
+            options.format = try events.parseFormat(args[index]);
         } else if (std.mem.eql(u8, arg, "--steps")) {
             index += 1;
             if (index >= args.len) return error.MissingArgument;
@@ -136,6 +250,7 @@ fn printUsage() void {
         \\
         \\Options:
         \\  --backend <name>  cpu, auto, metal, cuda, or rocm (default: auto)
+        \\  --format <name>   human or ndjson (default: human)
         \\  --steps <count>   full-batch updates per optimizer (default: 200)
         \\  --seed <number>   model and dataset seed (default: 42)
         \\  --help            show this help
@@ -144,6 +259,14 @@ fn printUsage() void {
 }
 
 fn runExperiment(allocator: std.mem.Allocator, options: Options) !ExperimentResult {
+    return runExperimentStreaming(allocator, options, null);
+}
+
+fn runExperimentStreaming(
+    allocator: std.mem.Allocator,
+    options: Options,
+    writer: ?*std.Io.Writer,
+) !ExperimentResult {
     var training_data = try generateTwoMoons(allocator, train_samples, options.seed);
     defer training_data.deinit();
     var testing_data = try generateTwoMoons(
@@ -156,146 +279,220 @@ fn runExperiment(allocator: std.mem.Allocator, options: Options) !ExperimentResu
     var device = try nn.Device.init(allocator, options.backend);
     defer device.deinit();
     var context = nn.ExecutionContext.init(&device);
-    var training_features = try context.upload(
-        &.{ train_samples, 2 },
-        training_data.features,
-    );
+    var training_features = try context.upload(&.{ train_samples, 2 }, training_data.features);
     defer training_features.deinit();
-    var training_labels = try context.upload(
-        &.{ train_samples, 1 },
-        training_data.labels,
-    );
+    var training_labels = try context.upload(&.{ train_samples, 1 }, training_data.labels);
     defer training_labels.deinit();
-    var testing_features = try context.upload(
-        &.{ test_samples, 2 },
-        testing_data.features,
-    );
+    var testing_features = try context.upload(&.{ test_samples, 2 }, testing_data.features);
     defer testing_features.deinit();
 
-    const specs = [_]OptimizerSpec{
-        .{ .name = "sgd", .config = .{
-            .kind = .sgd,
-            .learning_rate = 0.3,
-            .max_gradient_norm = 5,
-        } },
-        .{ .name = "momentum", .config = .{
-            .kind = .momentum,
-            .learning_rate = 0.08,
-            .momentum = 0.9,
-            .max_gradient_norm = 5,
-        } },
-        .{ .name = "adamw", .config = .{
-            .kind = .adamw,
-            .learning_rate = 0.03,
-            .weight_decay = 0.001,
-            .max_gradient_norm = 5,
-        } },
-    };
-    var results: [specs.len]TrainingResult = undefined;
-    for (specs, 0..) |spec, index| {
-        results[index] = try trainOne(
+    const grid_values = makeGridValues();
+    var grid_tensor = try context.upload(&.{ grid_count, 2 }, &grid_values);
+    defer grid_tensor.deinit();
+    const samples = collectSamples(training_data);
+
+    var sessions: [optimizer_specs.len]Session = undefined;
+    var initialized: usize = 0;
+    defer for (sessions[0..initialized]) |*session| session.deinit();
+    for (optimizer_specs, 0..) |spec, index| {
+        try sessions[index].init(allocator, &context, options.seed, spec);
+        initialized += 1;
+        sessions[index].initial_loss = (try evaluate(
             allocator,
             &context,
+            &sessions[index].model,
             training_features,
-            training_labels,
+            training_data.labels,
+        )).loss;
+    }
+
+    if (writer) |output| {
+        try events.emit(output, .{
+            .v = 1,
+            .type = "run_started",
+            .experiment = "optimizer-lab",
+            .data = .{
+                .config = .{ .steps = options.steps, .seed = options.seed },
+                .topology = &layer_widths,
+                .activations = &[_][]const u8{ "tanh", "sigmoid" },
+                .samples = samples,
+                .grid_size = grid_size,
+                .execution = .{
+                    .requested_backend = backendPreferenceName(options.backend),
+                    .selected_backend = backendName(device.backendType()),
+                    .optimize = @tagName(builtin.mode),
+                },
+            },
+        });
+        try emitReport(
+            allocator,
+            output,
+            &context,
+            &sessions,
+            training_features,
             training_data.labels,
             testing_features,
             testing_data.labels,
-            options.seed,
+            grid_tensor,
+            grid_values,
+            0,
             options.steps,
-            spec,
+            .{},
+            .{},
         );
     }
 
+    context.resetStats();
+    for (0..options.steps) |step_index| {
+        for (&sessions) |*session| {
+            try session.trainStep(
+                &context,
+                training_features,
+                training_labels,
+                training_data.labels.len,
+            );
+        }
+        if (writer) |output| {
+            if (events.shouldEmitSnapshot(step_index, options.steps)) {
+                const execution_stats = context.stats;
+                const backend_stats = context.backendStats();
+                try emitReport(
+                    allocator,
+                    output,
+                    &context,
+                    &sessions,
+                    training_features,
+                    training_data.labels,
+                    testing_features,
+                    testing_data.labels,
+                    grid_tensor,
+                    grid_values,
+                    step_index + 1,
+                    options.steps,
+                    execution_stats,
+                    backend_stats,
+                );
+                context.resetStats();
+            }
+        }
+    }
+
+    var results: [sessions.len]TrainingResult = undefined;
+    for (&sessions, 0..) |*session, index| {
+        const final = try evaluate(
+            allocator,
+            &context,
+            &session.model,
+            training_features,
+            training_data.labels,
+        );
+        const testing = try evaluate(
+            allocator,
+            &context,
+            &session.model,
+            testing_features,
+            testing_data.labels,
+        );
+        results[index] = .{
+            .optimizer = session.name,
+            .learning_rate = session.learning_rate,
+            .initial_loss = session.initial_loss,
+            .final_loss = final.loss,
+            .test_accuracy = testing.accuracy,
+            .update_steps = session.optimizer.update_steps,
+            .training_kernels = session.training_kernels,
+            .training_readbacks = session.training_readbacks,
+        };
+    }
+
+    if (writer) |output| {
+        try events.emit(output, .{
+            .v = 1,
+            .type = "run_completed",
+            .experiment = "optimizer-lab",
+            .step = options.steps,
+            .total_steps = options.steps,
+            .data = .{ .results = results },
+        });
+    }
     return .{ .backend = device.backendType(), .results = results };
 }
 
-fn trainOne(
+fn emitReport(
     allocator: std.mem.Allocator,
+    writer: *std.Io.Writer,
     context: *nn.ExecutionContext,
+    sessions: *[optimizer_specs.len]Session,
     training_features: nn.Tensor,
-    training_labels: nn.Tensor,
-    training_label_values: []const f32,
+    training_labels: []const f32,
     testing_features: nn.Tensor,
-    testing_label_values: []const f32,
-    seed: u64,
-    steps: usize,
-    spec: OptimizerSpec,
-) !TrainingResult {
-    var prng = std.Random.DefaultPrng.init(seed);
-    var model = try nn.Modules.Mlp.init(context, .{
-        .widths = &layer_widths,
-        .hidden_activation = .tanh,
-        .output_activation = .sigmoid,
-    }, prng.random());
-    defer model.deinit();
-
-    const parameter_buffer = try allocator.alloc(*nn.Tensor, model.parameterTensorCount());
-    defer allocator.free(parameter_buffer);
-    const parameters = try model.parameters(parameter_buffer);
-    var optimizer = try nn.Training.Optimizer.init(context, spec.config, parameters);
-    defer optimizer.deinit();
-    const gradient_buffer = try allocator.alloc(nn.Tensor, model.parameterTensorCount());
-    defer allocator.free(gradient_buffer);
-
-    const initial = try evaluate(
-        allocator,
-        context,
-        &model,
-        training_features,
-        training_label_values,
-    );
-    context.resetStats();
-
-    for (0..steps) |_| {
-        try context.beginBatch();
-        var batch_active = true;
-        errdefer if (batch_active) context.endBatch() catch {};
-
-        var forward = try model.forward(context, training_features);
-        defer forward.deinit();
-        var difference = try context.subtract(forward.output, training_labels);
-        defer difference.deinit();
-        var output_gradient = try context.scale(
-            difference,
-            2.0 / @as(f32, @floatFromInt(training_label_values.len)),
-        );
-        defer output_gradient.deinit();
-        var gradients = try model.backward(context, &forward.cache, output_gradient);
-        defer gradients.deinit();
-        const parameter_gradients = try gradients.parameterGradients(gradient_buffer);
-        const update = try optimizer.step(context, parameters, parameter_gradients);
-        std.debug.assert(update.updated);
-
-        try context.endBatch();
-        batch_active = false;
+    testing_labels: []const f32,
+    grid_tensor: nn.Tensor,
+    grid_values: [grid_count * 2]f32,
+    step: usize,
+    total: usize,
+    execution_stats: nn.ExecutionStats,
+    backend_stats: nn.BackendRuntimeStats,
+) !void {
+    for (sessions) |*session| {
+        const training = try evaluate(allocator, context, &session.model, training_features, training_labels);
+        const testing = try evaluate(allocator, context, &session.model, testing_features, testing_labels);
+        try events.emit(writer, .{
+            .v = 1,
+            .type = "metric",
+            .experiment = "optimizer-lab",
+            .step = step,
+            .total_steps = total,
+            .data = .{ .name = "loss", .series = session.name, .value = training.loss },
+        });
+        try events.emit(writer, .{
+            .v = 1,
+            .type = "metric",
+            .experiment = "optimizer-lab",
+            .step = step,
+            .total_steps = total,
+            .data = .{ .name = "accuracy", .series = session.name, .value = testing.accuracy },
+        });
     }
 
-    const training_stats = context.stats;
-    const final = try evaluate(
-        allocator,
-        context,
-        &model,
-        training_features,
-        training_label_values,
-    );
-    const testing = try evaluate(
-        allocator,
-        context,
-        &model,
-        testing_features,
-        testing_label_values,
-    );
-    return .{
-        .optimizer = spec.name,
-        .learning_rate = spec.config.learning_rate,
-        .initial_loss = initial.loss,
-        .final_loss = final.loss,
-        .test_accuracy = testing.accuracy,
-        .update_steps = optimizer.update_steps,
-        .training_kernels = training_stats.kernels,
-        .training_readbacks = training_stats.readbacks,
-    };
+    const boundaries = try collectBoundaries(context, sessions, grid_tensor, grid_values);
+    try events.emit(writer, .{
+        .v = 1,
+        .type = "snapshot",
+        .experiment = "optimizer-lab",
+        .step = step,
+        .total_steps = total,
+        .data = .{
+            .kind = "optimizer_comparison",
+            .optimizers = boundaries,
+            .telemetry = .{ .execution = execution_stats, .backend = backend_stats },
+        },
+    });
+}
+
+fn collectBoundaries(
+    context: *nn.ExecutionContext,
+    sessions: *[optimizer_specs.len]Session,
+    grid_tensor: nn.Tensor,
+    grid_values: [grid_count * 2]f32,
+) ![optimizer_specs.len]Boundary {
+    var boundaries: [optimizer_specs.len]Boundary = undefined;
+    for (sessions, 0..) |*session, index| {
+        var forward = try session.model.forward(context, grid_tensor);
+        defer forward.deinit();
+        var values: [grid_count]f32 = undefined;
+        try context.readback(forward.output, &values);
+        var predictions: [grid_count]Probability = undefined;
+        for (&predictions, 0..) |*prediction, point| {
+            prediction.* = .{
+                .x = grid_values[point * 2],
+                .y = grid_values[point * 2 + 1],
+                .value = values[point],
+            };
+        }
+        boundaries[index] = .{ .name = session.name, .predictions = predictions };
+    }
+    return boundaries;
 }
 
 fn evaluate(
@@ -325,6 +522,30 @@ fn evaluate(
     };
 }
 
+fn makeGridValues() [grid_count * 2]f32 {
+    var values: [grid_count * 2]f32 = undefined;
+    for (0..grid_size) |row| {
+        for (0..grid_size) |column| {
+            const index = row * grid_size + column;
+            values[index * 2] = -1.6 + 3.2 * @as(f32, @floatFromInt(column)) / @as(f32, @floatFromInt(grid_size - 1));
+            values[index * 2 + 1] = -1.2 + 2.4 * @as(f32, @floatFromInt(row)) / @as(f32, @floatFromInt(grid_size - 1));
+        }
+    }
+    return values;
+}
+
+fn collectSamples(dataset: Dataset) [train_samples]Sample {
+    var samples: [train_samples]Sample = undefined;
+    for (&samples, 0..) |*sample, index| {
+        sample.* = .{
+            .x = dataset.features[index * 2],
+            .y = dataset.features[index * 2 + 1],
+            .label = dataset.labels[index],
+        };
+    }
+    return samples;
+}
+
 fn generateTwoMoons(allocator: std.mem.Allocator, count: usize, seed: u64) !Dataset {
     if (count == 0) return error.EmptyDataset;
     const features = try allocator.alloc(f32, count * 2);
@@ -348,6 +569,42 @@ fn generateTwoMoons(allocator: std.mem.Allocator, count: usize, seed: u64) !Data
     return .{ .allocator = allocator, .features = features, .labels = labels };
 }
 
+fn printHuman(writer: *std.Io.Writer, options: Options, experiment: ExperimentResult) !void {
+    try writer.print(
+        "Optimizer lab: two-moons classification on {s}\n" ++
+            "same initialization, data, and {d} full-batch updates\n\n",
+        .{ backendName(experiment.backend), options.steps },
+    );
+    try writer.print(
+        "optimizer   lr       loss before -> after   accuracy   updates   kernels   readbacks\n",
+        .{},
+    );
+    for (experiment.results) |result| {
+        try writer.print(
+            "{s: <10} {d:.4}   {d:.5} -> {d:.5}    {d:>6.2}%   {d:>7}   {d:>7}   {d:>9}\n",
+            .{
+                result.optimizer,
+                result.learning_rate,
+                result.initial_loss,
+                result.final_loss,
+                result.test_accuracy * 100,
+                result.update_steps,
+                result.training_kernels,
+                result.training_readbacks,
+            },
+        );
+    }
+    try writer.print(
+        "\nThe learning rates are intentionally optimizer-specific; compare the\n" ++
+            "loss reduction and held-out accuracy, not only the raw step size.\n",
+        .{},
+    );
+}
+
+fn backendPreferenceName(preference: nn.DevicePreference) []const u8 {
+    return @tagName(preference);
+}
+
 fn backendName(backend: nn.BackendType) []const u8 {
     return switch (backend) {
         .CPU => "cpu",
@@ -358,8 +615,9 @@ fn backendName(backend: nn.BackendType) []const u8 {
 }
 
 test "optimizer lab parses reproducible options" {
-    const options = try parseArgs(&.{ "--backend", "cpu", "--steps", "12", "--seed", "7" });
+    const options = try parseArgs(&.{ "--backend", "cpu", "--format", "ndjson", "--steps", "12", "--seed", "7" });
     try std.testing.expectEqual(nn.DevicePreference.cpu, options.backend);
+    try std.testing.expectEqual(events.Format.ndjson, options.format);
     try std.testing.expectEqual(@as(usize, 12), options.steps);
     try std.testing.expectEqual(@as(u64, 7), options.seed);
     try std.testing.expectError(error.UnknownBackend, parseBackend("quantum"));

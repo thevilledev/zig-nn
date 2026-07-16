@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const nn = @import("nn");
 
 const Matrix = nn.Matrix;
@@ -77,6 +78,11 @@ pub fn main(init: std.process.Init) !void {
                 .samples = samples,
                 .boundary_radius = 0.5,
                 .grid_size = probability_grid_size,
+                .execution = .{
+                    .requested_backend = "cpu",
+                    .selected_backend = "cpu",
+                    .optimize = @tagName(builtin.mode),
+                },
             },
         });
         try emitSnapshot(allocator, stdout, &network, 0, options.epochs);

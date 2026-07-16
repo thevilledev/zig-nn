@@ -1,8 +1,27 @@
 import { render, screen } from '@testing-library/svelte';
 import { describe, expect, it } from 'vitest';
 import DecisionBoundary from './DecisionBoundary.svelte';
+import BackendBenchmark from './BackendBenchmark.svelte';
+import ExecutionPanel from './ExecutionPanel.svelte';
+import OptimizerComparison from './OptimizerComparison.svelte';
 import RegressionVisualization from './RegressionVisualization.svelte';
+import SemanticSimilarity from './SemanticSimilarity.svelte';
 import XorVisualization from './XorVisualization.svelte';
+import type { RunStartedData } from './types';
+
+const telemetry = {
+  execution: { uploads: 2, upload_bytes: 64, readbacks: 0, readback_bytes: 0, kernels: 12, synchronizations: 1 },
+  backend: {
+    buffer_allocations: 4,
+    host_to_device_transfers: 2,
+    host_to_device_bytes: 64,
+    device_to_host_transfers: 0,
+    device_to_host_bytes: 0,
+    kernel_launches: 6,
+    vendor_gemm_launches: 2,
+    synchronizations: 1
+  }
+};
 
 describe('learning visualizations', () => {
   it('renders XOR predictions with an accessible summary', () => {
@@ -31,5 +50,64 @@ describe('learning visualizations', () => {
       snapshot: { step: 1, total: 1, data: { kind: 'decision_boundary', probabilities: [{ x: 0, y: 0, value: 0.9 }] } }
     });
     expect(screen.getByRole('img', { name: /^Learned circular decision boundary/ })).toBeTruthy();
+  });
+
+  it('renders optimizer, accelerator, and execution evidence', () => {
+    const started: RunStartedData = {
+      config: {},
+      topology: [2, 16, 1],
+      activations: ['tanh', 'sigmoid'],
+      samples: [{ x: 0, y: 0, label: 1 }],
+      grid_size: 1,
+      execution: { requested_backend: 'metal', selected_backend: 'metal', optimize: 'ReleaseFast' }
+    };
+    const optimizer = render(OptimizerComparison, {
+      started,
+      snapshot: {
+        step: 2,
+        total: 10,
+        data: { kind: 'optimizer_comparison', optimizers: [{ name: 'sgd', predictions: [{ x: 0, y: 0, value: 0.9 }] }], telemetry }
+      }
+    });
+    expect(screen.getByRole('img', { name: /sgd decision boundary/ })).toBeTruthy();
+    optimizer.unmount();
+
+    const benchmark = render(BackendBenchmark, {
+      started,
+      snapshot: {
+        step: 1,
+        total: 1,
+        data: {
+          kind: 'backend_benchmark',
+          cases: [{ size: 128, trials: 5, cpu_ms: 2, accelerator_ms: 1, speedup: 2, sample_error: 1e-6, telemetry }],
+          telemetry
+        }
+      }
+    });
+    expect(screen.getByRole('img', { name: /timing comparison/ })).toBeTruthy();
+    benchmark.unmount();
+
+    render(ExecutionPanel, {
+      started,
+      snapshot: { step: 1, total: 1, data: { kind: 'backend_benchmark', cases: [], telemetry } }
+    });
+    expect(screen.getByText('ReleaseFast')).toBeTruthy();
+    expect(screen.getByText('Vendor GEMMs')).toBeTruthy();
+  });
+
+  it('renders semantic similarity and interactive query rankings', () => {
+    render(SemanticSimilarity, {
+      started: {
+        config: {}, topology: [2, 2, 2], activations: ['linear'], queries: ['cat query', 'dog query'], documents: ['cat doc', 'dog doc']
+      },
+      snapshot: {
+        step: 4,
+        total: 4,
+        data: { kind: 'semantic_similarity', similarities: [0.9, 0.1, 0.2, 0.8], rows: 2, columns: 2, telemetry }
+      }
+    });
+    expect(screen.getByRole('img', { name: /Cosine similarity heatmap/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'cat query' })).toBeTruthy();
+    expect(screen.getAllByText('cat doc')).toHaveLength(2);
   });
 });

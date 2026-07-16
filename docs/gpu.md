@@ -101,7 +101,9 @@ zig build run_gpu_benchmark -Dgpu=metal -Doptimize=ReleaseFast
 ```
 
 The benchmark prints CPU timing, Metal timing, speedup, and a small sampled
-error check.
+error check. It also supports `--format ndjson` for the browser learning lab,
+where synchronized median timings and runtime counters are rendered together.
+The lab uses native Metal compute and does not substitute browser WebGPU.
 
 ## CUDA Verification
 

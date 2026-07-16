@@ -43,13 +43,13 @@ type eventInput struct {
 }
 
 type Executor interface {
-	Execute(context.Context, ExperimentSpec, []string, func([]byte) error, func(string)) error
+	Execute(context.Context, ExperimentSpec, RunOptions, func([]byte) error, func(string)) error
 }
 
-type ExecutorFunc func(context.Context, ExperimentSpec, []string, func([]byte) error, func(string)) error
+type ExecutorFunc func(context.Context, ExperimentSpec, RunOptions, func([]byte) error, func(string)) error
 
-func (f ExecutorFunc) Execute(ctx context.Context, spec ExperimentSpec, args []string, stdout func([]byte) error, stderr func(string)) error {
-	return f(ctx, spec, args, stdout, stderr)
+func (f ExecutorFunc) Execute(ctx context.Context, spec ExperimentSpec, options RunOptions, stdout func([]byte) error, stderr func(string)) error {
+	return f(ctx, spec, options, stdout, stderr)
 }
 
 type CommandExecutor struct {
@@ -58,11 +58,19 @@ type CommandExecutor struct {
 	Mode     string
 }
 
-func (e CommandExecutor) Execute(ctx context.Context, spec ExperimentSpec, passthrough []string, stdoutLine func([]byte) error, stderrLine func(string)) error {
+func (e CommandExecutor) Execute(ctx context.Context, spec ExperimentSpec, options RunOptions, stdoutLine func([]byte) error, stderrLine func(string)) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	args := zig.RunArgs(spec.Step, zig.Options{Optimize: e.Mode}, passthrough)
+	mode := e.Mode
+	if spec.Optimize != "" {
+		mode = spec.Optimize
+	}
+	gpu := ""
+	if options.Backend != "cpu" {
+		gpu = options.Backend
+	}
+	args := zig.RunArgs(spec.Step, zig.Options{Optimize: mode, GPU: gpu}, options.Arguments)
 	cmd := exec.CommandContext(ctx, e.Zig, args...)
 	cmd.Dir = e.RepoRoot
 	stdout, err := cmd.StdoutPipe()
@@ -153,7 +161,7 @@ func NewManager(executor Executor) *Manager {
 	return &Manager{executor: executor, runs: make(map[string]*run)}
 }
 
-func (m *Manager) Start(parent context.Context, spec ExperimentSpec, args []string) (string, error) {
+func (m *Manager) Start(parent context.Context, spec ExperimentSpec, options RunOptions) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.active != nil {
@@ -170,12 +178,12 @@ func (m *Manager) Start(parent context.Context, spec ExperimentSpec, args []stri
 	}
 	m.runs[r.id] = r
 	m.active = r
-	go m.execute(ctx, r, spec, args)
+	go m.execute(ctx, r, spec, options)
 	return r.id, nil
 }
 
-func (m *Manager) execute(ctx context.Context, r *run, spec ExperimentSpec, args []string) {
-	err := m.executor.Execute(ctx, spec, args, func(line []byte) error {
+func (m *Manager) execute(ctx context.Context, r *run, spec ExperimentSpec, options RunOptions) {
+	err := m.executor.Execute(ctx, spec, options, func(line []byte) error {
 		input, parseErr := parseEvent(line, spec.ID)
 		if parseErr != nil {
 			return parseErr

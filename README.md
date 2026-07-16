@@ -41,10 +41,11 @@ For a guided browser view of live training, run:
 mise run lab
 ```
 
-The local learning lab starts with XOR training, nonlinear regression, and
-binary classification. It streams native Zig metrics and snapshots through
+The local learning lab covers XOR training, nonlinear regression, binary
+classification, optimizer comparison, CPU-versus-Metal evidence, and semantic
+search. It streams native Zig metrics, snapshots, and device telemetry through
 `nnctl`; see the [learning lab guide](docs/learning-lab.md) for the interface,
-development workflow, and experiment event protocol.
+development workflow, backend contract, and event protocol.
 
 ## Documentation
 

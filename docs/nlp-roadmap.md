@@ -37,6 +37,11 @@ Explicit `metal`, `cuda`, and `rocm` device preferences fail if unavailable;
 `auto` may fall back to CPU. See [GPU and Backend Notes](gpu.md) for toolchain
 requirements and verification commands.
 
+Semantic Search is also the first language lesson in the real-time browser
+lab. Its live heatmap shows the held-out query/document cosine matrix becoming
+diagonally dominant, while separate loss, recall@1, MRR, and runtime telemetry
+make the training and host-ranking boundary explicit.
+
 ## Next Roadmap Set
 
 These are the next useful increments. Each item includes the experiment required

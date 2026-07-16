@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const nn = @import("nn");
 
 const Network = nn.Network;
@@ -74,6 +75,11 @@ pub fn main(init: std.process.Init) !void {
                 },
                 .topology = &[_]usize{ 2, 6, 4, 1 },
                 .activations = &[_][]const u8{ "tanh", "tanh", "sigmoid" },
+                .execution = .{
+                    .requested_backend = "cpu",
+                    .selected_backend = "cpu",
+                    .optimize = @tagName(builtin.mode),
+                },
             },
         });
         try emitSnapshot(writer, &network, inputs, targets, 0, options.epochs);

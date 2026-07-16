@@ -5,6 +5,7 @@ import type { ExperimentSpec, RunEvent } from './lib/types';
 
 const experiment: ExperimentSpec = {
   id: 'xor-training',
+  category: 'Foundations',
   title: 'Learning XOR',
   description: 'Learn XOR.',
   question: 'How does XOR become learnable?',
@@ -12,11 +13,32 @@ const experiment: ExperimentSpec = {
   interpretation: ['Read the probabilities.'],
   visualization: 'xor_predictions',
   sources: ['experiments/xor_training/xor_training.zig'],
+  metrics: [{ name: 'loss', label: 'Training loss' }],
+  backends: ['cpu'],
+  default_backend: 'cpu',
   parameters: [
     { name: 'epochs', label: 'Epochs', help: 'Training passes.', kind: 'integer', default: 100, min: 100, max: 20000, step: 100 },
     { name: 'learning_rate', label: 'Learning rate', help: 'Update size.', kind: 'number', default: 0.3, min: 0.001, max: 1, step: 0.001 },
     { name: 'seed', label: 'Seed', help: 'Reproducibility.', kind: 'integer', default: 42, min: 0, max: 1000, step: 1 }
   ]
+};
+
+const capabilities = { platform: 'darwin', backends: ['cpu', 'metal'] } as const;
+
+const benchmark: ExperimentSpec = {
+  id: 'gpu-benchmark',
+  category: 'Accelerators',
+  title: 'When Metal Wins',
+  description: 'Compare CPU and Metal.',
+  question: 'When does Metal win?',
+  observe: ['The crossover point'],
+  interpretation: ['Compare synchronized timings.'],
+  visualization: 'backend_benchmark',
+  sources: ['experiments/gpu_benchmark/gpu_benchmark.zig'],
+  metrics: [],
+  backends: ['metal'],
+  default_backend: 'metal',
+  parameters: null as unknown as ExperimentSpec['parameters']
 };
 
 class FakeEventSource {
@@ -59,7 +81,7 @@ afterEach(() => {
 
 describe('App', () => {
   it('loads guided content and exposes labelled native controls', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify([experiment]), { status: 200, headers: { 'Content-Type': 'application/json' } })));
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(response([experiment])).mockResolvedValueOnce(response(capabilities)));
     render(App);
 
     expect(await screen.findByRole('heading', { name: 'Learning XOR', level: 1 })).toBeTruthy();
@@ -68,13 +90,13 @@ describe('App', () => {
     expect(screen.getByRole('spinbutton', { name: /Learning rate/ })).toBeTruthy();
     expect(screen.getByRole('spinbutton', { name: /Seed/ })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Run experiment' })).toBeTruthy();
-    expect(screen.getByLabelText('Training timeline')).toBeTruthy();
+    expect(screen.getByLabelText('Run timeline')).toBeTruthy();
   });
 
   it('shows live progress and supports snapshot timeline scrubbing', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockResolvedValueOnce(response([experiment])).mockResolvedValueOnce(response({ id: 'run-1' }, 202))
+      vi.fn().mockResolvedValueOnce(response([experiment])).mockResolvedValueOnce(response(capabilities)).mockResolvedValueOnce(response({ id: 'run-1' }, 202))
     );
     vi.stubGlobal('EventSource', FakeEventSource);
     render(App);
@@ -89,7 +111,7 @@ describe('App', () => {
     FakeEventSource.latest!.emit(runEvent('snapshot', 4, { kind: 'xor_predictions', predictions: [] }, 10));
 
     await waitFor(() => expect(screen.getByLabelText('Run 10 percent complete')).toBeTruthy());
-    const timeline = screen.getByLabelText('Training timeline') as HTMLInputElement;
+    const timeline = screen.getByLabelText('Run timeline') as HTMLInputElement;
     expect(timeline.value).toBe('1');
     await fireEvent.input(timeline, { target: { value: '0' } });
     expect((screen.getByRole('checkbox', { name: 'Follow live' }) as HTMLInputElement).checked).toBe(false);
@@ -100,6 +122,7 @@ describe('App', () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(response([experiment]))
+      .mockResolvedValueOnce(response(capabilities))
       .mockResolvedValueOnce(response({ id: 'run-1' }, 202))
       .mockResolvedValueOnce(response(null, 204));
     vi.stubGlobal('fetch', fetchMock);
@@ -115,5 +138,25 @@ describe('App', () => {
     FakeEventSource.latest!.emit(runEvent('run_failed', 1, { message: 'run cancelled', cancelled: true }));
     expect((await screen.findByRole('alert')).textContent).toContain('run cancelled');
     expect(screen.getByText('cancelled')).toBeTruthy();
+  });
+
+  it('submits only parameters belonging to the selected experiment', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(response([experiment, benchmark]))
+      .mockResolvedValueOnce(response(capabilities))
+      .mockResolvedValueOnce(response({ id: 'run-1' }, 202));
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal('EventSource', FakeEventSource);
+    render(App);
+
+    await screen.findByRole('heading', { name: 'Learning XOR', level: 1 });
+    await fireEvent.change(screen.getByRole('combobox', { name: 'Experiment' }), { target: { value: benchmark.id } });
+    await screen.findByRole('heading', { name: 'When Metal Wins', level: 1 });
+    await fireEvent.click(screen.getByRole('button', { name: 'Run experiment' }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    const request = fetchMock.mock.calls[2]?.[1] as RequestInit;
+    expect(JSON.parse(String(request.body))).toEqual({ experiment: benchmark.id, backend: 'metal', parameters: {} });
   });
 });

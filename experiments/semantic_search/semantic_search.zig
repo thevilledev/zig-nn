@@ -1,5 +1,7 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const nn = @import("nn");
+const events = @import("experiment_events");
 
 const pair_count: usize = 6;
 const embedding_features: usize = 6;
@@ -22,6 +24,7 @@ const documents = [_][]const u8{
 
 const Options = struct {
     backend: nn.DevicePreference = .auto,
+    format: events.Format = .human,
     steps: usize = default_steps,
     seed: u64 = 42,
 };
@@ -49,27 +52,18 @@ pub fn main(init: std.process.Init) !void {
         if (err == error.HelpRequested) return;
         return err;
     };
-    const result = try runExperiment(init.gpa, options);
-    std.debug.print("Contrastive semantic-search lesson on {s}\n", .{backendName(result.backend)});
-    std.debug.print("dual encoders map different query/document vocabularies into one space\n", .{});
-    std.debug.print(
-        "InfoNCE loss: {d:.4} -> {d:.4}; recall@1: {d:.1}% -> {d:.1}%; final MRR: {d:.3}\n" ++
-            "training kernels: {d}, training readbacks: {d}\n\n",
-        .{
-            result.initial.loss,
-            result.final.loss,
-            result.initial.recall_at_one * 100,
-            result.final.recall_at_one * 100,
-            result.final.mean_reciprocal_rank,
-            result.training_kernels,
-            result.training_readbacks,
-        },
+
+    var stdout_buffer: [16 * 1024]u8 = undefined;
+    var stdout_writer = std.Io.File.stdout().writerStreaming(std.Options.debug_io, &stdout_buffer);
+    const stdout = &stdout_writer.interface;
+    defer stdout.flush() catch {};
+
+    const result = try runExperimentStreaming(
+        init.gpa,
+        options,
+        if (options.format == .ndjson) stdout else null,
     );
-    std.debug.print("query: \"{s}\"\n", .{result.query});
-    for (result.neighbors, 1..) |neighbor, rank| {
-        std.debug.print("  {d}. {s: <20} cosine {d:.3}\n", .{ rank, documents[neighbor.index], neighbor.score });
-    }
-    std.debug.print("lesson: in-batch negatives teach paired texts to outrank every mismatch\n", .{});
+    if (options.format == .human) try printHuman(stdout, result);
 }
 
 fn parseArgs(args: []const []const u8) !Options {
@@ -80,6 +74,10 @@ fn parseArgs(args: []const []const u8) !Options {
             index += 1;
             if (index >= args.len) return error.MissingArgument;
             options.backend = try parseBackend(args[index]);
+        } else if (std.mem.eql(u8, args[index], "--format")) {
+            index += 1;
+            if (index >= args.len) return error.MissingArgument;
+            options.format = try events.parseFormat(args[index]);
         } else if (std.mem.eql(u8, args[index], "--steps")) {
             index += 1;
             if (index >= args.len) return error.MissingArgument;
@@ -113,6 +111,7 @@ fn printUsage() void {
         \\
         \\Options:
         \\  --backend <name>  cpu, auto, metal, cuda, or rocm (default: auto)
+        \\  --format <name>   human or ndjson (default: human)
         \\  --steps <count>   full-batch contrastive updates (default: 40)
         \\  --seed <number>   model seed (default: 42)
         \\  --help            show this help
@@ -121,6 +120,14 @@ fn printUsage() void {
 }
 
 fn runExperiment(allocator: std.mem.Allocator, options: Options) !Result {
+    return runExperimentStreaming(allocator, options, null);
+}
+
+fn runExperimentStreaming(
+    allocator: std.mem.Allocator,
+    options: Options,
+    writer: ?*std.Io.Writer,
+) !Result {
     var device = try nn.Device.init(allocator, options.backend);
     defer device.deinit();
     var context = nn.ExecutionContext.init(&device);
@@ -153,11 +160,74 @@ fn runExperiment(allocator: std.mem.Allocator, options: Options) !Result {
         held_out_query_tensor,
         document_tensor,
     );
-    context.resetStats();
-    for (0..options.steps) |_| {
-        try trainStep(&context, &query_encoder, &document_encoder, optimizer, training_query_tensor, document_tensor);
+    if (writer) |output| {
+        try events.emit(output, .{
+            .v = 1,
+            .type = "run_started",
+            .experiment = "semantic-search",
+            .data = .{
+                .config = .{ .steps = options.steps, .seed = options.seed },
+                .topology = &[_]usize{ query_vocabulary.len, embedding_features, document_vocabulary.len },
+                .activations = &[_][]const u8{ "linear", "cosine" },
+                .queries = &held_out_queries,
+                .documents = &documents,
+                .execution = .{
+                    .requested_backend = @tagName(options.backend),
+                    .selected_backend = backendName(device.backendType()),
+                    .optimize = @tagName(builtin.mode),
+                },
+            },
+        });
+        try emitReport(
+            allocator,
+            output,
+            &context,
+            &query_encoder,
+            &document_encoder,
+            training_query_tensor,
+            held_out_query_tensor,
+            document_tensor,
+            0,
+            options.steps,
+            .{},
+            .{},
+        );
     }
-    const training_stats = context.stats;
+
+    context.resetStats();
+    var training_kernels: usize = 0;
+    var training_readbacks: usize = 0;
+    for (0..options.steps) |step_index| {
+        try trainStep(&context, &query_encoder, &document_encoder, optimizer, training_query_tensor, document_tensor);
+        if (writer) |output| {
+            if (events.shouldEmitSnapshot(step_index, options.steps)) {
+                const execution_stats = context.stats;
+                const backend_stats = context.backendStats();
+                training_kernels += execution_stats.kernels;
+                training_readbacks += execution_stats.readbacks;
+                try emitReport(
+                    allocator,
+                    output,
+                    &context,
+                    &query_encoder,
+                    &document_encoder,
+                    training_query_tensor,
+                    held_out_query_tensor,
+                    document_tensor,
+                    step_index + 1,
+                    options.steps,
+                    execution_stats,
+                    backend_stats,
+                );
+                context.resetStats();
+            }
+        }
+    }
+    if (writer == null) {
+        training_kernels = context.stats.kernels;
+        training_readbacks = context.stats.readbacks;
+    }
+
     const final = try evaluate(
         allocator,
         &context,
@@ -176,15 +246,91 @@ fn runExperiment(allocator: std.mem.Allocator, options: Options) !Result {
         document_tensor,
         2,
     );
+    if (writer) |output| {
+        try events.emit(output, .{
+            .v = 1,
+            .type = "run_completed",
+            .experiment = "semantic-search",
+            .step = options.steps,
+            .total_steps = options.steps,
+            .data = .{
+                .initial = initial,
+                .final = final,
+                .training_kernels = training_kernels,
+                .training_readbacks = training_readbacks,
+            },
+        });
+    }
     return .{
         .backend = device.backendType(),
         .initial = initial,
         .final = final,
         .query = held_out_queries[2],
         .neighbors = neighbors,
-        .training_kernels = training_stats.kernels,
-        .training_readbacks = training_stats.readbacks,
+        .training_kernels = training_kernels,
+        .training_readbacks = training_readbacks,
     };
+}
+
+fn emitReport(
+    allocator: std.mem.Allocator,
+    writer: *std.Io.Writer,
+    context: *nn.ExecutionContext,
+    query_encoder: *const nn.Modules.Linear,
+    document_encoder: *const nn.Modules.Linear,
+    training_queries_tensor: nn.Tensor,
+    held_out_queries_tensor: nn.Tensor,
+    documents_tensor: nn.Tensor,
+    step: usize,
+    total: usize,
+    execution_stats: nn.ExecutionStats,
+    backend_stats: nn.BackendRuntimeStats,
+) !void {
+    const metrics = try evaluate(
+        allocator,
+        context,
+        query_encoder,
+        document_encoder,
+        training_queries_tensor,
+        held_out_queries_tensor,
+        documents_tensor,
+    );
+    inline for (.{
+        .{ "loss", metrics.loss },
+        .{ "recall_at_one", metrics.recall_at_one },
+        .{ "mean_reciprocal_rank", metrics.mean_reciprocal_rank },
+    }) |metric| {
+        try events.emit(writer, .{
+            .v = 1,
+            .type = "metric",
+            .experiment = "semantic-search",
+            .step = step,
+            .total_steps = total,
+            .data = .{ .name = metric[0], .value = metric[1] },
+        });
+    }
+    const similarities = try similarityMatrix(
+        allocator,
+        context,
+        query_encoder,
+        document_encoder,
+        held_out_queries_tensor,
+        documents_tensor,
+    );
+    try events.emit(writer, .{
+        .v = 1,
+        .type = "snapshot",
+        .experiment = "semantic-search",
+        .step = step,
+        .total_steps = total,
+        .data = .{
+            .kind = "semantic_similarity",
+            .similarities = similarities,
+            .rows = pair_count,
+            .columns = pair_count,
+            .telemetry = .{ .execution = execution_stats, .backend = backend_stats },
+        },
+    });
 }
 
 fn trainStep(
@@ -266,6 +412,51 @@ fn evaluate(
     };
 }
 
+fn similarityMatrix(
+    allocator: std.mem.Allocator,
+    context: *nn.ExecutionContext,
+    query_encoder: *const nn.Modules.Linear,
+    document_encoder: *const nn.Modules.Linear,
+    queries: nn.Tensor,
+    document_inputs: nn.Tensor,
+) ![pair_count * pair_count]f32 {
+    try context.beginBatch();
+    var query_embeddings = try query_encoder.forward(context, queries);
+    defer query_embeddings.deinit();
+    var document_embeddings = try document_encoder.forward(context, document_inputs);
+    defer document_embeddings.deinit();
+    try context.endBatch();
+    const query_values = try allocator.alloc(f32, pair_count * embedding_features);
+    defer allocator.free(query_values);
+    const document_values = try allocator.alloc(f32, pair_count * embedding_features);
+    defer allocator.free(document_values);
+    try context.readback(query_embeddings, query_values);
+    try context.readback(document_embeddings, document_values);
+
+    var similarities: [pair_count * pair_count]f32 = undefined;
+    for (0..pair_count) |row| {
+        for (0..pair_count) |column| {
+            similarities[row * pair_count + column] = cosine(
+                query_values[row * embedding_features ..][0..embedding_features],
+                document_values[column * embedding_features ..][0..embedding_features],
+            );
+        }
+    }
+    return similarities;
+}
+
+fn cosine(left: []const f32, right: []const f32) f32 {
+    var dot: f32 = 0;
+    var left_squared: f32 = 0;
+    var right_squared: f32 = 0;
+    for (left, right) |left_value, right_value| {
+        dot += left_value * right_value;
+        left_squared += left_value * left_value;
+        right_squared += right_value * right_value;
+    }
+    return dot / (@sqrt(left_squared) * @sqrt(right_squared));
+}
+
 fn sampleRanking(
     allocator: std.mem.Allocator,
     context: *nn.ExecutionContext,
@@ -316,13 +507,43 @@ fn bagOfWords(
     return values;
 }
 
+fn printHuman(writer: *std.Io.Writer, result: Result) !void {
+    try writer.print("Contrastive semantic-search lesson on {s}\n", .{backendName(result.backend)});
+    try writer.print("dual encoders map different query/document vocabularies into one space\n", .{});
+    try writer.print(
+        "InfoNCE loss: {d:.4} -> {d:.4}; recall@1: {d:.1}% -> {d:.1}%; final MRR: {d:.3}\n" ++
+            "training kernels: {d}, training readbacks: {d}\n\n",
+        .{
+            result.initial.loss,
+            result.final.loss,
+            result.initial.recall_at_one * 100,
+            result.final.recall_at_one * 100,
+            result.final.mean_reciprocal_rank,
+            result.training_kernels,
+            result.training_readbacks,
+        },
+    );
+    try writer.print("query: \"{s}\"\n", .{result.query});
+    for (result.neighbors, 1..) |neighbor, rank| {
+        try writer.print("  {d}. {s: <20} cosine {d:.3}\n", .{ rank, documents[neighbor.index], neighbor.score });
+    }
+    try writer.print("lesson: in-batch negatives teach paired texts to outrank every mismatch\n", .{});
+}
+
 fn backendName(backend: nn.BackendType) []const u8 {
     return switch (backend) {
-        .CPU => "CPU",
-        .Metal => "Metal",
-        .CUDA => "CUDA",
-        .ROCm => "ROCm",
+        .CPU => "cpu",
+        .Metal => "metal",
+        .CUDA => "cuda",
+        .ROCm => "rocm",
     };
+}
+
+test "semantic search parses structured output" {
+    const options = try parseArgs(&.{ "--backend", "cpu", "--format", "ndjson", "--steps", "12", "--seed", "7" });
+    try std.testing.expectEqual(nn.DevicePreference.cpu, options.backend);
+    try std.testing.expectEqual(events.Format.ndjson, options.format);
+    try std.testing.expectEqual(@as(usize, 12), options.steps);
 }
 
 test "contrastive dual encoders retrieve held-out query wording" {

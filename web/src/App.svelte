@@ -1,15 +1,16 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
-  import { cancelRun, connectRun, loadExperiments, startRun } from './lib/api';
-  import DecisionBoundary from './lib/DecisionBoundary.svelte';
-  import LossChart from './lib/LossChart.svelte';
-  import RegressionVisualization from './lib/RegressionVisualization.svelte';
-  import XorVisualization from './lib/XorVisualization.svelte';
+  import { cancelRun, connectRun, loadCapabilities, loadExperiments, startRun } from './lib/api';
+  import ExecutionPanel from './lib/ExecutionPanel.svelte';
+  import MetricChart from './lib/MetricChart.svelte';
+  import Visualization from './lib/Visualization.svelte';
   import { initialRunState, reduceRunEvent } from './lib/run-state';
-  import type { ExperimentSpec, RunState } from './lib/types';
+  import type { Backend, Capabilities, ExperimentSpec, RunState } from './lib/types';
 
   let experiments = $state<ExperimentSpec[]>([]);
+  let capabilities = $state<Capabilities>({ platform: '', backends: ['cpu'] });
   let selectedID = $state('');
+  let backend = $state<Backend>('cpu');
   let parameters = $state<Record<string, number>>({});
   let run = $state<RunState>(initialRunState());
   let loadingError = $state<string | null>(null);
@@ -20,8 +21,9 @@
   let closeStream: (() => void) | null = null;
 
   let selected = $derived(experiments.find((experiment) => experiment.id === selectedID) ?? null);
+  let availableBackends = $derived(selected?.backends.filter((candidate) => capabilities.backends.includes(candidate)) ?? []);
   let selectedSnapshot = $derived(snapshotIndex >= 0 ? run.snapshots[snapshotIndex] : undefined);
-  let latestLoss = $derived(run.metrics.at(-1)?.value);
+  let latestLoss = $derived(run.metrics.loss?.at(-1)?.value);
   let progress = $derived(run.totalSteps ? Math.min(100, (run.step / run.totalSteps) * 100) : 0);
   let running = $derived(run.status === 'starting' || run.status === 'running');
 
@@ -32,7 +34,7 @@
 
   onMount(async () => {
     try {
-      experiments = await loadExperiments();
+      [experiments, capabilities] = await Promise.all([loadExperiments(), loadCapabilities()]);
       const requested = new URLSearchParams(window.location.search).get('experiment');
       selectExperiment(experiments.some((experiment) => experiment.id === requested) ? requested! : experiments[0]?.id ?? '');
     } catch (error) {
@@ -47,7 +49,9 @@
     closeStream = null;
     selectedID = id;
     const experiment = experiments.find((candidate) => candidate.id === id);
-    parameters = Object.fromEntries(experiment?.parameters.map((parameter) => [parameter.name, parameter.default]) ?? []);
+    const supported = experiment?.backends.filter((candidate) => capabilities.backends.includes(candidate)) ?? [];
+    backend = supported.includes(experiment?.default_backend ?? 'cpu') ? experiment!.default_backend : (supported[0] ?? 'cpu');
+    parameters = Object.fromEntries((experiment?.parameters ?? []).map((parameter) => [parameter.name, parameter.default]));
     run = initialRunState();
     actionError = null;
     connectionMessage = '';
@@ -70,7 +74,10 @@
     followLive = true;
     snapshotIndex = -1;
     try {
-      const id = await startRun(selected.id, parameters);
+      const runParameters = Object.fromEntries(
+        (selected.parameters ?? []).map((parameter) => [parameter.name, parameters[parameter.name] ?? parameter.default])
+      );
+      const id = await startRun(selected.id, backend, runParameters);
       run = { ...run, id };
       closeStream = connectRun(
         id,
@@ -137,7 +144,7 @@
     <section class="loading" aria-live="polite">Loading experiments…</section>
   {:else}
     <section class="lesson-intro">
-      <p class="eyebrow">Foundations · native Zig experiment</p>
+      <p class="eyebrow">{selected.category} · native Zig experiment</p>
       <h1>{selected.title}</h1>
       <p class="lede">{selected.description}</p>
       <div class="question-block">
@@ -149,7 +156,18 @@
     <div class="lab-layout">
       <aside class="lesson-sidebar">
         <form class="controls" onsubmit={beginRun}>
-          <div class="section-heading"><h2>Run controls</h2><span>CPU fundamentals</span></div>
+          <div class="section-heading"><h2>Run controls</h2><span>{backend}</span></div>
+          {#if selected.backends.length > 1}
+            <label class="field">
+              <span>Backend</span>
+              <select bind:value={backend} disabled={running} aria-describedby="help-backend">
+                {#each selected.backends as candidate}<option value={candidate} disabled={!capabilities.backends.includes(candidate)}>{candidate}{capabilities.backends.includes(candidate) ? '' : ' (unavailable)'}</option>{/each}
+              </select>
+              <small id="help-backend">Explicit selection: accelerator requests never silently fall back to CPU.</small>
+            </label>
+          {:else if !availableBackends.length}
+            <p class="backend-unavailable">{selected.backends[0]} is unavailable on {capabilities.platform || 'this platform'}.</p>
+          {/if}
           {#each selected.parameters as parameter}
             <label class="field">
               <span>{parameter.label}</span>
@@ -168,7 +186,7 @@
             </label>
           {/each}
           <div class="actions">
-            <button class="primary" type="submit" disabled={running}>Run experiment</button>
+            <button class="primary" type="submit" disabled={running || !availableBackends.length}>Run experiment</button>
             <button type="button" onclick={stopRun} disabled={!running}>Cancel</button>
           </div>
         </form>
@@ -188,23 +206,18 @@
         <div class="run-status" aria-live="polite">
           <div><span>Status</span><strong class:status-error={run.status === 'failed'}>{connectionMessage || run.status}</strong></div>
           <div><span>Selected step</span><strong>{selectedSnapshot?.step ?? run.step} / {run.totalSteps || '—'}</strong></div>
+          <div><span>Backend</span><strong>{run.started?.execution?.selected_backend ?? backend}</strong></div>
           <div><span>Latest loss</span><strong>{latestLoss === undefined ? '—' : latestLoss.toPrecision(4)}</strong></div>
         </div>
         <div class="progress-track" aria-label={`Run ${progress.toFixed(0)} percent complete`}><span style={`width: ${progress}%`}></span></div>
         {#if actionError || run.error}<p class="inline-error" role="alert">{actionError || run.error}</p>{/if}
 
         <div class="primary-visual">
-          {#if selected.visualization === 'xor_predictions'}
-            <XorVisualization started={run.started} snapshot={selectedSnapshot} />
-          {:else if selected.visualization === 'regression_curve'}
-            <RegressionVisualization started={run.started} snapshot={selectedSnapshot} />
-          {:else}
-            <DecisionBoundary started={run.started} snapshot={selectedSnapshot} />
-          {/if}
+          <Visualization kind={selected.visualization} started={run.started} snapshot={selectedSnapshot} />
         </div>
 
         <div class="timeline-controls">
-          <label for="timeline">Training timeline</label>
+          <label for="timeline">Run timeline</label>
           <input
             id="timeline"
             type="range"
@@ -217,7 +230,11 @@
           <label class="follow"><input type="checkbox" bind:checked={followLive} /> Follow live</label>
         </div>
 
-        <LossChart points={run.metrics} />
+        <ExecutionPanel started={run.started} snapshot={selectedSnapshot} />
+
+        {#each selected.metrics as metric}
+          <MetricChart spec={metric} points={run.metrics[metric.name] ?? []} />
+        {/each}
 
         <section class="interpretation" aria-labelledby="interpretation-heading">
           <h2 id="interpretation-heading">How to read the evidence</h2>

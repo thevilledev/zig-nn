@@ -11,19 +11,27 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
 )
 
 type Server struct {
-	manager *Manager
-	handler http.Handler
+	manager      *Manager
+	capabilities Capabilities
+	handler      http.Handler
+}
+
+type Capabilities struct {
+	Platform string   `json:"platform"`
+	Backends []string `json:"backends"`
 }
 
 func NewServer(manager *Manager, assets string, apiOnly bool) (*Server, error) {
-	server := &Server{manager: manager}
+	server := &Server{manager: manager, capabilities: hostCapabilities()}
 	mux := http.NewServeMux()
+	mux.HandleFunc("/api/capabilities", server.handleCapabilities)
 	mux.HandleFunc("/api/experiments", server.handleExperiments)
 	mux.HandleFunc("/api/runs", server.handleRuns)
 	mux.HandleFunc("/api/runs/", server.handleRun)
@@ -40,6 +48,22 @@ func NewServer(manager *Manager, assets string, apiOnly bool) (*Server, error) {
 	return server, nil
 }
 
+func hostCapabilities() Capabilities {
+	backends := []string{"cpu"}
+	if runtime.GOOS == "darwin" {
+		backends = append(backends, "metal")
+	}
+	return Capabilities{Platform: runtime.GOOS, Backends: backends}
+}
+
+func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, http.MethodGet)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.capabilities)
+}
+
 func (s *Server) Handler() http.Handler {
 	return s.handler
 }
@@ -54,6 +78,7 @@ func (s *Server) handleExperiments(w http.ResponseWriter, r *http.Request) {
 
 type runRequest struct {
 	Experiment string                 `json:"experiment"`
+	Backend    string                 `json:"backend"`
 	Parameters map[string]json.Number `json:"parameters"`
 }
 
@@ -80,12 +105,16 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusNotFound, "unknown_experiment", "experiment is not available in the learning lab")
 		return
 	}
-	args, err := BuildArguments(spec, request.Parameters)
+	options, err := BuildRunOptions(spec, request.Backend, request.Parameters)
 	if err != nil {
 		writeAPIError(w, http.StatusBadRequest, "invalid_parameters", err.Error())
 		return
 	}
-	id, err := s.manager.Start(context.Background(), spec, args)
+	if !contains(s.capabilities.Backends, options.Backend) {
+		writeAPIError(w, http.StatusBadRequest, "unsupported_backend", fmt.Sprintf("backend %q is not available on %s", options.Backend, s.capabilities.Platform))
+		return
+	}
+	id, err := s.manager.Start(context.Background(), spec, options)
 	if errors.Is(err, ErrBusy) {
 		writeAPIError(w, http.StatusConflict, "run_busy", err.Error())
 		return

@@ -34,8 +34,9 @@ Every individual command maps to a stable Zig step. For example,
 See [Getting Started](../docs/getting-started.md) for direct Zig commands and
 [GPU and Backend Notes](../docs/gpu.md) for backend requirements.
 
-XOR Training, Regression, and Binary Classification also expose structured
-live evidence in the local browser lab:
+XOR Training, Regression, Binary Classification, Optimizer Lab, GPU Benchmark,
+and Semantic Search also expose structured live evidence in the local browser
+lab:
 
 ```bash
 mise run lab

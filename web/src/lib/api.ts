@@ -1,4 +1,4 @@
-import type { ExperimentSpec, RunEvent } from './types';
+import type { Backend, Capabilities, ExperimentSpec, RunEvent } from './types';
 
 interface APIErrorBody {
   error?: { message?: string };
@@ -11,15 +11,24 @@ async function parseResponse<T>(response: Response): Promise<T> {
 }
 
 export async function loadExperiments(): Promise<ExperimentSpec[]> {
-  return parseResponse<ExperimentSpec[]>(await fetch('/api/experiments'));
+  const experiments = await parseResponse<ExperimentSpec[]>(await fetch('/api/experiments'));
+  return experiments.map((experiment) => ({
+    ...experiment,
+    parameters: experiment.parameters ?? [],
+    metrics: experiment.metrics ?? []
+  }));
 }
 
-export async function startRun(experiment: string, parameters: Record<string, number>): Promise<string> {
+export async function loadCapabilities(): Promise<Capabilities> {
+  return parseResponse<Capabilities>(await fetch('/api/capabilities'));
+}
+
+export async function startRun(experiment: string, backend: Backend, parameters: Record<string, number>): Promise<string> {
   const body = await parseResponse<{ id: string }>(
     await fetch('/api/runs', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ experiment, parameters })
+      body: JSON.stringify({ experiment, backend, parameters })
     })
   );
   return body.id;

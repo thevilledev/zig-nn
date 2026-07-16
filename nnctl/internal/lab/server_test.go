@@ -25,8 +25,14 @@ func TestServerCatalogRunAndSSEReplay(t *testing.T) {
 	if err := json.NewDecoder(catalogResponse.Body).Decode(&specs); err != nil {
 		t.Fatal(err)
 	}
-	if len(specs) != 3 || specs[0].Step != "" {
+	if len(specs) != 6 || specs[0].Step != "" {
 		t.Fatalf("catalog response = %#v", specs)
+	}
+	capabilitiesResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(capabilitiesResponse, httptest.NewRequest(http.MethodGet, "/api/capabilities", nil))
+	var capabilities Capabilities
+	if err := json.NewDecoder(capabilitiesResponse.Body).Decode(&capabilities); err != nil || !contains(capabilities.Backends, "cpu") {
+		t.Fatalf("capabilities = %#v, %v", capabilities, err)
 	}
 
 	runResponse := httptest.NewRecorder()
@@ -68,6 +74,7 @@ func TestServerRejectsInvalidInputs(t *testing.T) {
 		{`{"experiment":"unknown","parameters":{}}`, http.StatusNotFound},
 		{`{"experiment":"xor-training","parameters":{"epochs":2}}`, http.StatusBadRequest},
 		{`{"experiment":"xor-training","parameters":{"command":1}}`, http.StatusBadRequest},
+		{`{"experiment":"xor-training","backend":"metal","parameters":{}}`, http.StatusBadRequest},
 		{`{"experiment":"xor-training","parameters":{},"extra":true}`, http.StatusBadRequest},
 	}
 	for _, test := range tests {
@@ -89,7 +96,7 @@ func TestServerRejectsInvalidInputs(t *testing.T) {
 
 func TestServerReturnsConflictWhileRunActive(t *testing.T) {
 	release := make(chan struct{})
-	manager := NewManager(ExecutorFunc(func(_ context.Context, _ ExperimentSpec, _ []string, _ func([]byte) error, _ func(string)) error {
+	manager := NewManager(ExecutorFunc(func(_ context.Context, _ ExperimentSpec, _ RunOptions, _ func([]byte) error, _ func(string)) error {
 		<-release
 		return nil
 	}))
@@ -133,7 +140,7 @@ func TestSPAHandlerServesAssetsAndFallback(t *testing.T) {
 }
 
 func successfulExecutor() Executor {
-	return ExecutorFunc(func(_ context.Context, spec ExperimentSpec, _ []string, stdout func([]byte) error, _ func(string)) error {
+	return ExecutorFunc(func(_ context.Context, spec ExperimentSpec, _ RunOptions, stdout func([]byte) error, _ func(string)) error {
 		for _, event := range []map[string]any{
 			{"v": 1, "type": "run_started", "experiment": spec.ID, "data": map[string]any{"config": map[string]any{}}},
 			{"v": 1, "type": "metric", "experiment": spec.ID, "step": 1, "total_steps": 1, "data": map[string]any{"name": "loss", "value": 0.1}},
