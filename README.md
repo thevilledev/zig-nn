@@ -59,8 +59,8 @@ development workflow, backend contract, and event protocol.
   links back to their implementations
 - [GPU and Backend Notes](docs/gpu.md) — backend boundaries and Metal, CUDA,
   and ROCm verification
-- [NLP and Adjacent Roadmap](docs/nlp-roadmap.md) — current backend boundaries
-  and planned learning experiments
+- [Language, Retrieval, and Sequence Models](experiments/README.md#language-retrieval-and-sequence-models) —
+  runnable NLP experiments, evidence, and source links
 - [Benchmarks](docs/benchmarks.md) — repeatable local and remote measurements
 - [Containers](docs/containers.md) — minimal CPU and CUDA benchmark job images
 - [Development Environment](docs/development.md) — pinned tools, hooks, and
