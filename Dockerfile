@@ -3,6 +3,7 @@
 ARG ZIG_VERSION=0.16.0
 ARG UBUNTU_VERSION=24.04
 ARG CUDA_VERSION=13.0.1
+ARG GLIBC_RUNTIME_IMAGE=cgr.dev/chainguard/glibc-dynamic:latest
 
 FROM ubuntu:${UBUNTU_VERSION} AS toolchain
 ARG TARGETARCH
@@ -55,25 +56,28 @@ COPY src/ src/
 RUN zig build benchmark-exe -Dgpu=cuda --prefix /opt/zig-nn \
     && mkdir --parents /opt/zig-nn/cuda-libs \
     && cp --archive \
-        /usr/local/cuda/lib64/libcublas.so* \
-        /usr/local/cuda/lib64/libcublasLt.so* \
-        /usr/local/cuda/lib64/libnvrtc.so* \
-        /usr/local/cuda/lib64/libnvrtc-builtins.so* \
+        /usr/local/cuda/lib64/libcublas.so.* \
+        /usr/local/cuda/lib64/libcublasLt.so.* \
+        /usr/local/cuda/lib64/libnvrtc.so.* \
+        /usr/local/cuda/lib64/libnvrtc-builtins.so.* \
         /opt/zig-nn/cuda-libs/
 
-FROM nvidia/cuda:${CUDA_VERSION}-base-ubuntu24.04 AS cuda
+FROM ${GLIBC_RUNTIME_IMAGE} AS cuda
 LABEL org.opencontainers.image.title="zig-nn CUDA benchmark" \
       org.opencontainers.image.description="ReleaseFast zig-nn benchmark runner with CUDA support" \
       org.opencontainers.image.source="https://github.com/thevilledev/zig-nn" \
       org.opencontainers.image.licenses="MIT"
-ENV LD_LIBRARY_PATH="/usr/local/lib/zig-nn:${LD_LIBRARY_PATH}"
+ENV NVIDIA_VISIBLE_DEVICES="all" \
+    NVIDIA_DRIVER_CAPABILITIES="compute,utility" \
+    NVIDIA_REQUIRE_CUDA="cuda>=13.0" \
+    LD_LIBRARY_PATH="/usr/local/lib/zig-nn:/usr/local/nvidia/lib:/usr/local/nvidia/lib64"
 COPY --from=cuda-builder --chown=65532:65532 \
     /opt/zig-nn/bin/zig_nn_benchmark /usr/local/bin/zig-nn-benchmark
 COPY --from=cuda-builder /opt/zig-nn/cuda-libs/ /usr/local/lib/zig-nn/
-COPY --from=cuda-builder /opt/nvidia/ /opt/nvidia/
+COPY --from=cuda-builder /NGC-DL-CONTAINER-LICENSE /licenses/NVIDIA-CUDA-LICENSE
 COPY --chown=65532:65532 LICENSE /licenses/LICENSE
 USER 65532:65532
-ENTRYPOINT ["/opt/nvidia/nvidia_entrypoint.sh", "/usr/local/bin/zig-nn-benchmark"]
+ENTRYPOINT ["/usr/local/bin/zig-nn-benchmark"]
 CMD ["--quick"]
 
 FROM scratch AS cpu

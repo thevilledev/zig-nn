@@ -23,9 +23,11 @@ docker run --rm zig-nn-benchmark:cpu --filter tiny_gpt
 ## CUDA
 
 The `cuda` target compiles against the pinned CUDA development image. Its final
-stage starts from the corresponding NVIDIA CUDA base image and adds only the
-benchmark plus its NVRTC, cuBLAS, and cuBLASLt shared libraries. The compiler,
-CUDA headers, and unrelated math libraries do not enter the final image.
+stage uses Chainguard's distroless `glibc-dynamic` runtime and adds only the
+benchmark plus its NVRTC, cuBLAS, and cuBLASLt shared libraries. This keeps
+scanner-visible package metadata for glibc, libgcc, and libstdc++ without
+retaining Ubuntu. The compiler, shell, package manager, CUDA headers, Nsight
+tools, and unrelated math libraries do not enter the final image.
 
 Build an amd64 image on a native amd64 builder for a Verda GPU worker, then
 test it on a host with the
@@ -43,9 +45,11 @@ docker run --rm --gpus all zig-nn-benchmark:cuda --filter gpu_peak
 
 The CUDA image intentionally relies on the host runtime to inject
 `libcuda.so.1`; it will not start without an NVIDIA driver and container
-runtime. Cross-building the amd64 CUDA image through Rosetta on Apple Silicon
-can fail in Zig's `translate-c` helper, so use a native amd64 CI runner or
-builder for the Verda artifact.
+runtime. Because the image has no shell or package manager, inspect it through
+its build metadata or export its filesystem instead of trying to use
+`docker exec`. Cross-building the amd64 CUDA image through Rosetta on Apple
+Silicon can fail in Zig's `translate-c` helper, so use a native amd64 CI runner
+or builder for the Verda artifact.
 
 The CUDA version defaults to `13.0.1` to match the current benchmark worker
 toolchain. Override both CUDA stages together when the deployment environment
