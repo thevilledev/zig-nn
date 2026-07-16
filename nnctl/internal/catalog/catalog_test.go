@@ -107,6 +107,16 @@ func TestResolveSeq2SeqExperiment(t *testing.T) {
 	}
 }
 
+func TestResolveMachineTranslationExperiment(t *testing.T) {
+	experiment, ok := ResolveExperiment("machine_translation")
+	if !ok {
+		t.Fatal("expected machine_translation to resolve")
+	}
+	if experiment.Step != "run_machine_translation" || !experiment.Quick {
+		t.Fatalf("unexpected machine translation experiment: %+v", experiment)
+	}
+}
+
 func TestResolveSemanticSearchExperiment(t *testing.T) {
 	experiment, ok := ResolveExperiment("semantic_search")
 	if !ok {

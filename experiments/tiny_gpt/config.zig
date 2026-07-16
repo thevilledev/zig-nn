@@ -8,6 +8,17 @@ pub const Tokenizer = struct {
         return vocab.len;
     }
 
+    /// Stable FNV-1a identity stored in checkpoints. Vocabulary size alone is
+    /// insufficient because reordered tokens silently change model meaning.
+    pub fn vocabularyFingerprint() u64 {
+        var hash: u64 = 0xcbf29ce484222325;
+        for (vocab) |byte| {
+            hash ^= byte;
+            hash *%= 0x100000001b3;
+        }
+        return hash;
+    }
+
     pub fn encodeChar(ch: u8) usize {
         return std.mem.indexOfScalar(u8, vocab, ch) orelse fallback_id;
     }

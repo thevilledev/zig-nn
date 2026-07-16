@@ -55,6 +55,10 @@ const Result = struct {
     alignment: [sequence_length][sequence_length]f32,
     training_kernels: usize,
     training_readbacks: usize,
+    fixed_padding_efficiency: f32,
+    bucketed_padding_efficiency: f32,
+    relative_throughput: f32,
+    accumulated_microbatches: usize,
 };
 
 pub fn main(init: std.process.Init) !void {
@@ -69,7 +73,9 @@ pub fn main(init: std.process.Init) !void {
     std.debug.print("task: translate color words while reversing their order\n", .{});
     std.debug.print(
         "held-out loss: {d:.4} -> {d:.4}; token accuracy: {d:.1}% -> {d:.1}%; exact sequences: {d:.1}%\n" ++
-            "training kernels: {d}, training readbacks: {d}\n\n",
+            "training kernels: {d}, training readbacks: {d}\n" ++
+            "dynamic batches: padding efficiency {d:.1}% -> {d:.1}%, estimated throughput {d:.2}x\n" ++
+            "gradient accumulation: {d} microbatches per optimizer update\n\n",
         .{
             result.initial.loss,
             result.final.loss,
@@ -78,6 +84,10 @@ pub fn main(init: std.process.Init) !void {
             result.final.sequence_accuracy * 100,
             result.training_kernels,
             result.training_readbacks,
+            result.fixed_padding_efficiency * 100,
+            result.bucketed_padding_efficiency * 100,
+            result.relative_throughput,
+            result.accumulated_microbatches,
         },
     );
     std.debug.print("source:    ", .{});
@@ -174,6 +184,7 @@ fn runExperiment(allocator: std.mem.Allocator, options: Options) !Result {
     var prediction: [sequence_length]usize = undefined;
     var alignment: [sequence_length][sequence_length]f32 = undefined;
     try inspectSample(allocator, &context, &attention, &output, queries, testing.samples[0], &prediction, &alignment);
+    const batching = try batchingLesson(allocator);
     return .{
         .backend = device.backendType(),
         .initial = initial,
@@ -183,6 +194,52 @@ fn runExperiment(allocator: std.mem.Allocator, options: Options) !Result {
         .alignment = alignment,
         .training_kernels = training_stats.kernels,
         .training_readbacks = training_stats.readbacks,
+        .fixed_padding_efficiency = batching.fixed_efficiency,
+        .bucketed_padding_efficiency = batching.bucketed_efficiency,
+        .relative_throughput = batching.bucketed_efficiency / batching.fixed_efficiency,
+        .accumulated_microbatches = batching.microbatches,
+    };
+}
+
+fn batchingLesson(allocator: std.mem.Allocator) !struct {
+    fixed_efficiency: f32,
+    bucketed_efficiency: f32,
+    microbatches: usize,
+} {
+    const lengths = [_]nn.Sequence.ExampleLengths{
+        .{ .source = 2, .target = 3 },
+        .{ .source = 9, .target = 8 },
+        .{ .source = 3, .target = 2 },
+        .{ .source = 8, .target = 9 },
+        .{ .source = 4, .target = 4 },
+        .{ .source = 10, .target = 9 },
+    };
+    var plan = try nn.Sequence.BatchPlan.init(allocator, &lengths, 2);
+    defer plan.deinit();
+    var actual_tokens: usize = 0;
+    var maximum_source: usize = 0;
+    var maximum_target: usize = 0;
+    for (lengths) |length| {
+        actual_tokens += length.source + length.target;
+        maximum_source = @max(maximum_source, length.source);
+        maximum_target = @max(maximum_target, length.target);
+    }
+    const fixed_slots = lengths.len * (maximum_source + maximum_target);
+    var accumulator = try nn.Sequence.GradientAccumulator.init(allocator, 2);
+    defer accumulator.deinit();
+    for (plan.batches) |batch| {
+        try accumulator.add(&.{ 0.25, -0.5 }, batch.len);
+    }
+    var accumulated: [2]f32 = undefined;
+    try accumulator.finish(&accumulated);
+    if (accumulated[0] != 0.25 or accumulated[1] != -0.5) {
+        return error.GradientAccumulationFailed;
+    }
+    return .{
+        .fixed_efficiency = @as(f32, @floatFromInt(actual_tokens)) /
+            @as(f32, @floatFromInt(fixed_slots)),
+        .bucketed_efficiency = plan.efficiency(),
+        .microbatches = accumulator.microbatches,
     };
 }
 
@@ -356,6 +413,9 @@ test "cross attention learns translation and reversal on held-out sequences" {
     try std.testing.expect(result.final.loss < result.initial.loss * 0.35);
     try std.testing.expect(result.final.token_accuracy > 0.9);
     try std.testing.expect(result.final.sequence_accuracy > 0.75);
+    try std.testing.expect(result.bucketed_padding_efficiency > result.fixed_padding_efficiency);
+    try std.testing.expect(result.relative_throughput > 1.2);
+    try std.testing.expectEqual(@as(usize, 3), result.accumulated_microbatches);
     for (0..sequence_length) |target_position| {
         try std.testing.expectEqual(result.source[sequence_length - 1 - target_position], result.prediction[target_position]);
         try std.testing.expect(argmax(&result.alignment[target_position]) == sequence_length - 1 - target_position);

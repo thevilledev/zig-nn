@@ -160,6 +160,47 @@ test "tiny gpt checkpoint round trip preserves logits" {
     }
 }
 
+test "checkpoint rejects a different tokenizer identity" {
+    const allocator = testing.allocator;
+    var model = try TinyGPT.init(allocator, .{
+        .block_size = 4,
+        .n_layer = 1,
+        .n_head = 1,
+        .n_embd = 8,
+    }, 13);
+    defer model.deinit();
+
+    const valid_path = "test_tiny_gpt_tokenizer_valid.bin";
+    const incompatible_path = "test_tiny_gpt_tokenizer_incompatible.bin";
+    defer std.Io.Dir.cwd().deleteFile(std.Options.debug_io, valid_path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(std.Options.debug_io, incompatible_path) catch {};
+    try model.saveToFile(valid_path);
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(
+        std.Options.debug_io,
+        valid_path,
+        allocator,
+        .limited(1024 * 1024),
+    );
+    defer allocator.free(bytes);
+    const fingerprint_offset = 4 + 4 + 5 * 4;
+    bytes[fingerprint_offset] ^= 1;
+    const file = try std.Io.Dir.cwd().createFile(
+        std.Options.debug_io,
+        incompatible_path,
+        .{},
+    );
+    defer file.close(std.Options.debug_io);
+    var buffer: [4096]u8 = undefined;
+    var file_writer = file.writerStreaming(std.Options.debug_io, &buffer);
+    try file_writer.interface.writeAll(bytes);
+    try file_writer.interface.flush();
+
+    try testing.expectError(
+        error.UnsupportedVocabulary,
+        TinyGPT.loadFromFile(allocator, incompatible_path),
+    );
+}
+
 test "checkpoint metadata footer is embedded and remains loadable" {
     const allocator = testing.allocator;
     const config: Config = .{

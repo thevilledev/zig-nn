@@ -9,7 +9,7 @@ pub const Config = config_mod.Config;
 pub const Tokenizer = config_mod.Tokenizer;
 pub const LayerNorm = nn.LayerNorm;
 
-const checkpoint_format_version: u32 = 2;
+const checkpoint_format_version: u32 = 3;
 
 pub const Linear = struct {
     weights: Matrix,
@@ -570,6 +570,7 @@ pub const TinyGPT = struct {
         try writer.writeInt(u32, @intCast(self.config.n_head), .little);
         try writer.writeInt(u32, @intCast(self.config.n_embd), .little);
         try writer.writeInt(u32, @intCast(self.config.vocab_size), .little);
+        try writer.writeInt(u64, Tokenizer.vocabularyFingerprint(), .little);
 
         try writeMatrix(writer, self.token_embedding);
         try writeMatrix(writer, self.position_embedding);
@@ -603,7 +604,7 @@ pub const TinyGPT = struct {
         if (!std.mem.eql(u8, &magic, "TGPT")) return error.InvalidFileFormat;
 
         const version = try reader.takeInt(u32, .little);
-        if (version != 1 and version != checkpoint_format_version) return error.UnsupportedVersion;
+        if (version < 1 or version > checkpoint_format_version) return error.UnsupportedVersion;
 
         const config: Config = .{
             .block_size = @intCast(try reader.takeInt(u32, .little)),
@@ -613,6 +614,11 @@ pub const TinyGPT = struct {
             .vocab_size = @intCast(try reader.takeInt(u32, .little)),
         };
         if (config.vocab_size != Tokenizer.vocabSize()) return error.UnsupportedVocabulary;
+        if (version >= 3 and
+            try reader.takeInt(u64, .little) != Tokenizer.vocabularyFingerprint())
+        {
+            return error.UnsupportedVocabulary;
+        }
 
         var model = try TinyGPT.init(allocator, config, 0);
         errdefer model.deinit();

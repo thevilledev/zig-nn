@@ -58,8 +58,9 @@ event contract and extension steps.
   readable spatial reference, a real image dataset, representation learning,
   and an external audio pipeline.
 - **Language and sequences:** Tokenizer Lab → Word2Vec → Text Classifier →
-  Sequence Tagging → Decoding Lab → Seq2Seq → Semantic Search, then compare GRU
-  Sequence with Transformer Encoder before exploring TinyGPT.
+  Sequence Tagging → Decoding Lab → Seq2Seq → Machine Translation → Semantic
+  Search, then compare GRU Sequence with Transformer Encoder before exploring
+  TinyGPT.
 - **Applied systems:** DQN, TurboQuant, GPU Benchmark, Serving, and the TinyGPT
   OpenAI-compatible server show where learning code meets evaluation,
   compression, performance, and interfaces.
@@ -103,7 +104,8 @@ event contract and extension steps.
 | **Text Classifier** — `nnctl run text-classifier` | Can masked multi-head attention distinguish contextual sentiment? Inspect held-out accuracy and phrase predictions. | [entrypoint](text_classifier/text_classifier.zig), [embeddings](../src/embeddings.zig), [transformer](../src/transformer.zig) | [Transformers](../docs/research.md#transformers-and-tiny-gpt) |
 | **Sequence Tagging** — `nnctl run sequence-tagging` | How do independent token scores become a globally valid BIO sequence? Inspect likelihood, marginals, and Viterbi output. | [entrypoint](sequence_tagging/sequence_tagging.zig), [structured prediction](../src/structured.zig) | [NLP and retrieval](../docs/research.md#nlp-structured-prediction-and-retrieval) |
 | **Decoding Lab** — `nnctl run decoding-lab` | How do greedy, top-k, nucleus, temperature, and repetition penalties reshape token choice? Compare seeded outputs. | [entrypoint](decoding_lab/decoding_lab.zig), [decoding](../src/decoding.zig) | [NLP and retrieval](../docs/research.md#nlp-structured-prediction-and-retrieval) |
-| **Seq2Seq** — `nnctl run seq2seq` | Can decoder queries learn translation, reordering, and source alignment? Inspect token/exact accuracy and the attention matrix. | [entrypoint](seq2seq/seq2seq.zig), [transformer](../src/transformer.zig) | [NLP and retrieval](../docs/research.md#nlp-structured-prediction-and-retrieval) |
+| **Seq2Seq** — `nnctl run seq2seq` | Can decoder queries learn translation and reordering efficiently? Inspect token/exact accuracy, alignment, bucketed padding efficiency, and accumulated microbatches. | [entrypoint](seq2seq/seq2seq.zig), [transformer](../src/transformer.zig), [sequence batching](../src/sequence.zig) | [NLP and retrieval](../docs/research.md#nlp-structured-prediction-and-retrieval) |
+| **Machine Translation** — `nnctl run machine-translation` | How do teacher forcing and sequence search fit together? Compare greedy and length-normalized beam output, then inspect the masked source alignment. | [entrypoint](machine_translation/machine_translation.zig), [translation stack](../src/translation.zig), [beam search](../src/decoding.zig) | [NLP and retrieval](../docs/research.md#nlp-structured-prediction-and-retrieval) |
 | **Semantic Search** — `nnctl run semantic-search` | Can paired encoders learn a shared retrieval space with in-batch negatives? Inspect recall@1, MRR, and cosine rankings. | [entrypoint](semantic_search/semantic_search.zig), [retrieval](../src/retrieval.zig), [embeddings](../src/embeddings.zig) | [NLP and retrieval](../docs/research.md#nlp-structured-prediction-and-retrieval) |
 | **GRU Sequence** — `nnctl run gru-sequence` | Can a recurrent state retain one marked bit through distractors? Inspect held-out accuracy and device telemetry. | [entrypoint](gru_sequence/gru_sequence.zig), [recurrent](../src/recurrent.zig) | [Sequence models and reinforcement learning](../docs/research.md#sequence-models-and-reinforcement-learning) |
 | **Transformer Encoder** — `nnctl run transformer-encoder` | Can bidirectional attention retrieve a value from a distant token? Inspect held-out accuracy and training readbacks. | [entrypoint](transformer_encoder/transformer_encoder.zig), [transformer](../src/transformer.zig) | [Transformers](../docs/research.md#transformers-and-tiny-gpt) |
