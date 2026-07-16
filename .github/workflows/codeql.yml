@@ -28,7 +28,7 @@ jobs:
             build-mode: none
             runner: avrea-ubuntu-latest-2-vcpu
           - language: go
-            build-mode: autobuild
+            build-mode: manual
             runner: avrea-ubuntu-latest-2-vcpu
           - language: javascript-typescript
             build-mode: none
@@ -39,6 +39,13 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Set up Go
+        if: matrix.language == 'go'
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: nnctl/go.mod
+          cache-dependency-path: nnctl/go.sum
+
       - name: Initialize CodeQL
         uses: github/codeql-action/init@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
         with:
@@ -47,11 +54,8 @@ jobs:
 
       - name: Run manual build steps
         if: matrix.build-mode == 'manual'
-        shell: bash
-        run: |
-          echo 'If you are using a "manual" build mode for one or more of the' \
-            'languages you are analyzing, replace this with the commands to build.'
-          exit 1
+        working-directory: nnctl
+        run: go build ./...
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
