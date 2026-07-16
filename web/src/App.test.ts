@@ -64,7 +64,7 @@ const readyWorker: CloudWorker = {
   backends: ['cpu', 'cuda'],
   price_per_hour: 1.25,
   currency: 'EUR',
-  auto_destroy: true,
+  auto_destroy: false,
   created_at: '2026-07-16T08:00:00Z'
 };
 
@@ -239,6 +239,7 @@ describe('App', () => {
     expect(screen.queryByRole('combobox', { name: 'SSH key' })).toBeNull();
     expect(screen.queryByRole('combobox', { name: 'Golden OS volume' })).toBeNull();
     expect(screen.getByText('packer-verda-zig-nn-volume-root')).toBeTruthy();
+    expect((screen.getByRole('checkbox', { name: /Destroy after the next run/ }) as HTMLInputElement).checked).toBe(false);
     await fireEvent.click(screen.getByRole('button', { name: 'Deploy worker' }));
 
     await waitFor(() => expect(screen.getByText('Ready for experiments')).toBeTruthy());
@@ -247,7 +248,7 @@ describe('App', () => {
       instance_type: '1A100.22V',
       market: 'spot',
       location_code: 'FIN-02',
-      auto_destroy: true
+      auto_destroy: false
     });
 
     await fireEvent.change(screen.getByRole('combobox', { name: 'Experiment' }), { target: { value: cudaExperiment.id } });

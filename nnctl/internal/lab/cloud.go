@@ -2,7 +2,6 @@ package lab
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -23,6 +22,7 @@ const (
 	defaultCloudTimeout          = 20 * time.Minute
 	defaultCloudPollInterval     = 10 * time.Second
 	defaultCloudIdleTimeout      = 30 * time.Minute
+	cloudPreflightCommand        = "if [ -f /etc/profile.d/zig-nn.sh ]; then . /etc/profile.d/zig-nn.sh; fi; zig version; nvidia-smi >/dev/null"
 )
 
 type CloudWorkerState string
@@ -64,7 +64,6 @@ type managedCloudWorker struct {
 	KnownHosts     string `json:"known_hosts,omitempty"`
 	Host           string `json:"host,omitempty"`
 	BaseURL        string `json:"base_url,omitempty"`
-	recovered      bool
 }
 
 type CloudStatus struct {
@@ -91,20 +90,21 @@ type CloudDeployRequest struct {
 type cloudClientFactory func(context.Context, string) (cloudworkflow.Client, error)
 
 type CloudManagerOptions struct {
-	RepoRoot      string
-	BaseURL       string
-	SSH           string
-	Git           string
-	Tar           string
-	Rsync         string
-	SSHUser       string
-	Mode          string
-	JournalPath   string
-	Timeout       time.Duration
-	PollInterval  time.Duration
-	IdleTimeout   time.Duration
-	ClientFactory cloudClientFactory
-	Now           func() time.Time
+	RepoRoot          string
+	BaseURL           string
+	SSH               string
+	Git               string
+	Tar               string
+	Rsync             string
+	SSHUser           string
+	Mode              string
+	DatabasePath      string
+	LegacyJournalPath string
+	Timeout           time.Duration
+	PollInterval      time.Duration
+	IdleTimeout       time.Duration
+	ClientFactory     cloudClientFactory
+	Now               func() time.Time
 }
 
 type CloudManager struct {
@@ -116,7 +116,8 @@ type CloudManager struct {
 	rsync        string
 	sshUser      string
 	mode         string
-	journalPath  string
+	databasePath string
+	store        *cloudStore
 	timeout      time.Duration
 	pollInterval time.Duration
 	idleTimeout  time.Duration
@@ -170,12 +171,23 @@ func NewCloudManager(options CloudManagerOptions) (*CloudManager, error) {
 	if options.Now == nil {
 		options.Now = time.Now
 	}
-	if options.JournalPath == "" {
+	if options.DatabasePath == "" {
 		cache, err := os.UserCacheDir()
 		if err != nil {
-			return nil, fmt.Errorf("resolve user cache for cloud worker journal: %w", err)
+			return nil, fmt.Errorf("resolve user cache for cloud state: %w", err)
 		}
-		options.JournalPath = filepath.Join(cache, "nnctl", "lab-cloud-worker.json")
+		options.DatabasePath = filepath.Join(cache, "nnctl", cloudStateDatabaseName)
+	}
+	if options.LegacyJournalPath == "" {
+		options.LegacyJournalPath = filepath.Join(filepath.Dir(options.DatabasePath), "lab-cloud-worker.json")
+	}
+	store, err := openCloudStore(context.Background(), options.DatabasePath)
+	if err != nil {
+		return nil, err
+	}
+	if err := migrateCloudJournal(context.Background(), store, options.LegacyJournalPath); err != nil {
+		_ = store.Close()
+		return nil, err
 	}
 	manager := &CloudManager{
 		repoRoot:          options.RepoRoot,
@@ -186,7 +198,8 @@ func NewCloudManager(options CloudManagerOptions) (*CloudManager, error) {
 		rsync:             options.Rsync,
 		sshUser:           options.SSHUser,
 		mode:              options.Mode,
-		journalPath:       options.JournalPath,
+		databasePath:      options.DatabasePath,
+		store:             store,
 		timeout:           options.Timeout,
 		pollInterval:      options.PollInterval,
 		idleTimeout:       options.IdleTimeout,
@@ -195,9 +208,11 @@ func NewCloudManager(options CloudManagerOptions) (*CloudManager, error) {
 		workerSubscribers: make(map[chan CloudWorker]struct{}),
 	}
 	manager.ctx, manager.cancel = context.WithCancel(context.Background())
-	if err := manager.loadJournal(); err != nil {
+	if err := manager.loadWorker(); err != nil {
+		_ = store.Close()
 		return nil, err
 	}
+	manager.recoverWorker()
 	return manager, nil
 }
 
@@ -277,7 +292,7 @@ func (m *CloudManager) Deploy(ctx context.Context, request CloudDeployRequest) (
 	if err := ctx.Err(); err != nil {
 		return CloudWorker{}, err
 	}
-	autoDestroy := true
+	autoDestroy := false
 	if request.AutoDestroy != nil {
 		autoDestroy = *request.AutoDestroy
 	}
@@ -377,7 +392,7 @@ func (m *CloudManager) provision(ctx context.Context, workerID string, request C
 			worker.Currency = result.Placement.Currency
 		}
 	})
-	if err := m.persistJournal(); err != nil {
+	if err := m.persistWorker(); err != nil {
 		m.cleanupFailedProvision(workerID, client, err)
 		return
 	}
@@ -403,7 +418,7 @@ func (m *CloudManager) provision(ctx context.Context, workerID string, request C
 		worker.Host = host
 		worker.Message = "Waiting for SSH"
 	})
-	if err := m.persistJournal(); err != nil {
+	if err := m.persistWorker(); err != nil {
 		m.cleanupFailedProvision(workerID, client, err)
 		return
 	}
@@ -414,8 +429,7 @@ func (m *CloudManager) provision(ctx context.Context, workerID string, request C
 	m.updateWorker(workerID, func(worker *managedCloudWorker) {
 		worker.Message = "Verifying Zig and CUDA"
 	})
-	preflight := "if [ -f /etc/profile.d/zig-nn.sh ]; then . /etc/profile.d/zig-nn.sh; fi; zig version; nvidia-smi >/dev/null"
-	if err := cloudworkflow.WaitCommand(ctx, m.ssh, sshArgs, host, preflight, m.timeout, m.pollInterval); err != nil {
+	if err := cloudworkflow.WaitCommand(ctx, m.ssh, sshArgs, host, cloudPreflightCommand, m.timeout, m.pollInterval); err != nil {
 		m.cleanupFailedProvision(workerID, client, err)
 		return
 	}
@@ -429,7 +443,7 @@ func (m *CloudManager) provision(ctx context.Context, workerID string, request C
 			worker.ExpiresAt = &expires
 		}
 	})
-	if err := m.persistJournal(); err != nil {
+	if err := m.persistWorker(); err != nil {
 		m.cleanupFailedProvision(workerID, client, err)
 		return
 	}
@@ -500,7 +514,7 @@ func (m *CloudManager) failWorker(workerID string, err error) {
 		worker.State = CloudWorkerFailed
 		worker.Message = err.Error()
 	})
-	_ = m.persistJournal()
+	_ = m.persistWorker()
 }
 
 func (m *CloudManager) updateWorker(workerID string, update func(*managedCloudWorker)) {
@@ -589,9 +603,6 @@ func (m *CloudManager) ValidateWorker(workerID, backend string) error {
 	if !slices.Contains(worker.Backends, backend) {
 		return fmt.Errorf("backend %q is unavailable on cloud worker", backend)
 	}
-	if worker.recovered {
-		return errors.New("recovered cloud worker must be destroyed before creating another worker")
-	}
 	return nil
 }
 
@@ -636,6 +647,9 @@ func (m *CloudManager) Destroy(ctx context.Context, workerID string) error {
 		current.State = CloudWorkerDestroying
 		current.Message = "Destroying instance and cloned volume"
 	})
+	if err := m.persistWorker(); err != nil {
+		return err
+	}
 	var err error
 	if worker.InstanceID != "" {
 		var client cloudworkflow.Client
@@ -655,7 +669,7 @@ func (m *CloudManager) Destroy(ctx context.Context, workerID string) error {
 	if worker.KnownHosts != "" {
 		_ = os.Remove(worker.KnownHosts)
 	}
-	return m.clearJournal()
+	return m.clearWorker()
 }
 
 func (m *CloudManager) Execute(
@@ -673,6 +687,9 @@ func (m *CloudManager) Execute(
 		current.State = CloudWorkerBusy
 		current.Message = "Preparing remote experiment"
 	})
+	if err := m.persistWorker(); err != nil {
+		return err
+	}
 	defer func() {
 		if worker.AutoDestroy {
 			cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
@@ -688,6 +705,9 @@ func (m *CloudManager) Execute(
 				current.Message = "Ready for another experiment"
 			}
 		})
+		if err := m.persistWorker(); err != nil {
+			stderrLine("cloud state persistence failed: " + err.Error())
+		}
 	}()
 
 	repository, err := cloudworkflow.InspectRepository(ctx, m.repoRoot, m.git)
@@ -715,6 +735,9 @@ func (m *CloudManager) Execute(
 		current.RepositoryCommit = repository.Revision
 		current.Message = "Running " + spec.Title
 	})
+	if err := m.persistWorker(); err != nil {
+		return err
+	}
 	mode := m.mode
 	if mode == "" {
 		mode = "Debug"
@@ -758,60 +781,158 @@ func (e RoutingExecutor) Execute(
 }
 
 func (m *CloudManager) knownHostsPath(workerID string) (string, error) {
-	directory := filepath.Join(filepath.Dir(m.journalPath), "known-hosts")
+	directory := filepath.Join(filepath.Dir(m.databasePath), "known-hosts")
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		return "", fmt.Errorf("create known-hosts directory: %w", err)
 	}
 	return filepath.Join(directory, workerID), nil
 }
 
-func (m *CloudManager) persistJournal() error {
+func (m *CloudManager) persistWorker() error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.worker == nil || m.worker.State == CloudWorkerDestroyed {
+	if m.worker == nil {
+		m.mu.Unlock()
 		return nil
 	}
-	if err := os.MkdirAll(filepath.Dir(m.journalPath), 0o700); err != nil {
-		return fmt.Errorf("create cloud journal directory: %w", err)
+	worker := *m.worker
+	worker.Backends = append([]string(nil), worker.Backends...)
+	m.mu.Unlock()
+	if worker.State == CloudWorkerDestroyed || (worker.InstanceID == "" && worker.CloneVolumeID == "") {
+		return m.store.Delete(context.Background(), worker.ID)
 	}
-	data, err := json.MarshalIndent(m.worker, "", "  ")
+	return m.store.Save(context.Background(), worker)
+}
+
+func (m *CloudManager) loadWorker() error {
+	worker, err := m.store.Load(context.Background())
+	if err != nil || worker == nil {
+		return err
+	}
+	if worker.InstanceID == "" && worker.CloneVolumeID == "" {
+		return m.store.Delete(context.Background(), worker.ID)
+	}
+	worker.State = CloudWorkerProvisioning
+	worker.Message = "Reconnecting to persisted cloud worker"
+	worker.ExpiresAt = nil
+	m.worker = worker
+	return nil
+}
+
+func (m *CloudManager) recoverWorker() {
+	m.mu.Lock()
+	worker := managedCloudWorker{}
+	ok := m.worker != nil
+	if ok {
+		worker = *m.worker
+	}
+	m.mu.Unlock()
+	if !ok || worker.InstanceID == "" {
+		return
+	}
+	m.wg.Add(1)
+	go func() {
+		defer m.wg.Done()
+		ctx, cancel := context.WithTimeout(m.ctx, m.timeout)
+		defer cancel()
+		if err := m.reconnectWorker(ctx, worker.ID); err != nil {
+			if errors.Is(ctx.Err(), context.Canceled) {
+				return
+			}
+			m.failWorker(worker.ID, err)
+		}
+	}()
+}
+
+func (m *CloudManager) reconnectWorker(ctx context.Context, workerID string) error {
+	worker, ok := m.managedWorker(workerID)
+	if !ok {
+		return errors.New("persisted cloud worker not found")
+	}
+	client, err := m.newClient(ctx, worker.BaseURL)
 	if err != nil {
-		return fmt.Errorf("encode cloud worker journal: %w", err)
+		return err
 	}
-	temporary := m.journalPath + ".tmp"
-	if err := os.WriteFile(temporary, append(data, '\n'), 0o600); err != nil {
-		return fmt.Errorf("write cloud worker journal: %w", err)
+	instances, err := client.ListInstances(ctx, "")
+	if err != nil {
+		return fmt.Errorf("list Verda instances while reconnecting: %w", err)
 	}
-	if err := os.Rename(temporary, m.journalPath); err != nil {
-		return fmt.Errorf("replace cloud worker journal: %w", err)
+	var instance *verda.Instance
+	for index := range instances {
+		if instances[index].ID == worker.InstanceID {
+			instance = &instances[index]
+			break
+		}
+	}
+	if instance == nil {
+		return fmt.Errorf("persisted Verda instance %s was not found", worker.InstanceID)
+	}
+	if strings.ToLower(strings.TrimSpace(instance.Status)) != "running" || instance.IP == nil || strings.TrimSpace(*instance.IP) == "" {
+		ready, err := cloudworkflow.WaitInstance(ctx, client, worker.InstanceID, m.timeout, m.pollInterval)
+		if err != nil {
+			return err
+		}
+		instance = &ready
+	}
+	knownHosts := worker.KnownHosts
+	if strings.TrimSpace(knownHosts) == "" {
+		knownHosts, err = m.knownHostsPath(workerID)
+		if err != nil {
+			return err
+		}
+	}
+	ip := strings.TrimSpace(*instance.IP)
+	host := m.sshUser + "@" + ip
+	m.updateWorker(workerID, func(current *managedCloudWorker) {
+		current.IP = ip
+		current.Host = host
+		current.KnownHosts = knownHosts
+		current.Hostname = firstCloudString(instance.Hostname, current.Hostname)
+		current.Location = firstCloudString(instance.Location, current.Location)
+		current.PricePerHour = firstCloudPrice(instance.PricePerHour, current.PricePerHour)
+		current.Currency = firstCloudString(instance.Currency, current.Currency)
+		current.Message = "Verifying persisted cloud worker"
+	})
+	sshArgs := cloudworkflow.SSHArgs(knownHosts)
+	if err := cloudworkflow.WaitSSH(ctx, m.ssh, sshArgs, host, m.timeout, m.pollInterval); err != nil {
+		return err
+	}
+	if err := cloudworkflow.WaitCommand(ctx, m.ssh, sshArgs, host, cloudPreflightCommand, m.timeout, m.pollInterval); err != nil {
+		return err
+	}
+	ready := m.now().UTC()
+	expires := ready.Add(m.idleTimeout)
+	m.updateWorker(workerID, func(current *managedCloudWorker) {
+		current.State = CloudWorkerReady
+		current.Message = "Reconnected and ready for experiments"
+		current.ReadyAt = &ready
+		if current.AutoDestroy {
+			current.ExpiresAt = &expires
+		}
+	})
+	if err := m.persistWorker(); err != nil {
+		return err
+	}
+	if worker.AutoDestroy {
+		m.wg.Add(1)
+		go func() {
+			defer m.wg.Done()
+			m.destroyIdleWorker(m.ctx, workerID, expires)
+		}()
 	}
 	return nil
 }
 
-func (m *CloudManager) loadJournal() error {
-	data, err := os.ReadFile(m.journalPath)
-	if errors.Is(err, os.ErrNotExist) {
+func (m *CloudManager) clearWorker() error {
+	m.mu.Lock()
+	workerID := ""
+	if m.worker != nil {
+		workerID = m.worker.ID
+	}
+	m.mu.Unlock()
+	if workerID == "" {
 		return nil
 	}
-	if err != nil {
-		return fmt.Errorf("read cloud worker journal: %w", err)
-	}
-	var worker managedCloudWorker
-	if err := json.Unmarshal(data, &worker); err != nil {
-		return fmt.Errorf("decode cloud worker journal: %w", err)
-	}
-	worker.State = CloudWorkerFailed
-	worker.Message = "Recovered from a previous lab session; destroy this worker before creating another"
-	worker.recovered = true
-	m.worker = &worker
-	return nil
-}
-
-func (m *CloudManager) clearJournal() error {
-	if err := os.Remove(m.journalPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("remove cloud worker journal: %w", err)
-	}
-	return nil
+	return m.store.Delete(context.Background(), workerID)
 }
 
 func (m *CloudManager) Close() error {
@@ -826,10 +947,11 @@ func (m *CloudManager) Close() error {
 	m.mu.Lock()
 	worker := m.worker
 	m.mu.Unlock()
-	if worker == nil || worker.State == CloudWorkerDestroyed || !worker.AutoDestroy {
-		return nil
+	var destroyErr error
+	if worker != nil && worker.State != CloudWorkerDestroyed && worker.AutoDestroy {
+		ctx, destroyCancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		destroyErr = m.Destroy(ctx, worker.ID)
+		destroyCancel()
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
-	return m.Destroy(ctx, worker.ID)
+	return errors.Join(destroyErr, m.store.Close())
 }

@@ -137,7 +137,7 @@ func TestServerCloudWorkerAndRemoteRunLifecycle(t *testing.T) {
 		RepoRoot:      repoRoot,
 		SSH:           transport.ssh,
 		Rsync:         transport.rsync,
-		JournalPath:   filepath.Join(t.TempDir(), "worker.json"),
+		DatabasePath:  filepath.Join(t.TempDir(), "state.sqlite"),
 		Timeout:       cloudTestTimeout,
 		PollInterval:  time.Millisecond,
 		ClientFactory: func(context.Context, string) (cloudworkflow.Client, error) { return client, nil },
@@ -145,6 +145,7 @@ func TestServerCloudWorkerAndRemoteRunLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer func() { _ = cloud.Close() }()
 	manager := NewManager(RoutingExecutor{Local: successfulExecutor(), Cloud: cloud})
 	defer manager.Close()
 	server, err := NewServerWithOptions(manager, "", ServerOptions{APIOnly: true, Cloud: cloud})

@@ -24,6 +24,7 @@ type labOptions struct {
 	apiOnly      bool
 	cloud        bool
 	cloudBaseURL string
+	stateDB      string
 }
 
 func defaultLabOptions() labOptions {
@@ -52,6 +53,7 @@ func (a *app) newLabCommand(withRepo repoRunner) *cobra.Command {
 	cmd.Flags().BoolVar(&opts.apiOnly, "api-only", opts.apiOnly, "serve only the API for Vite development")
 	cmd.Flags().BoolVar(&opts.cloud, "cloud", opts.cloud, "enable local Verda worker deployment and remote experiment execution")
 	cmd.Flags().StringVar(&opts.cloudBaseURL, "cloud-base-url", opts.cloudBaseURL, "Verda API base URL")
+	cmd.Flags().StringVar(&opts.stateDB, "state-db", opts.stateDB, "SQLite lab state database path")
 	cmd.Flags().SortFlags = false
 	return cmd
 }
@@ -78,11 +80,16 @@ func (a *app) runLab(ctx context.Context, opts labOptions) (runErr error) {
 	var cloud *learninglab.CloudManager
 	var executor learninglab.Executor = localExecutor
 	if opts.cloud {
+		stateDB := opts.stateDB
+		if stateDB != "" && !filepath.IsAbs(stateDB) {
+			stateDB = filepath.Join(a.repoRoot, stateDB)
+		}
 		var err error
 		cloud, err = learninglab.NewCloudManager(learninglab.CloudManagerOptions{
-			RepoRoot: a.repoRoot,
-			BaseURL:  opts.cloudBaseURL,
-			Mode:     opts.mode,
+			RepoRoot:     a.repoRoot,
+			BaseURL:      opts.cloudBaseURL,
+			Mode:         opts.mode,
+			DatabasePath: stateDB,
 		})
 		if err != nil {
 			return err

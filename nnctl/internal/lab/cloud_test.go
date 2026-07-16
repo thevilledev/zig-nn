@@ -2,7 +2,7 @@ package lab
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,12 +23,12 @@ func TestCloudManagerDeployExecuteDestroyAndRecover(t *testing.T) {
 	}
 	transport := writeFakeCloudTransport(t)
 	client := newFakeCloudClient()
-	journal := filepath.Join(t.TempDir(), "worker.json")
+	database := filepath.Join(t.TempDir(), "state.sqlite")
 	manager, err := NewCloudManager(CloudManagerOptions{
 		RepoRoot:      repoRoot,
 		SSH:           transport.ssh,
 		Rsync:         transport.rsync,
-		JournalPath:   journal,
+		DatabasePath:  database,
 		Timeout:       cloudTestTimeout,
 		PollInterval:  time.Millisecond,
 		ClientFactory: func(context.Context, string) (cloudworkflow.Client, error) { return client, nil },
@@ -110,22 +110,41 @@ func TestCloudManagerDeployExecuteDestroyAndRecover(t *testing.T) {
 		t.Fatalf("worker did not record repository revision: %#v", worker)
 	}
 
-	if err := manager.persistJournal(); err != nil {
+	if err := manager.Close(); err != nil {
 		t.Fatal(err)
 	}
 	recovered, err := NewCloudManager(CloudManagerOptions{
 		RepoRoot:      repoRoot,
-		JournalPath:   journal,
+		DatabasePath:  database,
+		SSH:           transport.ssh,
+		Rsync:         transport.rsync,
+		Timeout:       cloudTestTimeout,
+		PollInterval:  time.Millisecond,
 		ClientFactory: func(context.Context, string) (cloudworkflow.Client, error) { return client, nil },
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	recoveredWorker := recovered.Workers()[0]
-	if recoveredWorker.State != CloudWorkerFailed || !strings.Contains(recoveredWorker.Message, "Recovered") {
+	recoveredWorker := waitForCloudWorkerState(t, recovered, created.ID, CloudWorkerReady)
+	if !strings.Contains(recoveredWorker.Message, "Reconnected") {
 		t.Fatalf("recovered worker = %#v", recoveredWorker)
 	}
+	runOptions.WorkerID = recoveredWorker.ID
+	if err := recovered.Execute(context.Background(), spec, runOptions, func([]byte) error { return nil }, func(string) {}); err != nil {
+		t.Fatal(err)
+	}
+	waitForCloudWorkerState(t, recovered, recoveredWorker.ID, CloudWorkerReady)
 	if err := recovered.Destroy(context.Background(), recoveredWorker.ID); err != nil {
+		t.Fatal(err)
+	}
+	persisted, err := recovered.store.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted != nil {
+		t.Fatalf("destroyed worker remained in SQLite: %#v", persisted)
+	}
+	if err := recovered.Close(); err != nil {
 		t.Fatal(err)
 	}
 	client.mu.Lock()
@@ -136,7 +155,7 @@ func TestCloudManagerDeployExecuteDestroyAndRecover(t *testing.T) {
 	}
 }
 
-func TestCloudManagerDefaultsToAutomaticCleanup(t *testing.T) {
+func TestCloudManagerDefaultsToReusableWorker(t *testing.T) {
 	repoRoot, _ := filepath.Abs("../../..")
 	transport := writeFakeCloudTransport(t)
 	client := newFakeCloudClient()
@@ -144,7 +163,7 @@ func TestCloudManagerDefaultsToAutomaticCleanup(t *testing.T) {
 		RepoRoot:      repoRoot,
 		SSH:           transport.ssh,
 		Rsync:         transport.rsync,
-		JournalPath:   filepath.Join(t.TempDir(), "worker.json"),
+		DatabasePath:  filepath.Join(t.TempDir(), "state.sqlite"),
 		Timeout:       cloudTestTimeout,
 		PollInterval:  time.Millisecond,
 		ClientFactory: func(context.Context, string) (cloudworkflow.Client, error) { return client, nil },
@@ -161,31 +180,41 @@ func TestCloudManagerDefaultsToAutomaticCleanup(t *testing.T) {
 		t.Fatal(err)
 	}
 	worker := waitForCloudWorkerState(t, manager, created.ID, CloudWorkerReady)
-	if !worker.AutoDestroy {
-		t.Fatal("worker did not default to automatic cleanup")
+	if worker.AutoDestroy {
+		t.Fatal("worker did not default to manual cleanup")
 	}
 	spec, _ := ResolveExperiment("optimizer-lab")
 	options, _ := BuildRunOptions(spec, "cuda", nil)
 	options.Target = RunTargetCloud
 	options.WorkerID = worker.ID
 	options.AcknowledgeDirty = true
-	if err := manager.Execute(context.Background(), spec, options, func([]byte) error { return nil }, func(string) {}); err != nil {
+	for range 2 {
+		if err := manager.Execute(context.Background(), spec, options, func([]byte) error { return nil }, func(string) {}); err != nil {
+			t.Fatal(err)
+		}
+		waitForCloudWorkerState(t, manager, created.ID, CloudWorkerReady)
+	}
+	client.mu.Lock()
+	destroyed := len(client.destroyed)
+	client.mu.Unlock()
+	if destroyed != 0 {
+		t.Fatalf("reusable worker was destroyed after a run")
+	}
+	if err := manager.Destroy(context.Background(), created.ID); err != nil {
 		t.Fatal(err)
 	}
-	waitForCloudWorkerState(t, manager, created.ID, CloudWorkerDestroyed)
 }
 
-func TestCloudManagerDestroysIdleAutomaticWorker(t *testing.T) {
+func TestCloudManagerDoesNotPersistFailedWorkerWithoutResources(t *testing.T) {
 	repoRoot, _ := filepath.Abs("../../..")
-	transport := writeFakeCloudTransport(t)
+	database := filepath.Join(t.TempDir(), "state.sqlite")
 	client := newFakeCloudClient()
+	client.cloneErr = errors.New("clone failed")
 	manager, err := NewCloudManager(CloudManagerOptions{
 		RepoRoot:      repoRoot,
-		SSH:           transport.ssh,
-		JournalPath:   filepath.Join(t.TempDir(), "worker.json"),
+		DatabasePath:  database,
 		Timeout:       cloudTestTimeout,
 		PollInterval:  time.Millisecond,
-		IdleTimeout:   150 * time.Millisecond,
 		ClientFactory: func(context.Context, string) (cloudworkflow.Client, error) { return client, nil },
 	})
 	if err != nil {
@@ -195,6 +224,51 @@ func TestCloudManagerDestroysIdleAutomaticWorker(t *testing.T) {
 		InstanceType: "1A100.22V",
 		Market:       "spot",
 		LocationCode: "FIN-02",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForCloudWorkerState(t, manager, created.ID, CloudWorkerFailed)
+	if err := manager.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := NewCloudManager(CloudManagerOptions{
+		RepoRoot:      repoRoot,
+		DatabasePath:  database,
+		ClientFactory: func(context.Context, string) (cloudworkflow.Client, error) { return client, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = reopened.Close() }()
+	if workers := reopened.Workers(); len(workers) != 0 {
+		t.Fatalf("resource-free failure was persisted: %#v", workers)
+	}
+}
+
+func TestCloudManagerDestroysIdleAutomaticWorker(t *testing.T) {
+	repoRoot, _ := filepath.Abs("../../..")
+	transport := writeFakeCloudTransport(t)
+	client := newFakeCloudClient()
+	manager, err := NewCloudManager(CloudManagerOptions{
+		RepoRoot:      repoRoot,
+		SSH:           transport.ssh,
+		DatabasePath:  filepath.Join(t.TempDir(), "state.sqlite"),
+		Timeout:       cloudTestTimeout,
+		PollInterval:  time.Millisecond,
+		IdleTimeout:   150 * time.Millisecond,
+		ClientFactory: func(context.Context, string) (cloudworkflow.Client, error) { return client, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	autoDestroy := true
+	created, err := manager.Deploy(context.Background(), CloudDeployRequest{
+		InstanceType: "1A100.22V",
+		Market:       "spot",
+		LocationCode: "FIN-02",
+		AutoDestroy:  &autoDestroy,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -211,7 +285,7 @@ func TestCloudManagerCancelsProvisioningBeforeDestroy(t *testing.T) {
 	manager, err := NewCloudManager(CloudManagerOptions{
 		RepoRoot:      repoRoot,
 		SSH:           transport.ssh,
-		JournalPath:   filepath.Join(t.TempDir(), "worker.json"),
+		DatabasePath:  filepath.Join(t.TempDir(), "state.sqlite"),
 		Timeout:       cloudTestTimeout,
 		PollInterval:  time.Millisecond,
 		ClientFactory: func(context.Context, string) (cloudworkflow.Client, error) { return client, nil },
@@ -219,10 +293,12 @@ func TestCloudManagerCancelsProvisioningBeforeDestroy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	autoDestroy := true
 	created, err := manager.Deploy(context.Background(), CloudDeployRequest{
 		InstanceType: "1A100.22V",
 		Market:       "spot",
 		LocationCode: "FIN-02",
+		AutoDestroy:  &autoDestroy,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -247,7 +323,7 @@ func TestCloudManagerClosesAutomaticWorker(t *testing.T) {
 	manager, err := NewCloudManager(CloudManagerOptions{
 		RepoRoot:      repoRoot,
 		SSH:           transport.ssh,
-		JournalPath:   filepath.Join(t.TempDir(), "worker.json"),
+		DatabasePath:  filepath.Join(t.TempDir(), "state.sqlite"),
 		Timeout:       cloudTestTimeout,
 		PollInterval:  time.Millisecond,
 		ClientFactory: func(context.Context, string) (cloudworkflow.Client, error) { return client, nil },
@@ -255,10 +331,12 @@ func TestCloudManagerClosesAutomaticWorker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	autoDestroy := true
 	created, err := manager.Deploy(context.Background(), CloudDeployRequest{
 		InstanceType: "1A100.22V",
 		Market:       "spot",
 		LocationCode: "FIN-02",
+		AutoDestroy:  &autoDestroy,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -335,6 +413,7 @@ type fakeCloudClient struct {
 	createRequest      verda.CreateInstanceRequest
 	cloneRequest       verda.CloneVolumeRequest
 	cloneCalls         int
+	cloneErr           error
 	destroyed          []verda.DestroyInstanceRequest
 	listInstancesBlock <-chan struct{}
 }
@@ -375,7 +454,11 @@ func (c *fakeCloudClient) CloneVolume(_ context.Context, request verda.CloneVolu
 	c.mu.Lock()
 	c.cloneRequest = request
 	c.cloneCalls++
+	err := c.cloneErr
 	c.mu.Unlock()
+	if err != nil {
+		return verda.Volume{}, err
+	}
 	return verda.Volume{ID: "clone-1", Name: request.Name, Status: "cloning", Location: request.LocationCode}, nil
 }
 
@@ -442,17 +525,4 @@ func (c *fakeCloudClient) ListInstancePrices(context.Context, verda.PricingFilte
 			PriceKnown: true, Currency: "EUR", Available: true,
 		},
 	}, nil
-}
-
-func TestManagedCloudWorkerJournalDoesNotContainCredentials(t *testing.T) {
-	worker := managedCloudWorker{CloudWorker: CloudWorker{ID: "worker-1", State: CloudWorkerReady, InstanceID: "instance-1"}}
-	data, err := json.Marshal(worker)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, forbidden := range []string{"client_secret", "client_id", "credential"} {
-		if strings.Contains(strings.ToLower(string(data)), forbidden) {
-			t.Fatalf("worker journal contains %q: %s", forbidden, data)
-		}
-	}
 }

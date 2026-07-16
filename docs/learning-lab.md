@@ -93,7 +93,7 @@ With `--cloud`, the server also exposes:
 - `GET /api/cloud/options` for available single-NVIDIA-GPU prices and the
   fixed golden OS volume name;
 - `GET|POST /api/cloud/workers` to inspect or asynchronously create the one
-  worker managed by this lab process;
+  persisted worker managed by the lab;
 - `GET /api/cloud/workers/{id}/events` for worker lifecycle SSE;
 - `DELETE /api/cloud/workers/{id}` to permanently destroy the instance and its
   cloned OS volume while protecting the golden source volume.
@@ -139,13 +139,20 @@ key or OS volume, and only offers GPU capacity in locations with a ready golden
 volume. SSH itself uses the local process's normal identity and agent
 configuration.
 
-Workers default to spot capacity and automatic cleanup. They are destroyed
-after a run (including cancellation or failure), after 30 minutes idle, or when
-the lab exits normally. Unchecking automatic cleanup keeps a ready worker for
-multiple experiments until **Destroy worker** is used. Resource IDs—not
-credentials—are journaled under the OS user-cache directory so a later lab
-process can identify and destroy a worker left by a crash. The UI deliberately
-does not adopt or destroy unrelated Verda instances.
+Workers default to spot capacity and manual cleanup so the same VM can run
+multiple experiments. **Destroy worker** permanently deletes the instance and
+its cloned OS volume. Opting into automatic cleanup instead destroys the worker
+after the next run, after 30 minutes idle, or when the lab exits normally.
+
+Managed-worker state is stored in `learning-lab.sqlite` under the OS user-cache
+directory (`~/Library/Caches/nnctl/` on macOS and typically
+`~/.cache/nnctl/` on Linux). The database contains worker and provider resource
+IDs, connection metadata, and lifecycle state, but never credentials. On
+restart, the lab verifies the persisted Verda instance, SSH, Zig, and CUDA
+before making the worker ready for more experiments. The previous
+`lab-cloud-worker.json` journal is migrated once. The UI deliberately does not
+adopt or destroy unrelated Verda instances. Pass `--state-db PATH` to
+`nnctl lab --cloud` to use a different database location.
 
 The CPU-capable structured experiments can execute on the remote CPU.
 Optimizer Lab and Semantic Search additionally allow explicit CUDA, while the

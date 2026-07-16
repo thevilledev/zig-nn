@@ -21,7 +21,7 @@
   } = $props();
 
   let selectedPriceKey = $state('');
-  let autoDestroy = $state(true);
+  let autoDestroy = $state(false);
   let now = $state(Date.now());
   const clock = window.setInterval(() => (now = Date.now()), 10_000);
   onDestroy(() => window.clearInterval(clock));
@@ -77,7 +77,7 @@
       <div><span>Location</span><strong>{activeWorker.location || 'resolving'}</strong></div>
       <div><span>Price</span><strong>{activeWorker.price_per_hour ? `${activeWorker.price_per_hour.toFixed(3)} ${activeWorker.currency || ''}/h` : '—'}</strong></div>
       <div><span>Estimated cost</span><strong>{accruedCost(activeWorker)}</strong></div>
-      <div><span>Cleanup</span><strong>{activeWorker.auto_destroy ? 'after run / exit' : 'manual'}</strong></div>
+      <div><span>Cleanup</span><strong>{activeWorker.auto_destroy ? 'after run / exit' : 'reusable / manual'}</strong></div>
       {#if activeWorker.expires_at}<div><span>Idle expiry</span><strong>{new Date(activeWorker.expires_at).toLocaleTimeString()}</strong></div>{/if}
     </div>
     <p class="cloud-message">{activeWorker.message}</p>
@@ -102,7 +102,8 @@
     </label>
     <p class="cloud-note">Workers always clone <code>{options.source_os_volume_name}</code>. Its authorized keys and CUDA/Zig tooling are baked in, so the lab does not attach SSH key IDs.</p>
     {#if !options.prices.length}<p class="inline-error" role="alert">No available GPU instances share a location with the ready golden volume.</p>{/if}
-    <label class="cleanup-choice"><input type="checkbox" bind:checked={autoDestroy} /> Automatically destroy after the run or when the lab exits</label>
+    <label class="cleanup-choice"><input type="checkbox" bind:checked={autoDestroy} /> Destroy after the next run or when the lab exits</label>
+    <p class="cloud-note">Leave cleanup unchecked to reuse this worker for multiple experiments and across lab restarts.</p>
     <button
       class="primary"
       type="button"
