@@ -59,6 +59,41 @@ docker build \
   --tag registry.example/zig-nn-benchmark:cuda-13.0.1 .
 ```
 
+## GitHub Container Registry
+
+The `Container` GitHub Actions workflow validates both targets on pull
+requests. Pushes to `main` build native `linux/amd64` images and publish them
+to `ghcr.io/thevilledev/zig-nn` with these tags:
+
+- `cpu` and `cuda` for the latest build from `main`
+- `main-cpu` and `main-cuda` as branch-qualified aliases
+- `sha-<commit>-cpu` and `sha-<commit>-cuda` for a specific source revision
+
+Each published digest includes BuildKit provenance and an SPDX SBOM. The
+workflow adds a keyless Cosign image signature, signs SLSA provenance and the
+SPDX SBOM with GitHub's Sigstore-backed artifact attestations, then pushes the
+signature and both attestations to GHCR. Verify a published image and its
+keyless signature with:
+
+```bash
+cosign verify \
+  --certificate-identity \
+    https://github.com/thevilledev/zig-nn/.github/workflows/container.yml@refs/heads/main \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  ghcr.io/thevilledev/zig-nn:cuda
+```
+
+Verify its provenance and SBOM attestations against this repository with:
+
+```bash
+gh attestation verify \
+  oci://ghcr.io/thevilledev/zig-nn:cuda \
+  --repo thevilledev/zig-nn
+```
+
+Tags are convenient selectors; use the verified `sha256` digest returned by
+the registry when a Verda job must be reproducible.
+
 ## Verda Serverless Jobs
 
 Push the selected image to an OCI-compatible registry. On a command-driven
