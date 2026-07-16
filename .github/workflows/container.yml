@@ -29,7 +29,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [ cpu, cuda ]
+        include:
+          - target: cpu
+            title: zig-nn CPU benchmark
+            description: Statically linked ReleaseFast zig-nn benchmark runner
+          - target: cuda
+            title: zig-nn CUDA benchmark
+            description: ReleaseFast zig-nn benchmark runner with CUDA support
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -44,10 +50,22 @@ jobs:
       - name: Generate image metadata
         id: metadata
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        env:
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           flavor: latest=false
           tags: type=ref,event=tag,suffix=-${{ matrix.target }}
+          labels: |
+            org.opencontainers.image.authors=Ville Vesilehto <ville@vesilehto.fi>
+            org.opencontainers.image.vendor=thevilledev
+            org.opencontainers.image.title=${{ matrix.title }}
+            org.opencontainers.image.description=${{ matrix.description }}
+          annotations: |
+            org.opencontainers.image.authors=Ville Vesilehto <ville@vesilehto.fi>
+            org.opencontainers.image.vendor=thevilledev
+            org.opencontainers.image.title=${{ matrix.title }}
+            org.opencontainers.image.description=${{ matrix.description }}
       - name: Build and push ${{ matrix.target }} image
         id: build
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
@@ -58,6 +76,7 @@ jobs:
           push: true
           tags: ${{ steps.metadata.outputs.tags }}
           labels: ${{ steps.metadata.outputs.labels }}
+          annotations: ${{ steps.metadata.outputs.annotations }}
           cache-from: type=gha,scope=${{ matrix.target }}
           cache-to: type=gha,mode=max,scope=${{ matrix.target }}
           provenance: mode=max

@@ -63,7 +63,11 @@ RUN zig build benchmark-exe -Dgpu=cuda -Dcpu=baseline --prefix /opt/zig-nn \
         /opt/zig-nn/cuda-libs/
 
 FROM ${GLIBC_RUNTIME_IMAGE} AS cuda
-LABEL org.opencontainers.image.title="zig-nn CUDA benchmark" \
+LABEL dev.chainguard.image.title="zig-nn CUDA benchmark" \
+      dev.chainguard.package.main="zig-nn" \
+      org.opencontainers.image.authors="Ville Vesilehto <ville@vesilehto.fi>" \
+      org.opencontainers.image.vendor="thevilledev" \
+      org.opencontainers.image.title="zig-nn CUDA benchmark" \
       org.opencontainers.image.description="ReleaseFast zig-nn benchmark runner with CUDA support" \
       org.opencontainers.image.source="https://github.com/thevilledev/zig-nn" \
       org.opencontainers.image.licenses="MIT"
@@ -81,7 +85,9 @@ ENTRYPOINT ["/usr/local/bin/zig-nn-benchmark"]
 CMD ["--quick"]
 
 FROM scratch AS cpu
-LABEL org.opencontainers.image.title="zig-nn CPU benchmark" \
+LABEL org.opencontainers.image.authors="Ville Vesilehto <ville@vesilehto.fi>" \
+      org.opencontainers.image.vendor="thevilledev" \
+      org.opencontainers.image.title="zig-nn CPU benchmark" \
       org.opencontainers.image.description="Statically linked ReleaseFast zig-nn benchmark runner" \
       org.opencontainers.image.source="https://github.com/thevilledev/zig-nn" \
       org.opencontainers.image.licenses="MIT"
