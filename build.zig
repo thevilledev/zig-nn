@@ -301,6 +301,7 @@ fn addBenchmarkStep(
         .root_source_file = b.path("benchmarks/benchmark.zig"),
         .target = target,
         .optimize = benchmark_optimize,
+        .strip = benchmark_optimize != .Debug,
     });
     bench_mod.addImport("nn", bench_nn_mod);
 
@@ -330,6 +331,15 @@ fn addBenchmarkStep(
     const run_cmd = b.addRunArtifact(exe);
     if (b.args) |args| {
         run_cmd.addArgs(args);
+    }
+
+    if (std.mem.eql(u8, step_name, "benchmark")) {
+        const install_exe = b.addInstallArtifact(exe, .{});
+        const build_step = b.step(
+            "benchmark-exe",
+            "Build and install the ReleaseFast benchmark executable without running it",
+        );
+        build_step.dependOn(&install_exe.step);
     }
 
     const benchmark_step = b.step(step_name, description);

@@ -62,6 +62,7 @@ development workflow, backend contract, and event protocol.
 - [NLP and Adjacent Roadmap](docs/nlp-roadmap.md) — current backend boundaries
   and planned learning experiments
 - [Benchmarks](docs/benchmarks.md) — repeatable local and remote measurements
+- [Containers](docs/containers.md) — minimal CPU and CUDA benchmark job images
 - [Development Environment](docs/development.md) — pinned tools, hooks, and
   repository-wide checks
 - [Real-Time Learning Lab](docs/learning-lab.md) — live browser experiments,

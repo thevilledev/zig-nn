@@ -1,0 +1,14 @@
+.git
+.github
+.zig-cache
+zig-out
+bin
+node_modules
+web/node_modules
+web/dist
+data
+experiments/tiny_gpt/data/shakespeare
+experiments/tiny_gpt/data/tinystories
+*.bin
+*.csv
+.DS_Store
