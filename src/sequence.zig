@@ -224,6 +224,53 @@ pub const GradientAccumulator = struct {
     }
 };
 
+pub const MaskedForecastLoss = struct {
+    allocator: std.mem.Allocator,
+    loss: f64,
+    gradient: []f64,
+
+    pub fn deinit(self: *MaskedForecastLoss) void {
+        self.allocator.free(self.gradient);
+        self.* = undefined;
+    }
+};
+
+/// Mean squared forecasting loss over observed target positions. A zero mask
+/// excludes warm-up or padded timesteps from both the objective and gradient.
+pub fn maskedMeanSquaredError(
+    allocator: std.mem.Allocator,
+    predictions: []const f64,
+    targets: []const f64,
+    mask: []const f64,
+) !MaskedForecastLoss {
+    if (predictions.len == 0 or predictions.len != targets.len or
+        predictions.len != mask.len)
+    {
+        return error.DimensionMismatch;
+    }
+    const gradient = try allocator.alloc(f64, predictions.len);
+    errdefer allocator.free(gradient);
+    @memset(gradient, 0);
+    var loss: f64 = 0;
+    var observed: usize = 0;
+    for (predictions, targets, mask, gradient) |prediction, target, weight, *value| {
+        if (!std.math.isFinite(prediction) or !std.math.isFinite(target) or
+            (weight != 0 and weight != 1))
+        {
+            return error.InvalidForecast;
+        }
+        if (weight == 0) continue;
+        const difference = prediction - target;
+        loss += difference * difference;
+        value.* = 2 * difference;
+        observed += 1;
+    }
+    if (observed == 0) return error.EmptyMask;
+    const scale = 1.0 / @as(f64, @floatFromInt(observed));
+    for (gradient) |*value| value.* *= scale;
+    return .{ .allocator = allocator, .loss = loss * scale, .gradient = gradient };
+}
+
 test "length bucketing improves padding efficiency" {
     const lengths = [_]ExampleLengths{
         .{ .source = 2, .target = 3 },
@@ -267,4 +314,16 @@ test "gradient accumulation weights uneven microbatches by examples" {
     try accumulator.finish(&mean);
     try std.testing.expectEqualSlices(f32, &.{ 2, 4 }, &mean);
     try std.testing.expectEqual(@as(usize, 2), accumulator.microbatches);
+}
+
+test "masked forecasting loss excludes warm-up positions" {
+    var objective = try maskedMeanSquaredError(
+        std.testing.allocator,
+        &.{ 100, 2, 4 },
+        &.{ 0, 1, 5 },
+        &.{ 0, 1, 1 },
+    );
+    defer objective.deinit();
+    try std.testing.expectEqual(@as(f64, 1), objective.loss);
+    try std.testing.expectEqualSlices(f64, &.{ 0, 1, -1 }, objective.gradient);
 }

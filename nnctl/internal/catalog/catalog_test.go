@@ -137,6 +137,22 @@ func TestResolveANNSearchExperiment(t *testing.T) {
 	}
 }
 
+func TestResolveAdjacentSequenceExperiments(t *testing.T) {
+	for name, step := range map[string]string{
+		"ctc_alignment":       "run_ctc_alignment",
+		"time_series":         "run_time_series",
+		"node_classification": "run_node_classification",
+	} {
+		experiment, ok := ResolveExperiment(name)
+		if !ok {
+			t.Fatalf("expected %s to resolve", name)
+		}
+		if experiment.Step != step || !experiment.Quick {
+			t.Fatalf("unexpected %s experiment: %+v", name, experiment)
+		}
+	}
+}
+
 func TestResolveCNNExperiment(t *testing.T) {
 	experiment, ok := ResolveExperiment("cnn")
 	if !ok {

@@ -1,6 +1,194 @@
 const std = @import("std");
 const Matrix = @import("matrix.zig").Matrix;
 
+pub const SequenceShape = struct {
+    steps: usize,
+    channels: usize,
+
+    pub fn elementCount(self: SequenceShape) !usize {
+        if (self.steps == 0 or self.channels == 0) return error.InvalidDimension;
+        return std.math.mul(usize, self.steps, self.channels);
+    }
+};
+
+pub const Conv1dConfig = struct {
+    input: SequenceShape,
+    out_channels: usize,
+    kernel_size: usize,
+
+    fn validate(self: Conv1dConfig) !void {
+        _ = try self.input.elementCount();
+        if (self.out_channels == 0 or self.kernel_size == 0) {
+            return error.InvalidDimension;
+        }
+        _ = try std.math.mul(usize, self.kernel_size, self.input.channels);
+        _ = try std.math.mul(usize, self.input.steps, self.out_channels);
+    }
+};
+
+/// CPU-first causal 1D convolution over flattened `[batch, steps, channels]`
+/// sequences. Output timestep `t` can only read inputs at or before `t`.
+pub const Conv1d = struct {
+    allocator: std.mem.Allocator,
+    config: Conv1dConfig,
+    weights: Matrix,
+    bias: Matrix,
+
+    pub fn init(
+        allocator: std.mem.Allocator,
+        config: Conv1dConfig,
+        random: std.Random,
+    ) !Conv1d {
+        try config.validate();
+        const kernel_features = config.kernel_size * config.input.channels;
+        var weights = try Matrix.init(allocator, kernel_features, config.out_channels);
+        errdefer weights.deinit();
+        var bias = try Matrix.init(allocator, 1, config.out_channels);
+        errdefer bias.deinit();
+        const scale = @sqrt(2.0 / @as(f64, @floatFromInt(kernel_features)));
+        for (weights.data) |*weight| {
+            weight.* = (random.float(f64) * 2 - 1) * scale;
+        }
+        bias.fill(0);
+        return .{ .allocator = allocator, .config = config, .weights = weights, .bias = bias };
+    }
+
+    pub fn deinit(self: *Conv1d) void {
+        self.weights.deinit();
+        self.bias.deinit();
+        self.* = undefined;
+    }
+
+    pub fn forward(self: Conv1d, input: Matrix) !Matrix {
+        try self.validateInput(input);
+        var output = try Matrix.init(
+            self.allocator,
+            input.rows,
+            self.config.input.steps * self.config.out_channels,
+        );
+        errdefer output.deinit();
+        for (0..input.rows) |batch| {
+            for (0..self.config.input.steps) |timestep| {
+                for (0..self.config.out_channels) |output_channel| {
+                    var value = self.bias.data[output_channel];
+                    for (0..self.config.kernel_size) |kernel| {
+                        const padded = timestep + kernel + 1;
+                        if (padded < self.config.kernel_size) continue;
+                        const source_timestep = padded - self.config.kernel_size;
+                        for (0..self.config.input.channels) |input_channel| {
+                            const input_index = batch * input.cols +
+                                source_timestep * self.config.input.channels + input_channel;
+                            const weight_index = (kernel * self.config.input.channels +
+                                input_channel) * self.config.out_channels + output_channel;
+                            value += input.data[input_index] * self.weights.data[weight_index];
+                        }
+                    }
+                    output.data[
+                        batch * output.cols +
+                            timestep * self.config.out_channels + output_channel
+                    ] = value;
+                }
+            }
+        }
+        return output;
+    }
+
+    pub fn backward(
+        self: Conv1d,
+        input: Matrix,
+        output_gradient: Matrix,
+    ) !Conv1dGradients {
+        try self.validateInput(input);
+        if (output_gradient.rows != input.rows or
+            output_gradient.cols != self.config.input.steps * self.config.out_channels)
+        {
+            return error.DimensionMismatch;
+        }
+        var input_gradient = try Matrix.init(self.allocator, input.rows, input.cols);
+        errdefer input_gradient.deinit();
+        var weight_gradient = try Matrix.init(
+            self.allocator,
+            self.weights.rows,
+            self.weights.cols,
+        );
+        errdefer weight_gradient.deinit();
+        var bias_gradient = try Matrix.init(self.allocator, 1, self.config.out_channels);
+        errdefer bias_gradient.deinit();
+        for (0..input.rows) |batch| {
+            for (0..self.config.input.steps) |timestep| {
+                for (0..self.config.out_channels) |output_channel| {
+                    const gradient = output_gradient.data[
+                        batch * output_gradient.cols +
+                            timestep * self.config.out_channels + output_channel
+                    ];
+                    bias_gradient.data[output_channel] += gradient;
+                    for (0..self.config.kernel_size) |kernel| {
+                        const padded = timestep + kernel + 1;
+                        if (padded < self.config.kernel_size) continue;
+                        const source_timestep = padded - self.config.kernel_size;
+                        for (0..self.config.input.channels) |input_channel| {
+                            const input_index = batch * input.cols +
+                                source_timestep * self.config.input.channels + input_channel;
+                            const weight_index = (kernel * self.config.input.channels +
+                                input_channel) * self.config.out_channels + output_channel;
+                            weight_gradient.data[weight_index] += input.data[input_index] * gradient;
+                            input_gradient.data[input_index] += self.weights.data[weight_index] * gradient;
+                        }
+                    }
+                }
+            }
+        }
+        return .{
+            .input = input_gradient,
+            .weights = weight_gradient,
+            .bias = bias_gradient,
+        };
+    }
+
+    pub fn applyGradients(
+        self: *Conv1d,
+        gradients: Conv1dGradients,
+        learning_rate: f64,
+    ) !void {
+        if (!std.math.isFinite(learning_rate) or learning_rate <= 0 or
+            gradients.weights.rows != self.weights.rows or
+            gradients.weights.cols != self.weights.cols or
+            gradients.bias.cols != self.bias.cols)
+        {
+            return error.InvalidGradient;
+        }
+        for (self.weights.data, gradients.weights.data) |*weight, gradient| {
+            weight.* -= learning_rate * gradient;
+        }
+        for (self.bias.data, gradients.bias.data) |*bias, gradient| {
+            bias.* -= learning_rate * gradient;
+        }
+    }
+
+    pub fn parameterCount(self: Conv1d) usize {
+        return self.weights.data.len + self.bias.data.len;
+    }
+
+    fn validateInput(self: Conv1d, input: Matrix) !void {
+        if (input.rows == 0 or input.cols != try self.config.input.elementCount()) {
+            return error.DimensionMismatch;
+        }
+    }
+};
+
+pub const Conv1dGradients = struct {
+    input: Matrix,
+    weights: Matrix,
+    bias: Matrix,
+
+    pub fn deinit(self: *Conv1dGradients) void {
+        self.input.deinit();
+        self.weights.deinit();
+        self.bias.deinit();
+        self.* = undefined;
+    }
+};
+
 pub const ImageShape = struct {
     height: usize,
     width: usize,
@@ -460,6 +648,37 @@ test "conv2d forward and backward expose spatial arithmetic" {
     try testing.expectEqualSlices(f64, &.{ 1, 2, 1, 2, 4, 2, 1, 2, 1 }, gradients.input.data);
     try testing.expectEqualSlices(f64, &.{ 12, 16, 24, 28 }, gradients.weights.data);
     try testing.expectEqualSlices(f64, &.{4}, gradients.bias.data);
+}
+
+test "causal conv1d cannot observe future values" {
+    var prng = std.Random.DefaultPrng.init(5);
+    var convolution = try Conv1d.init(std.testing.allocator, .{
+        .input = .{ .steps = 4, .channels = 1 },
+        .out_channels = 1,
+        .kernel_size = 3,
+    }, prng.random());
+    defer convolution.deinit();
+    @memset(convolution.weights.data, 1);
+    @memset(convolution.bias.data, 0);
+    var first = try Matrix.init(std.testing.allocator, 1, 4);
+    defer first.deinit();
+    for (first.data, 1..) |*value, integer| value.* = @floatFromInt(integer);
+    var changed = try Matrix.init(std.testing.allocator, 1, 4);
+    defer changed.deinit();
+    changed.data[0] = 1;
+    changed.data[1] = 2;
+    changed.data[2] = 30;
+    changed.data[3] = 40;
+    var first_output = try convolution.forward(first);
+    defer first_output.deinit();
+    var changed_output = try convolution.forward(changed);
+    defer changed_output.deinit();
+    try std.testing.expectEqualSlices(f64, &.{ 1, 3, 6, 9 }, first_output.data);
+    try std.testing.expectEqualSlices(
+        f64,
+        first_output.data[0..2],
+        changed_output.data[0..2],
+    );
 }
 
 test "conv2d handles padding and validates gradient updates" {

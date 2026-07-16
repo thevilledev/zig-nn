@@ -59,8 +59,8 @@ event contract and extension steps.
   and an external audio pipeline.
 - **Language and sequences:** Tokenizer Lab → Word2Vec → Text Classifier →
   Sequence Tagging → Decoding Lab → Seq2Seq → Machine Translation → Semantic
-  Search → ANN Search, then compare GRU Sequence with Transformer Encoder
-  before exploring TinyGPT.
+  Search → ANN Search → CTC Alignment, then compare GRU Sequence, Time Series,
+  Node Classification, and Transformer Encoder before exploring TinyGPT.
 - **Applied systems:** DQN, TurboQuant, GPU Benchmark, Serving, and the TinyGPT
   OpenAI-compatible server show where learning code meets evaluation,
   compression, performance, and interfaces.
@@ -108,7 +108,10 @@ event contract and extension steps.
 | **Machine Translation** — `nnctl run machine-translation` | How do teacher forcing and sequence search fit together? Compare greedy and length-normalized beam output, then inspect the masked source alignment. | [entrypoint](machine_translation/machine_translation.zig), [translation stack](../src/translation.zig), [beam search](../src/decoding.zig) | [NLP and retrieval](../docs/research.md#nlp-structured-prediction-and-retrieval) |
 | **Semantic Search** — `nnctl run semantic-search` | Can paired encoders learn a shared retrieval space with in-batch negatives? Inspect recall@1, MRR, and cosine rankings. | [entrypoint](semantic_search/semantic_search.zig), [retrieval](../src/retrieval.zig), [embeddings](../src/embeddings.zig) | [NLP and retrieval](../docs/research.md#nlp-structured-prediction-and-retrieval) |
 | **ANN Search** — `nnctl run ann-search` | How much exact-retrieval work can an approximate index avoid? Compare IVF probes by recall@5, candidate count, and measured query latency. | [entrypoint](ann_search/ann_search.zig), [retrieval index](../src/retrieval.zig) | [NLP and retrieval](../docs/research.md#nlp-structured-prediction-and-retrieval) |
+| **CTC Alignment** — `nnctl run ctc-alignment` | How can unsegmented frame scores learn a character target? Inspect blank-aware forward-backward loss, greedy collapse, and prefix-beam decoding. | [entrypoint](ctc_alignment/ctc_alignment.zig), [CTC](../src/ctc.zig) | [NLP and retrieval](../docs/research.md#nlp-structured-prediction-and-retrieval) |
 | **GRU Sequence** — `nnctl run gru-sequence` | Can a recurrent state retain one marked bit through distractors? Inspect held-out accuracy and device telemetry. | [entrypoint](gru_sequence/gru_sequence.zig), [recurrent](../src/recurrent.zig) | [Sequence models and reinforcement learning](../docs/research.md#sequence-models-and-reinforcement-learning) |
+| **Time Series** — `nnctl run time-series` | Can a causal Conv1d beat a persistence forecast? Compare masked rolling-window MSE, inspect the learned kernel, and verify the causal boundary. | [entrypoint](time_series/time_series.zig), [causal convolution](../src/spatial.zig), [masked loss](../src/sequence.zig) | [Sequence models and reinforcement learning](../docs/research.md#sequence-models-and-reinforcement-learning) |
+| **Node Classification** — `nnctl run node-classification` | When does graph structure add signal beyond node features? Compare a feature-only classifier with mean-aggregation graph convolution on the same split. | [entrypoint](node_classification/node_classification.zig), [sparse graphs](../src/graph.zig) | [Sequence models and reinforcement learning](../docs/research.md#sequence-models-and-reinforcement-learning) |
 | **Transformer Encoder** — `nnctl run transformer-encoder` | Can bidirectional attention retrieve a value from a distant token? Inspect held-out accuracy and training readbacks. | [entrypoint](transformer_encoder/transformer_encoder.zig), [transformer](../src/transformer.zig) | [Transformers](../docs/research.md#transformers-and-tiny-gpt) |
 | **TinyGPT** — `nnctl run tiny-gpt` | How do a decoder-only Transformer, KV cache, training loop, and sampler fit together? Inspect loss and seeded generated text. | [entrypoint](tiny_gpt/tiny_gpt.zig), [notes](tiny_gpt/README.md), [model](tiny_gpt/model.zig), [transformer](../src/transformer.zig) | [Transformers and TinyGPT](../docs/research.md#transformers-and-tiny-gpt) |
 
