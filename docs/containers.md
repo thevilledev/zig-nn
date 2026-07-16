@@ -27,7 +27,9 @@ stage uses Chainguard's distroless `glibc-dynamic` runtime and adds only the
 benchmark plus its NVRTC, cuBLAS, and cuBLASLt shared libraries. This keeps
 scanner-visible package metadata for glibc, libgcc, and libstdc++ without
 retaining Ubuntu. The compiler, shell, package manager, CUDA headers, Nsight
-tools, and unrelated math libraries do not enter the final image.
+tools, and unrelated math libraries do not enter the final image. The CUDA
+executable targets the baseline CPU feature set so it does not inherit AVX-512
+or other optional instructions from the native image builder.
 
 Build an amd64 image on a native amd64 builder for a Verda GPU worker, then
 test it on a host with the

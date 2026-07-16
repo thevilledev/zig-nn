@@ -53,7 +53,7 @@ COPY build.zig build.zig.zon ./
 COPY benchmarks/ benchmarks/
 COPY experiments/ experiments/
 COPY src/ src/
-RUN zig build benchmark-exe -Dgpu=cuda --prefix /opt/zig-nn \
+RUN zig build benchmark-exe -Dgpu=cuda -Dcpu=baseline --prefix /opt/zig-nn \
     && mkdir --parents /opt/zig-nn/cuda-libs \
     && cp --archive \
         /usr/local/cuda/lib64/libcublas.so.* \
