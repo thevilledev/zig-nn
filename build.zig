@@ -37,6 +37,7 @@ const experiments = [_]Experiment{
     .{ .name = "seq2seq", .src = "experiments/seq2seq/seq2seq.zig", .description = "Learn encoder-decoder alignment with cross-attention" },
     .{ .name = "machine_translation", .src = "experiments/machine_translation/machine_translation.zig", .description = "Compare greedy and beam decoding in a teacher-forced translation stack" },
     .{ .name = "semantic_search", .src = "experiments/semantic_search/semantic_search.zig", .description = "Learn dual-encoder retrieval with symmetric InfoNCE" },
+    .{ .name = "ann_search", .src = "experiments/ann_search/ann_search.zig", .description = "Compare exact cosine retrieval with an inverted-file index" },
     .{ .name = "cnn", .src = "experiments/cnn/cnn.zig", .description = "Learn image patterns with convolution and max pooling" },
     .{ .name = "autoencoder", .src = "experiments/autoencoder/autoencoder.zig", .description = "Learn denoising and latent representations with an autoencoder" },
     .{ .name = "gru_sequence", .src = "experiments/gru_sequence/gru_sequence.zig", .description = "Learn selective sequence memory with a GRU" },

@@ -127,6 +127,16 @@ func TestResolveSemanticSearchExperiment(t *testing.T) {
 	}
 }
 
+func TestResolveANNSearchExperiment(t *testing.T) {
+	experiment, ok := ResolveExperiment("ann_search")
+	if !ok {
+		t.Fatal("expected ann_search to resolve")
+	}
+	if experiment.Step != "run_ann_search" || !experiment.Quick {
+		t.Fatalf("unexpected ANN search experiment: %+v", experiment)
+	}
+}
+
 func TestResolveCNNExperiment(t *testing.T) {
 	experiment, ok := ResolveExperiment("cnn")
 	if !ok {
