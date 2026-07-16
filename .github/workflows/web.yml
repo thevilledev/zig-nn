@@ -1,0 +1,35 @@
+name: Web
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  web:
+    name: Learning Lab
+    runs-on: avrea-ubuntu-latest-2-vcpu
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 25.9.0
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Check Svelte and TypeScript
+        run: npm run check
+      - name: Run unit and component tests
+        run: npm test
+      - name: Build production bundle
+        run: npm run build
