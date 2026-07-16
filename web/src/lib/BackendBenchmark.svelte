@@ -17,11 +17,11 @@
     <span>median synchronized time</span>
   </div>
   {#if cases.length}
-    <svg class="benchmark-chart" viewBox={`0 0 ${width} ${cases.length * rowHeight + 34}`} role="img" aria-label="CPU and Metal matrix multiplication timing comparison">
+    <svg class="benchmark-chart" viewBox={`0 0 ${width} ${cases.length * rowHeight + 34}`} role="img" aria-label={`CPU and ${accelerator} matrix multiplication timing comparison`}>
       {#each cases as item, index}
         <text class="row-label" x="0" y={index * rowHeight + 25}>{item.size}²</text>
         <rect class="cpu-bar" x={left} y={index * rowHeight + 8} width={(item.cpu_ms / maxMs) * chartWidth} height="18" />
-        <rect class="metal-bar" x={left} y={index * rowHeight + 32} width={(item.accelerator_ms / maxMs) * chartWidth} height="18" />
+        <rect class="accelerator-bar" x={left} y={index * rowHeight + 32} width={(item.accelerator_ms / maxMs) * chartWidth} height="18" />
         <text class="bar-label" x={left + 6} y={index * rowHeight + 22}>CPU {item.cpu_ms.toFixed(2)} ms</text>
         <text class="bar-label" x={left + 6} y={index * rowHeight + 46}>{accelerator} {item.accelerator_ms.toFixed(2)} ms</text>
         <text class="speedup-label" x={width - 2} y={index * rowHeight + 27} text-anchor="end">{item.speedup.toFixed(2)}×</text>
@@ -40,6 +40,6 @@
       </table>
     </div>
   {:else}
-    <p class="empty-visual">Benchmark cases appear as the synchronized CPU and Metal runs complete.</p>
+    <p class="empty-visual">Benchmark cases appear as the synchronized CPU and accelerator runs complete.</p>
   {/if}
 </section>

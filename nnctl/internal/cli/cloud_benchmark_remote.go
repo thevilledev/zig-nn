@@ -14,82 +14,20 @@ import (
 	"time"
 
 	"nnctl/internal/cloud/verda"
+	cloudworkflow "nnctl/internal/cloud/workflow"
 	"nnctl/internal/zig"
 )
 
 func waitForCloudBenchmarkInstance(ctx context.Context, client cloudBenchmarkClient, instanceID string, timeout, poll time.Duration) (verda.Instance, error) {
-	deadline := time.Now().Add(timeout)
-	for {
-		instances, err := client.ListInstances(ctx, "")
-		if err != nil {
-			return verda.Instance{}, fmt.Errorf("list Verda instances while waiting for %s: %w", instanceID, err)
-		}
-		for _, instance := range instances {
-			if instance.ID != instanceID {
-				continue
-			}
-			status := strings.ToLower(strings.TrimSpace(instance.Status))
-			if cloudBenchmarkInstanceFailed(status) {
-				return verda.Instance{}, fmt.Errorf("benchmark instance %s entered terminal status %q", instanceID, instance.Status)
-			}
-			if status == "running" && instance.IP != nil && strings.TrimSpace(*instance.IP) != "" {
-				return instance, nil
-			}
-		}
-		if time.Now().After(deadline) {
-			return verda.Instance{}, fmt.Errorf("timed out waiting for benchmark instance %s to be running with an IP", instanceID)
-		}
-		timer := time.NewTimer(poll)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return verda.Instance{}, ctx.Err()
-		case <-timer.C:
-		}
-	}
-}
-
-func cloudBenchmarkInstanceFailed(status string) bool {
-	switch status {
-	case "deleted", "deleting", "error", "failed", "canceled", "cancelled":
-		return true
-	default:
-		return false
-	}
+	return cloudworkflow.WaitInstance(ctx, client, instanceID, timeout, poll)
 }
 
 func waitForCloudBenchmarkSSH(ctx context.Context, ssh string, baseArgs []string, host string, timeout, poll time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	var lastErr error
-	for {
-		args := append(append([]string{}, baseArgs...), host, "true")
-		cmd := exec.CommandContext(ctx, ssh, args...)
-		cmd.Stdout = io.Discard
-		cmd.Stderr = io.Discard
-		if err := cmd.Run(); err == nil {
-			return nil
-		} else {
-			lastErr = err
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("timed out waiting for SSH on %s: %w", host, lastErr)
-		}
-		timer := time.NewTimer(poll)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return ctx.Err()
-		case <-timer.C:
-		}
-	}
+	return cloudworkflow.WaitSSH(ctx, ssh, baseArgs, host, timeout, poll)
 }
 
 func cloudBenchmarkSSHArgs(knownHosts string) []string {
-	return []string{
-		"-o", "UserKnownHostsFile=" + knownHosts,
-		"-o", "StrictHostKeyChecking=accept-new",
-		"-o", "ConnectTimeout=10",
-	}
+	return cloudworkflow.SSHArgs(knownHosts)
 }
 
 func remoteBenchmarkCommand(remoteDir, backend, filter string, quick bool) string {
@@ -167,18 +105,7 @@ func (a *app) runCloudBenchmarkCommand(ctx context.Context, dir string, env []st
 }
 
 func cleanupCloudBenchmark(ctx context.Context, client cloudBenchmarkClient, baseURL, instanceID, cloneID, sourceID string) error {
-	volumeIDs := []string(nil)
-	if strings.TrimSpace(cloneID) != "" {
-		volumeIDs = []string{cloneID}
-	}
-	_, err := verda.Destroy(ctx, client, verda.DestroyOptions{
-		InstanceIDs:       []string{instanceID},
-		VolumeIDs:         volumeIDs,
-		SourceOSVolumeID:  sourceID,
-		DeletePermanently: true,
-		BaseURL:           baseURL,
-	})
-	return err
+	return cloudworkflow.Destroy(ctx, client, instanceID, cloneID, sourceID, baseURL)
 }
 
 func writeCloudBenchmarkCSV(path string, metadata cloudBenchmarkMetadata, output []byte) error {

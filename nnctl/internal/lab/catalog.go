@@ -140,25 +140,25 @@ var learningSpecs = []ExperimentSpec{
 			{Name: "loss", Label: "Training loss"},
 			{Name: "accuracy", Label: "Held-out accuracy"},
 		},
-		Backends:       []string{"cpu", "metal"},
+		Backends:       []string{"cpu", "metal", "cuda"},
 		DefaultBackend: "cpu",
 		BackendFlag:    true,
 	},
 	{
 		ID:          "gpu-benchmark",
 		Category:    "Accelerators",
-		Title:       "When Metal Wins",
-		Description: "Compare complete CPU and Metal matrix multiplications at several sizes, including synchronization and a numerical agreement check.",
+		Title:       "When a GPU Wins",
+		Description: "Compare complete CPU and GPU matrix multiplications at several sizes, including synchronization and a numerical agreement check.",
 		Question:    "When does enough parallel work offset the cost of preparing and synchronizing a GPU operation?",
-		Observe:     []string{"Whether small matrices favor CPU execution", "Where the timing curves cross", "How many transfers, kernels, and synchronizations Metal performs"},
+		Observe:     []string{"Whether small matrices favor CPU execution", "Where the timing curves cross", "How many transfers, kernels, and synchronizations the GPU performs"},
 		Interpretation: []string{
 			"A GPU is not automatically faster: launch and synchronization overhead can dominate small operations.",
 			"Speedup is meaningful only alongside the sampled numerical error and the exact backend selected by the native process.",
 		},
 		Visualization:  "backend_benchmark",
-		Sources:        []string{"experiments/gpu_benchmark/gpu_benchmark.zig", "src/metal_backend.zig", "src/backend.zig"},
+		Sources:        []string{"experiments/gpu_benchmark/gpu_benchmark.zig", "src/backend.zig"},
 		Metrics:        []MetricSpec{},
-		Backends:       []string{"metal"},
+		Backends:       []string{"metal", "cuda"},
 		DefaultBackend: "metal",
 		Optimize:       "ReleaseFast",
 	},
@@ -184,7 +184,7 @@ var learningSpecs = []ExperimentSpec{
 			{Name: "recall_at_one", Label: "Recall at one"},
 			{Name: "mean_reciprocal_rank", Label: "Mean reciprocal rank"},
 		},
-		Backends:       []string{"cpu", "metal"},
+		Backends:       []string{"cpu", "metal", "cuda"},
 		DefaultBackend: "cpu",
 		BackendFlag:    true,
 	},
@@ -225,9 +225,19 @@ func ResolveExperiment(id string) (ExperimentSpec, bool) {
 	return ExperimentSpec{}, false
 }
 
+type RunTarget string
+
+const (
+	RunTargetLocal RunTarget = "local"
+	RunTargetCloud RunTarget = "cloud"
+)
+
 type RunOptions struct {
-	Backend   string
-	Arguments []string
+	Backend          string
+	Arguments        []string
+	Target           RunTarget
+	WorkerID         string
+	AcknowledgeDirty bool
 }
 
 func BuildRunOptions(spec ExperimentSpec, backend string, values map[string]json.Number) (RunOptions, error) {
@@ -268,7 +278,7 @@ func BuildRunOptions(spec ExperimentSpec, backend string, values map[string]json
 		}
 		args = append(args, parameter.Flag, formatNumber(value))
 	}
-	return RunOptions{Backend: backend, Arguments: args}, nil
+	return RunOptions{Backend: backend, Arguments: args, Target: RunTargetLocal}, nil
 }
 
 func contains(values []string, wanted string) bool {

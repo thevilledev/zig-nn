@@ -57,4 +57,8 @@ func TestBuildRunOptionsDefaultsAndValidation(t *testing.T) {
 	if err != nil || !strings.Contains(strings.Join(metal.Arguments, " "), "--backend metal") {
 		t.Fatalf("metal options = %#v, %v", metal, err)
 	}
+	cuda, err := BuildRunOptions(optimizer, "cuda", nil)
+	if err != nil || !strings.Contains(strings.Join(cuda.Arguments, " "), "--backend cuda") {
+		t.Fatalf("cuda options = %#v, %v", cuda, err)
+	}
 }

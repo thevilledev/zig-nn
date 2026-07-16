@@ -1,4 +1,14 @@
-import type { Backend, Capabilities, ExperimentSpec, RunEvent } from './types';
+import type {
+  Backend,
+  Capabilities,
+  CloudDeployRequest,
+  CloudOptions,
+  CloudStatus,
+  CloudWorker,
+  ExecutionTarget,
+  ExperimentSpec,
+  RunEvent
+} from './types';
 
 interface APIErrorBody {
   error?: { message?: string };
@@ -23,15 +33,72 @@ export async function loadCapabilities(): Promise<Capabilities> {
   return parseResponse<Capabilities>(await fetch('/api/capabilities'));
 }
 
-export async function startRun(experiment: string, backend: Backend, parameters: Record<string, number>): Promise<string> {
+export async function startRun(
+  experiment: string,
+  backend: Backend,
+  parameters: Record<string, number>,
+  target: ExecutionTarget = 'local',
+  workerID = '',
+  acknowledgeCommittedHead = false
+): Promise<string> {
+  const request: Record<string, unknown> = { experiment, backend, parameters };
+  if (target === 'cloud') {
+    request.target = { kind: 'cloud', worker_id: workerID };
+    request.acknowledge_committed_head = acknowledgeCommittedHead;
+  }
   const body = await parseResponse<{ id: string }>(
     await fetch('/api/runs', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ experiment, backend, parameters })
+      body: JSON.stringify(request)
     })
   );
   return body.id;
+}
+
+export async function loadCloudStatus(): Promise<CloudStatus> {
+  return parseResponse<CloudStatus>(await fetch('/api/cloud/status'));
+}
+
+export async function loadCloudOptions(): Promise<CloudOptions> {
+  return parseResponse<CloudOptions>(await fetch('/api/cloud/options'));
+}
+
+export async function loadCloudWorkers(): Promise<CloudWorker[]> {
+  return parseResponse<CloudWorker[]>(await fetch('/api/cloud/workers'));
+}
+
+export async function deployCloudWorker(request: CloudDeployRequest): Promise<CloudWorker> {
+  return parseResponse<CloudWorker>(
+    await fetch('/api/cloud/workers', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request)
+    })
+  );
+}
+
+export async function destroyCloudWorker(id: string): Promise<void> {
+  const response = await fetch(`/api/cloud/workers/${id}`, { method: 'DELETE' });
+  if (!response.ok) {
+    const body = (await response.json()) as APIErrorBody;
+    throw new Error(body.error?.message ?? `Destroy failed (${response.status})`);
+  }
+}
+
+export function connectCloudWorker(
+  id: string,
+  onWorker: (worker: CloudWorker) => void,
+  onConnectionError: () => void
+): () => void {
+  const source = new EventSource(`/api/cloud/workers/${id}/events`);
+  source.addEventListener('worker', (message) => {
+    const worker = JSON.parse((message as MessageEvent<string>).data) as CloudWorker;
+    onWorker(worker);
+    if (worker.state === 'destroyed') source.close();
+  });
+  source.onerror = onConnectionError;
+  return () => source.close();
 }
 
 export async function cancelRun(id: string): Promise<void> {
@@ -42,7 +109,7 @@ export async function cancelRun(id: string): Promise<void> {
   }
 }
 
-const eventTypes: RunEvent['type'][] = ['run_started', 'metric', 'snapshot', 'run_completed', 'run_failed', 'log'];
+const eventTypes: RunEvent['type'][] = ['run_started', 'metric', 'snapshot', 'run_completed', 'run_failed', 'log', 'run_status'];
 
 export function connectRun(
   id: string,

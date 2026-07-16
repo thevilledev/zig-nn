@@ -77,6 +77,12 @@ cd web && npm run dev
 Vite proxies `/api` to port 8091. See [Real-Time Learning Lab](learning-lab.md)
 for the supported controls and event format.
 
+To deploy a Verda CUDA worker from the same UI, configure the `nnctl/verda`
+keyring credentials described in the learning-lab guide and start the server
+with `nnctl lab --cloud`. Cloud control remains loopback-only, uploads committed
+`HEAD`, streams the native experiment protocol over SSH, and defaults to
+destroying the worker after the run.
+
 You can change the optimization mode used by `nnctl`:
 
 ```bash

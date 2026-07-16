@@ -32,6 +32,90 @@ export type Backend = 'cpu' | 'metal' | 'cuda' | 'rocm';
 export interface Capabilities {
   platform: string;
   backends: Backend[];
+  cloud_enabled?: boolean;
+}
+
+export type ExecutionTarget = 'local' | 'cloud';
+
+export interface RepositoryState {
+  revision: string;
+  dirty: boolean;
+}
+
+export interface CloudStatus {
+  enabled: boolean;
+  configured: boolean;
+  provider: string;
+  error?: string;
+  repository: RepositoryState;
+}
+
+export interface CloudPrice {
+  instance_type: string;
+  display_name?: string;
+  model?: string;
+  manufacturer?: string;
+  gpu_count: number;
+  location_code: string;
+  market: 'spot' | 'on-demand';
+  is_spot: boolean;
+  price_per_hour?: number;
+  price_known: boolean;
+  currency?: string;
+  available: boolean;
+}
+
+export interface CloudSSHKey {
+  id: string;
+  name: string;
+  fingerprint: string;
+}
+
+export interface CloudVolume {
+  id: string;
+  name?: string;
+  status?: string;
+  location?: string;
+  is_os_volume?: boolean;
+}
+
+export interface CloudOptions {
+  provider: string;
+  prices: CloudPrice[];
+  ssh_keys: CloudSSHKey[];
+  volumes: CloudVolume[];
+}
+
+export type CloudWorkerState = 'provisioning' | 'ready' | 'busy' | 'destroying' | 'failed' | 'destroyed';
+
+export interface CloudWorker {
+  id: string;
+  provider: string;
+  state: CloudWorkerState;
+  message: string;
+  instance_id?: string;
+  instance_type: string;
+  hostname?: string;
+  location?: string;
+  market: string;
+  ip?: string;
+  backends: Backend[];
+  price_per_hour?: number;
+  currency?: string;
+  auto_destroy: boolean;
+  created_at: string;
+  ready_at?: string;
+  expires_at?: string;
+  repository_commit?: string;
+}
+
+export interface CloudDeployRequest {
+  instance_type: string;
+  market: 'spot' | 'on-demand';
+  location_code: string;
+  ssh_key_id: string;
+  source_os_volume_id: string;
+  auto_destroy: boolean;
 }
 
 export interface MetricSpec {
@@ -150,11 +234,15 @@ export interface LogData {
   message: string;
 }
 
+export interface RunStatusData {
+  message: string;
+}
+
 export interface RunEvent<T = unknown> {
   v: number;
   run_id: string;
   seq: number;
-  type: 'run_started' | 'metric' | 'snapshot' | 'run_completed' | 'run_failed' | 'log';
+  type: 'run_started' | 'metric' | 'snapshot' | 'run_completed' | 'run_failed' | 'log' | 'run_status';
   experiment: string;
   step?: number;
   total_steps?: number;
@@ -187,4 +275,5 @@ export interface RunState {
   logs: string[];
   result: Record<string, unknown> | null;
   error: string | null;
+  phase: string;
 }

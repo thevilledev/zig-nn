@@ -14,6 +14,19 @@ mise run lab
 Open the printed `http://127.0.0.1:8091` URL. Only one experiment runs at a
 time. Runs and their event history live in memory until `nnctl lab` exits.
 
+To enable Verda worker deployment and remote CUDA runs, start the same local
+server with cloud control explicitly enabled:
+
+```bash
+cd nnctl
+go run ./cmd/nnctl lab --cloud
+```
+
+Cloud control is accepted only on a loopback bind address. The browser never
+receives provider credentials or SSH private keys; the local Go process reads
+Verda credentials from the OS keyring and performs provider, Git, rsync, and
+SSH operations itself.
+
 The live labs are grouped into a learning route:
 
 - **Learning XOR:** loss, topology, and four truth-table probabilities;
@@ -23,7 +36,7 @@ The live labs are grouped into a learning route:
   probability field;
 - **Comparing Optimizers:** synchronized SGD, momentum, and AdamW loss,
   accuracy, decision boundaries, and runtime telemetry;
-- **When Metal Wins:** synchronized CPU/Metal matrix timings, speedup,
+- **When a GPU Wins:** synchronized CPU/GPU matrix timings, speedup,
   numerical error, transfers, kernels, GEMMs, and synchronization;
 - **Learning Semantic Search:** InfoNCE loss, recall, reciprocal rank, a live
   query/document cosine-similarity grid, and inspectable rankings.
@@ -57,12 +70,12 @@ mise run web:build
 
 ## HTTP Interface
 
-- `GET /api/capabilities` returns the host platform and backends this lab can
-  build. The initial accelerator UI exposes only CPU and Metal on macOS.
+- `GET /api/capabilities` returns the host platform, local backends, and whether
+  cloud control was enabled. Local acceleration exposes CPU and Metal on macOS.
 - `GET /api/experiments` returns the allowlisted learning metadata, metric
   definitions, backend contract, and numeric parameter constraints.
 - `POST /api/runs` accepts
-  `{ "experiment": "...", "backend": "cpu|metal", "parameters": { ... } }`
+  `{ "experiment": "...", "backend": "cpu|metal|cuda", "parameters": { ... } }`
   and returns a run ID.
 - `GET /api/runs/{id}/events` streams ordered Server-Sent Events and honors
   `Last-Event-ID` for replay.
@@ -72,6 +85,72 @@ Unknown experiments, arbitrary flags, unsupported backends, unknown
 parameters, invalid ranges, and concurrent starts are rejected by the Go
 server. Accelerator selection is exact: an explicit Metal request either
 reports Metal from the native process or fails instead of falling back to CPU.
+
+With `--cloud`, the server also exposes:
+
+- `GET /api/cloud/status` for keyring configuration and the committed/dirty
+  repository state;
+- `GET /api/cloud/options` for available single-NVIDIA-GPU prices, SSH keys,
+  and ready golden OS volumes;
+- `GET|POST /api/cloud/workers` to inspect or asynchronously create the one
+  worker managed by this lab process;
+- `GET /api/cloud/workers/{id}/events` for worker lifecycle SSE;
+- `DELETE /api/cloud/workers/{id}` to permanently destroy the instance and its
+  cloned OS volume while protecting the golden source volume.
+
+A remote run extends the normal request with an allowlisted target:
+
+```json
+{
+  "experiment": "optimizer-lab",
+  "backend": "cuda",
+  "parameters": { "steps": 200 },
+  "target": { "kind": "cloud", "worker_id": "..." },
+  "acknowledge_committed_head": true
+}
+```
+
+The acknowledgement is required when the local tree is dirty because cloud
+runs always archive committed `HEAD`; uncommitted and untracked files are never
+uploaded. The run stream adds `run_status` events for infrastructure phases,
+then carries the same native experiment events as a local run.
+
+## Cloud Setup And Cleanup
+
+The existing Verda commands and the lab share the `nnctl/verda` keyring service
+with accounts `client_id` and `client_secret`. On macOS, store credentials with:
+
+```bash
+security add-generic-password -U -s nnctl/verda -a client_id -w "$VERDA_CLIENT_ID"
+security add-generic-password -U -s nnctl/verda -a client_secret -w "$VERDA_CLIENT_SECRET"
+```
+
+On Linux, store the same service/account pairs in the desktop Secret Service
+keyring. Verify access and find the SSH key ID with:
+
+```bash
+nnctl cloud ssh-keys
+nnctl cloud pricing --single-gpu
+nnctl cloud volume
+```
+
+The UI prefers a ready golden OS volume in the selected location. If none is
+available, it can boot the existing CUDA base image and apply the embedded
+bootstrap script; this is slower because Zig and CUDA tooling finish installing
+after the instance starts.
+
+Workers default to spot capacity and automatic cleanup. They are destroyed
+after a run (including cancellation or failure), after 30 minutes idle, or when
+the lab exits normally. Unchecking automatic cleanup keeps a ready worker for
+multiple experiments until **Destroy worker** is used. Resource IDs—not
+credentials—are journaled under the OS user-cache directory so a later lab
+process can identify and destroy a worker left by a crash. The UI deliberately
+does not adopt or destroy unrelated Verda instances.
+
+The CPU-capable structured experiments can execute on the remote CPU.
+Optimizer Lab and Semantic Search additionally allow explicit CUDA, while the
+GPU benchmark uses CUDA on a cloud worker. CUDA requests fail if the remote
+preflight or native process cannot select CUDA.
 
 ## Experiment Event Protocol
 

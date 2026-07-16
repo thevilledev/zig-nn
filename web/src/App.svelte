@@ -1,14 +1,37 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
-  import { cancelRun, connectRun, loadCapabilities, loadExperiments, startRun } from './lib/api';
+  import {
+    cancelRun,
+    connectCloudWorker,
+    connectRun,
+    deployCloudWorker,
+    destroyCloudWorker,
+    loadCapabilities,
+    loadCloudOptions,
+    loadCloudStatus,
+    loadCloudWorkers,
+    loadExperiments,
+    startRun
+  } from './lib/api';
+  import CloudWorkerPanel from './lib/CloudWorkerPanel.svelte';
   import ExecutionPanel from './lib/ExecutionPanel.svelte';
   import MetricChart from './lib/MetricChart.svelte';
   import Visualization from './lib/Visualization.svelte';
   import { initialRunState, reduceRunEvent } from './lib/run-state';
-  import type { Backend, Capabilities, ExperimentSpec, RunState } from './lib/types';
+  import type {
+    Backend,
+    Capabilities,
+    CloudDeployRequest,
+    CloudOptions,
+    CloudStatus,
+    CloudWorker,
+    ExecutionTarget,
+    ExperimentSpec,
+    RunState
+  } from './lib/types';
 
   let experiments = $state<ExperimentSpec[]>([]);
-  let capabilities = $state<Capabilities>({ platform: '', backends: ['cpu'] });
+  let capabilities = $state<Capabilities>({ platform: '', backends: ['cpu'], cloud_enabled: false });
   let selectedID = $state('');
   let backend = $state<Backend>('cpu');
   let parameters = $state<Record<string, number>>({});
@@ -18,14 +41,24 @@
   let connectionMessage = $state('');
   let followLive = $state(true);
   let snapshotIndex = $state(-1);
+  let executionTarget = $state<ExecutionTarget>('local');
+  let cloudStatus = $state<CloudStatus | null>(null);
+  let cloudOptions = $state<CloudOptions | null>(null);
+  let cloudWorker = $state<CloudWorker | null>(null);
+  let cloudLoading = $state(false);
+  let cloudError = $state<string | null>(null);
+  let acknowledgeCommittedHead = $state(false);
   let closeStream: (() => void) | null = null;
+  let closeCloudStream: (() => void) | null = null;
 
   let selected = $derived(experiments.find((experiment) => experiment.id === selectedID) ?? null);
-  let availableBackends = $derived(selected?.backends.filter((candidate) => capabilities.backends.includes(candidate)) ?? []);
+  let targetBackends = $derived(executionTarget === 'cloud' ? (cloudWorker?.backends ?? []) : capabilities.backends);
+  let availableBackends = $derived(selected?.backends.filter((candidate) => targetBackends.includes(candidate)) ?? []);
   let selectedSnapshot = $derived(snapshotIndex >= 0 ? run.snapshots[snapshotIndex] : undefined);
   let latestLoss = $derived(run.metrics.loss?.at(-1)?.value);
   let progress = $derived(run.totalSteps ? Math.min(100, (run.step / run.totalSteps) * 100) : 0);
   let running = $derived(run.status === 'starting' || run.status === 'running');
+  let targetReady = $derived(executionTarget === 'local' || cloudWorker?.state === 'ready');
 
   $effect(() => {
     const count = run.snapshots.length;
@@ -37,19 +70,24 @@
       [experiments, capabilities] = await Promise.all([loadExperiments(), loadCapabilities()]);
       const requested = new URLSearchParams(window.location.search).get('experiment');
       selectExperiment(experiments.some((experiment) => experiment.id === requested) ? requested! : experiments[0]?.id ?? '');
+      if (capabilities.cloud_enabled) await initializeCloud();
     } catch (error) {
       loadingError = messageFor(error);
     }
   });
 
-  onDestroy(() => closeStream?.());
+  onDestroy(() => {
+    closeStream?.();
+    closeCloudStream?.();
+  });
 
   function selectExperiment(id: string) {
     closeStream?.();
     closeStream = null;
     selectedID = id;
     const experiment = experiments.find((candidate) => candidate.id === id);
-    const supported = experiment?.backends.filter((candidate) => capabilities.backends.includes(candidate)) ?? [];
+    const backends = executionTarget === 'cloud' ? (cloudWorker?.backends ?? []) : capabilities.backends;
+    const supported = experiment?.backends.filter((candidate) => backends.includes(candidate)) ?? [];
     backend = supported.includes(experiment?.default_backend ?? 'cpu') ? experiment!.default_backend : (supported[0] ?? 'cpu');
     parameters = Object.fromEntries((experiment?.parameters ?? []).map((parameter) => [parameter.name, parameter.default]));
     run = initialRunState();
@@ -60,6 +98,90 @@
     if (id) history.replaceState(null, '', `?experiment=${encodeURIComponent(id)}`);
   }
 
+  function selectExecutionTarget(target: ExecutionTarget) {
+    executionTarget = target;
+    const supported = selected?.backends.filter((candidate) => (target === 'cloud' ? (cloudWorker?.backends ?? []) : capabilities.backends).includes(candidate)) ?? [];
+    backend = supported.includes(selected?.default_backend ?? 'cpu') ? selected!.default_backend : (supported[0] ?? 'cpu');
+    actionError = null;
+  }
+
+  async function initializeCloud() {
+    cloudLoading = true;
+    cloudError = null;
+    try {
+      cloudStatus = await loadCloudStatus();
+      await refreshCloudWorker();
+      if (cloudWorker) connectWorkerEvents(cloudWorker.id);
+      if (cloudStatus.configured) {
+        cloudOptions = await loadCloudOptions();
+      }
+    } catch (error) {
+      cloudError = messageFor(error);
+    } finally {
+      cloudLoading = false;
+    }
+  }
+
+  async function refreshCloudWorker() {
+    try {
+      const workers = await loadCloudWorkers();
+      cloudWorker = workers[0] ?? null;
+      if (executionTarget === 'cloud' && cloudWorker?.state === 'ready' && selected && !availableBackends.includes(backend)) {
+        backend = availableBackends[0] ?? 'cpu';
+      }
+    } catch (error) {
+      cloudError = messageFor(error);
+    }
+  }
+
+  function connectWorkerEvents(id: string) {
+    closeCloudStream?.();
+    closeCloudStream = connectCloudWorker(
+      id,
+      (worker) => {
+        cloudWorker = worker;
+        cloudError = null;
+        if (executionTarget === 'cloud' && worker.state === 'ready' && selected) {
+          const supported = selected.backends.filter((candidate) => worker.backends.includes(candidate));
+          if (!supported.includes(backend)) backend = supported[0] ?? 'cpu';
+        }
+      },
+      () => {
+        if (cloudWorker?.state !== 'destroyed') cloudError = 'Reconnecting to cloud worker updates…';
+      }
+    );
+  }
+
+  async function deployWorker(request: CloudDeployRequest) {
+    cloudLoading = true;
+    cloudError = null;
+    try {
+      cloudWorker = await deployCloudWorker(request);
+      connectWorkerEvents(cloudWorker.id);
+      selectExecutionTarget('cloud');
+    } catch (error) {
+      cloudError = messageFor(error);
+    } finally {
+      cloudLoading = false;
+    }
+  }
+
+  async function destroyWorker(id: string) {
+    cloudLoading = true;
+    cloudError = null;
+    try {
+      await destroyCloudWorker(id);
+      closeCloudStream?.();
+      closeCloudStream = null;
+      await refreshCloudWorker();
+      selectExecutionTarget('local');
+    } catch (error) {
+      cloudError = messageFor(error);
+    } finally {
+      cloudLoading = false;
+    }
+  }
+
   function setParameter(name: string, value: string) {
     parameters = { ...parameters, [name]: Number(value) };
   }
@@ -67,17 +189,36 @@
   async function beginRun(event: SubmitEvent) {
     event.preventDefault();
     if (!selected || running) return;
+    if (executionTarget === 'cloud') {
+      try {
+        cloudStatus = await loadCloudStatus();
+      } catch (error) {
+        actionError = messageFor(error);
+        return;
+      }
+      if (cloudStatus.repository.dirty && !acknowledgeCommittedHead) {
+        actionError = 'Acknowledge that this cloud run uses committed HEAD and excludes local uncommitted changes.';
+        return;
+      }
+    }
     closeStream?.();
     run = initialRunState('starting');
     actionError = null;
-    connectionMessage = 'Starting native experiment…';
+    connectionMessage = executionTarget === 'cloud' ? 'Uploading committed source to the cloud worker…' : 'Starting native experiment…';
     followLive = true;
     snapshotIndex = -1;
     try {
       const runParameters = Object.fromEntries(
         (selected.parameters ?? []).map((parameter) => [parameter.name, parameters[parameter.name] ?? parameter.default])
       );
-      const id = await startRun(selected.id, backend, runParameters);
+      const id = await startRun(
+        selected.id,
+        backend,
+        runParameters,
+        executionTarget,
+        cloudWorker?.id ?? '',
+        acknowledgeCommittedHead
+      );
       run = { ...run, id };
       closeStream = connectRun(
         id,
@@ -157,16 +298,30 @@
       <aside class="lesson-sidebar">
         <form class="controls" onsubmit={beginRun}>
           <div class="section-heading"><h2>Run controls</h2><span>{backend}</span></div>
+          {#if capabilities.cloud_enabled}
+            <label class="field">
+              <span>Execution target</span>
+              <select value={executionTarget} disabled={running} onchange={(event) => selectExecutionTarget(event.currentTarget.value as ExecutionTarget)}>
+                <option value="local">Local machine</option>
+                <option value="cloud">Verda cloud worker</option>
+              </select>
+              <small>Cloud runs upload committed HEAD; credentials remain in the local OS keyring.</small>
+            </label>
+          {/if}
           {#if selected.backends.length > 1}
             <label class="field">
               <span>Backend</span>
               <select bind:value={backend} disabled={running} aria-describedby="help-backend">
-                {#each selected.backends as candidate}<option value={candidate} disabled={!capabilities.backends.includes(candidate)}>{candidate}{capabilities.backends.includes(candidate) ? '' : ' (unavailable)'}</option>{/each}
+                {#each selected.backends as candidate}<option value={candidate} disabled={!targetBackends.includes(candidate)}>{candidate}{targetBackends.includes(candidate) ? '' : ' (unavailable)'}</option>{/each}
               </select>
               <small id="help-backend">Explicit selection: accelerator requests never silently fall back to CPU.</small>
             </label>
           {:else if !availableBackends.length}
-            <p class="backend-unavailable">{selected.backends[0]} is unavailable on {capabilities.platform || 'this platform'}.</p>
+            <p class="backend-unavailable">
+              {executionTarget === 'cloud' && !cloudWorker
+                ? 'Deploy a cloud worker to enable its supported backends.'
+                : `${selected.backends[0]} is unavailable on ${executionTarget === 'cloud' ? 'this cloud worker' : (capabilities.platform || 'this platform')}.`}
+            </p>
           {/if}
           {#each selected.parameters as parameter}
             <label class="field">
@@ -185,11 +340,29 @@
               <small id={`help-${parameter.name}`}>{parameter.help}</small>
             </label>
           {/each}
+          {#if executionTarget === 'cloud' && cloudStatus?.repository.dirty}
+            <label class="dirty-acknowledgement">
+              <input type="checkbox" bind:checked={acknowledgeCommittedHead} disabled={running} required />
+              <span>Run committed HEAD; local uncommitted changes will not be uploaded.</span>
+            </label>
+          {/if}
           <div class="actions">
-            <button class="primary" type="submit" disabled={running || !availableBackends.length}>Run experiment</button>
+            <button class="primary" type="submit" disabled={running || !availableBackends.length || !targetReady}>Run experiment</button>
             <button type="button" onclick={stopRun} disabled={!running}>Cancel</button>
           </div>
         </form>
+
+        {#if capabilities.cloud_enabled && executionTarget === 'cloud'}
+          <CloudWorkerPanel
+            status={cloudStatus}
+            options={cloudOptions}
+            worker={cloudWorker}
+            loading={cloudLoading}
+            error={cloudError}
+            onDeploy={deployWorker}
+            onDestroyWorker={destroyWorker}
+          />
+        {/if}
 
         <section class="observe" aria-labelledby="observe-heading">
           <h2 id="observe-heading">What to observe</h2>
@@ -204,7 +377,7 @@
 
       <section class="workspace" aria-label="Experiment evidence">
         <div class="run-status" aria-live="polite">
-          <div><span>Status</span><strong class:status-error={run.status === 'failed'}>{connectionMessage || run.status}</strong></div>
+          <div><span>Status</span><strong class:status-error={run.status === 'failed'}>{connectionMessage || run.phase || run.status}</strong></div>
           <div><span>Selected step</span><strong>{selectedSnapshot?.step ?? run.step} / {run.totalSteps || '—'}</strong></div>
           <div><span>Backend</span><strong>{run.started?.execution?.selected_backend ?? backend}</strong></div>
           <div><span>Latest loss</span><strong>{latestLoss === undefined ? '—' : latestLoss.toPrecision(4)}</strong></div>
@@ -252,4 +425,4 @@
   {/if}
 </main>
 
-<footer>Local-only · events and run history remain in this process</footer>
+<footer>{capabilities.cloud_enabled ? 'Local control plane · cloud credentials never enter the browser' : 'Local-only'} · events and run history remain in this process</footer>

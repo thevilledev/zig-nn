@@ -16,7 +16,7 @@
   <section class="execution-panel" aria-labelledby="execution-heading">
     <div class="section-heading">
       <h3 id="execution-heading">Native execution</h3>
-      <span class:backend-metal={execution.selected_backend === 'metal'}>{execution.selected_backend}</span>
+      <span class:backend-accelerator={execution.selected_backend !== 'cpu'}>{execution.selected_backend}</span>
     </div>
     <dl class="execution-summary">
       <div><dt>Requested</dt><dd>{execution.requested_backend}</dd></div>

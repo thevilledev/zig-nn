@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import App from './App.svelte';
-import type { ExperimentSpec, RunEvent } from './lib/types';
+import type { CloudOptions, CloudStatus, CloudWorker, ExperimentSpec, RunEvent } from './lib/types';
 
 const experiment: ExperimentSpec = {
   id: 'xor-training',
@@ -25,6 +25,50 @@ const experiment: ExperimentSpec = {
 
 const capabilities = { platform: 'darwin', backends: ['cpu', 'metal'] } as const;
 
+const cloudStatus: CloudStatus = {
+  enabled: true,
+  configured: true,
+  provider: 'verda',
+  repository: { revision: '0123456789abcdef', dirty: false }
+};
+
+const cloudOptions: CloudOptions = {
+  provider: 'verda',
+  prices: [
+    {
+      instance_type: '1A100.22V',
+      model: 'A100',
+      manufacturer: 'NVIDIA',
+      gpu_count: 1,
+      location_code: 'FIN-02',
+      market: 'spot',
+      is_spot: true,
+      price_per_hour: 1.25,
+      price_known: true,
+      currency: 'EUR',
+      available: true
+    }
+  ],
+  ssh_keys: [{ id: 'key-1', name: 'lab', fingerprint: 'SHA256:test' }],
+  volumes: [{ id: 'volume-1', name: 'zig-nn-golden', status: 'detached', location: 'FIN-02', is_os_volume: true }]
+};
+
+const readyWorker: CloudWorker = {
+  id: 'worker-1',
+  provider: 'verda',
+  state: 'ready',
+  message: 'Ready for experiments',
+  instance_id: 'instance-1',
+  instance_type: '1A100.22V',
+  location: 'FIN-02',
+  market: 'spot',
+  backends: ['cpu', 'cuda'],
+  price_per_hour: 1.25,
+  currency: 'EUR',
+  auto_destroy: true,
+  created_at: '2026-07-16T08:00:00Z'
+};
+
 const benchmark: ExperimentSpec = {
   id: 'gpu-benchmark',
   category: 'Accelerators',
@@ -39,6 +83,20 @@ const benchmark: ExperimentSpec = {
   backends: ['metal'],
   default_backend: 'metal',
   parameters: null as unknown as ExperimentSpec['parameters']
+};
+
+const cudaExperiment: ExperimentSpec = {
+  ...experiment,
+  id: 'optimizer-lab',
+  category: 'Training',
+  title: 'Comparing Optimizers',
+  description: 'Compare optimizers.',
+  question: 'Which optimizer converges?',
+  visualization: 'optimizer_comparison',
+  metrics: [],
+  backends: ['cpu', 'cuda'],
+  default_backend: 'cpu',
+  parameters: []
 };
 
 class FakeEventSource {
@@ -158,5 +216,78 @@ describe('App', () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
     const request = fetchMock.mock.calls[2]?.[1] as RequestInit;
     expect(JSON.parse(String(request.body))).toEqual({ experiment: benchmark.id, backend: 'metal', parameters: {} });
+  });
+
+  it('deploys a cloud worker and submits a remote experiment target', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(response([experiment, cudaExperiment]))
+      .mockResolvedValueOnce(response({ ...capabilities, cloud_enabled: true }))
+      .mockResolvedValueOnce(response(cloudStatus))
+      .mockResolvedValueOnce(response([]))
+      .mockResolvedValueOnce(response(cloudOptions))
+      .mockResolvedValueOnce(response(readyWorker, 202))
+      .mockResolvedValueOnce(response(cloudStatus))
+      .mockResolvedValueOnce(response({ id: 'run-1' }, 202));
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal('EventSource', FakeEventSource);
+    render(App);
+
+    await screen.findByRole('heading', { name: 'Learning XOR', level: 1 });
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(5));
+    await fireEvent.change(screen.getByRole('combobox', { name: /Execution target/ }), { target: { value: 'cloud' } });
+    expect(await screen.findByRole('heading', { name: 'Cloud worker' })).toBeTruthy();
+    await fireEvent.click(screen.getByRole('button', { name: 'Deploy worker' }));
+
+    await waitFor(() => expect(screen.getByText('Ready for experiments')).toBeTruthy());
+    const deployRequest = fetchMock.mock.calls[5]?.[1] as RequestInit;
+    expect(JSON.parse(String(deployRequest.body))).toEqual({
+      instance_type: '1A100.22V',
+      market: 'spot',
+      location_code: 'FIN-02',
+      ssh_key_id: 'key-1',
+      source_os_volume_id: 'volume-1',
+      auto_destroy: true
+    });
+
+    await fireEvent.change(screen.getByRole('combobox', { name: 'Experiment' }), { target: { value: cudaExperiment.id } });
+    await screen.findByRole('heading', { name: 'Comparing Optimizers', level: 1 });
+    await fireEvent.change(screen.getByRole('combobox', { name: /Backend/ }), { target: { value: 'cuda' } });
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Run experiment' }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(8));
+    const runRequest = fetchMock.mock.calls[7]?.[1] as RequestInit;
+    expect(JSON.parse(String(runRequest.body))).toMatchObject({
+      experiment: 'optimizer-lab',
+      backend: 'cuda',
+      target: { kind: 'cloud', worker_id: 'worker-1' },
+      acknowledge_committed_head: false
+    });
+  });
+
+  it('keeps a recovered worker visible when cloud credentials are unavailable', async () => {
+    const recoveredWorker: CloudWorker = {
+      ...readyWorker,
+      state: 'failed',
+      message: 'Recovered from a previous lab session; destroy this worker before creating another',
+      auto_destroy: false
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(response([experiment]))
+      .mockResolvedValueOnce(response({ ...capabilities, cloud_enabled: true }))
+      .mockResolvedValueOnce(response({ ...cloudStatus, configured: false, error: 'Verda credentials are unavailable' }))
+      .mockResolvedValueOnce(response([recoveredWorker]));
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal('EventSource', FakeEventSource);
+    render(App);
+
+    await screen.findByRole('heading', { name: 'Learning XOR', level: 1 });
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
+    await fireEvent.change(screen.getByRole('combobox', { name: /Execution target/ }), { target: { value: 'cloud' } });
+
+    expect(await screen.findByText(recoveredWorker.message)).toBeTruthy();
+    expect(screen.getByRole('alert').textContent).toContain('Verda credentials are unavailable');
+    expect(screen.getByRole('button', { name: 'Destroy worker' })).toBeTruthy();
   });
 });

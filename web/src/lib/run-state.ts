@@ -3,6 +3,7 @@ import type {
   MetricData,
   RunEvent,
   RunFailureData,
+  RunStatusData,
   RunStartedData,
   RunState,
   SnapshotData
@@ -20,7 +21,8 @@ export function initialRunState(status: RunState['status'] = 'idle'): RunState {
     snapshots: [],
     logs: [],
     result: null,
-    error: null
+    error: null,
+    phase: ''
   };
 }
 
@@ -36,7 +38,7 @@ export function reduceRunEvent(state: RunState, event: RunEvent): RunState {
 
   switch (event.type) {
     case 'run_started':
-      return { ...next, status: 'running', started: event.data as RunStartedData };
+      return { ...next, status: 'running', started: event.data as RunStartedData, phase: '' };
     case 'metric': {
       const metric = event.data as MetricData;
       if (!metric.name || event.step === undefined) return next;
@@ -57,11 +59,13 @@ export function reduceRunEvent(state: RunState, event: RunEvent): RunState {
       };
     case 'log':
       return { ...next, logs: [...state.logs.slice(-99), (event.data as LogData).message] };
+    case 'run_status':
+      return { ...next, phase: (event.data as RunStatusData).message };
     case 'run_completed':
-      return { ...next, status: 'completed', result: event.data as Record<string, unknown> };
+      return { ...next, status: 'completed', result: event.data as Record<string, unknown>, phase: '' };
     case 'run_failed': {
       const failure = event.data as RunFailureData;
-      return { ...next, status: failure.cancelled ? 'cancelled' : 'failed', error: failure.message };
+      return { ...next, status: failure.cancelled ? 'cancelled' : 'failed', error: failure.message, phase: '' };
     }
   }
 }

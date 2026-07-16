@@ -4,12 +4,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	cloudworkflow "nnctl/internal/cloud/workflow"
 )
 
 func TestServerCatalogRunAndSSEReplay(t *testing.T) {
@@ -92,6 +96,15 @@ func TestServerRejectsInvalidInputs(t *testing.T) {
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("oversized request status = %d", response.Code)
 	}
+
+	crossOriginCancel := httptest.NewRequest(http.MethodDelete, "/api/runs/missing", nil)
+	crossOriginCancel.Host = "attacker.example"
+	crossOriginCancel.Header.Set("Origin", "https://attacker.example")
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, crossOriginCancel)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("cross-origin cancel status = %d: %s", response.Code, response.Body.String())
+	}
 }
 
 func TestServerReturnsConflictWhileRunActive(t *testing.T) {
@@ -114,6 +127,109 @@ func TestServerReturnsConflictWhileRunActive(t *testing.T) {
 	}
 	close(release)
 	manager.Close()
+}
+
+func TestServerCloudWorkerAndRemoteRunLifecycle(t *testing.T) {
+	repoRoot, _ := filepath.Abs("../../..")
+	transport := writeFakeCloudTransport(t)
+	client := newFakeCloudClient()
+	cloud, err := NewCloudManager(CloudManagerOptions{
+		RepoRoot:      repoRoot,
+		SSH:           transport.ssh,
+		Rsync:         transport.rsync,
+		JournalPath:   filepath.Join(t.TempDir(), "worker.json"),
+		Timeout:       cloudTestTimeout,
+		PollInterval:  time.Millisecond,
+		ClientFactory: func(context.Context, string) (cloudworkflow.Client, error) { return client, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := NewManager(RoutingExecutor{Local: successfulExecutor(), Cloud: cloud})
+	defer manager.Close()
+	server, err := NewServerWithOptions(manager, "", ServerOptions{APIOnly: true, Cloud: cloud})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	statusResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(statusResponse, httptest.NewRequest(http.MethodGet, "/api/cloud/status", nil))
+	if statusResponse.Code != http.StatusOK || !strings.Contains(statusResponse.Body.String(), `"configured":true`) {
+		t.Fatalf("cloud status = %d: %s", statusResponse.Code, statusResponse.Body.String())
+	}
+	optionsResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(optionsResponse, httptest.NewRequest(http.MethodGet, "/api/cloud/options", nil))
+	if optionsResponse.Code != http.StatusOK || !strings.Contains(optionsResponse.Body.String(), "1A100.22V") {
+		t.Fatalf("cloud options = %d: %s", optionsResponse.Code, optionsResponse.Body.String())
+	}
+	if strings.Contains(optionsResponse.Body.String(), "private-browser-boundary-test") {
+		t.Fatalf("cloud options exposed an SSH public-key body: %s", optionsResponse.Body.String())
+	}
+
+	deployBody := `{
+		"instance_type":"1A100.22V",
+		"market":"spot",
+		"location_code":"FIN-02",
+		"ssh_key_id":"00000000-0000-0000-0000-000000000001",
+		"source_os_volume_id":"source-1",
+		"auto_destroy":false
+	}`
+	crossOriginRequest := httptest.NewRequest(http.MethodPost, "/api/cloud/workers", strings.NewReader(deployBody))
+	crossOriginRequest.Header.Set("Origin", "https://attacker.example")
+	crossOriginRequest.Host = "attacker.example"
+	crossOriginResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(crossOriginResponse, crossOriginRequest)
+	if crossOriginResponse.Code != http.StatusForbidden {
+		t.Fatalf("cross-origin deploy = %d: %s", crossOriginResponse.Code, crossOriginResponse.Body.String())
+	}
+	deployResponse := httptest.NewRecorder()
+	deployRequest := httptest.NewRequest(http.MethodPost, "/api/cloud/workers", strings.NewReader(deployBody))
+	deployRequest.Host = "127.0.0.1:8091"
+	deployRequest.Header.Set("Origin", "http://127.0.0.1:8091")
+	server.Handler().ServeHTTP(deployResponse, deployRequest)
+	if deployResponse.Code != http.StatusAccepted {
+		t.Fatalf("deploy = %d: %s", deployResponse.Code, deployResponse.Body.String())
+	}
+	var created CloudWorker
+	if err := json.NewDecoder(deployResponse.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+	waitForCloudWorkerState(t, cloud, created.ID, CloudWorkerReady)
+
+	runBody := fmt.Sprintf(`{
+		"experiment":"optimizer-lab",
+		"backend":"cuda",
+		"parameters":{"steps":20},
+		"target":{"kind":"cloud","worker_id":%q},
+		"acknowledge_committed_head":true
+	}`, created.ID)
+	runResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(runResponse, httptest.NewRequest(http.MethodPost, "/api/runs", strings.NewReader(runBody)))
+	if runResponse.Code != http.StatusAccepted {
+		t.Fatalf("cloud run = %d: %s", runResponse.Code, runResponse.Body.String())
+	}
+	var run map[string]string
+	if err := json.NewDecoder(runResponse.Body).Decode(&run); err != nil {
+		t.Fatal(err)
+	}
+	eventsResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(eventsResponse, httptest.NewRequest(http.MethodGet, "/api/runs/"+run["id"]+"/events", nil))
+	for _, expected := range []string{"event: run_status", "event: run_started", "event: run_completed", `"selected_backend":"cuda"`} {
+		if !strings.Contains(eventsResponse.Body.String(), expected) {
+			t.Fatalf("cloud events missing %q:\n%s", expected, eventsResponse.Body.String())
+		}
+	}
+
+	destroyResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(destroyResponse, httptest.NewRequest(http.MethodDelete, "/api/cloud/workers/"+created.ID, nil))
+	if destroyResponse.Code != http.StatusNoContent {
+		t.Fatalf("destroy = %d: %s", destroyResponse.Code, destroyResponse.Body.String())
+	}
+	workerEvents := httptest.NewRecorder()
+	server.Handler().ServeHTTP(workerEvents, httptest.NewRequest(http.MethodGet, "/api/cloud/workers/"+created.ID+"/events", nil))
+	if !strings.Contains(workerEvents.Body.String(), "event: worker") || !strings.Contains(workerEvents.Body.String(), `"state":"destroyed"`) {
+		t.Fatalf("worker events = %s", workerEvents.Body.String())
+	}
 }
 
 func TestSPAHandlerServesAssetsAndFallback(t *testing.T) {

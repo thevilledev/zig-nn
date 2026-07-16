@@ -46,6 +46,7 @@ button:hover:not(:disabled) { border-color: var(--primary); }
 button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid color-mix(in srgb, var(--primary) 40%, transparent); outline-offset: 2px; }
 button:disabled, input:disabled { cursor: not-allowed; opacity: 0.55; }
 button.primary { background: var(--primary); border-color: var(--primary); color: var(--primary-foreground); }
+button.destroy { color: var(--destructive); border-color: color-mix(in srgb, var(--destructive) 45%, var(--border)); }
 a { color: inherit; }
 
 .site-header { max-width: 1240px; margin: 0 auto; padding: 1.4rem 1.5rem; display: flex; justify-content: space-between; align-items: end; gap: 1rem; border-bottom: 1px solid var(--border); }
@@ -75,6 +76,18 @@ h1 { margin: 0; font-size: clamp(2rem, 5vw, 3.45rem); line-height: 1.02; letter-
 .field input, .field select { width: 112px; padding: 0.55rem 0.6rem; }
 .field small { grid-column: 1 / -1; color: var(--muted); line-height: 1.35; }
 .actions { display: flex; gap: 0.55rem; flex-wrap: wrap; padding-top: 0.25rem; }
+.dirty-acknowledgement, .cleanup-choice { display: flex; align-items: flex-start; gap: 0.5rem; color: var(--muted); font-size: 0.82rem; line-height: 1.4; }
+.dirty-acknowledgement input, .cleanup-choice input { margin-top: 0.15rem; accent-color: var(--primary); }
+.cloud-panel { padding: 1rem; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; display: grid; gap: 0.9rem; }
+.cloud-field { display: grid; gap: 0.35rem; }
+.cloud-field > span { font-size: 0.86rem; font-weight: 650; }
+.cloud-field select { width: 100%; min-width: 0; padding: 0.55rem 0.6rem; }
+.cloud-note, .cloud-message { margin: 0; color: var(--muted); font-size: 0.82rem; line-height: 1.45; overflow-wrap: anywhere; }
+.cloud-message { color: var(--foreground); }
+.worker-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; overflow: hidden; border: 1px solid var(--border); border-radius: 7px; background: var(--border); }
+.worker-summary > div { display: grid; gap: 0.2rem; padding: 0.55rem; background: var(--background); }
+.worker-summary span { color: var(--muted); font-size: 0.7rem; }
+.worker-summary strong { font-size: 0.8rem; overflow-wrap: anywhere; }
 .observe h2, .sources h2, .interpretation h2 { margin: 0 0 0.65rem; font-size: 1rem; }
 .observe ul, .sources ul { margin: 0; padding-left: 1.15rem; display: grid; gap: 0.55rem; color: var(--muted); line-height: 1.45; }
 .sources code { color: var(--foreground); font-size: 0.78rem; overflow-wrap: anywhere; }
@@ -127,7 +140,7 @@ h1 { margin: 0; font-size: clamp(2rem, 5vw, 3.45rem); line-height: 1.02; letter-
 .metric-legend i { width: 0.7rem; height: 0.7rem; border-radius: 50%; }
 
 .execution-panel { padding: 1rem; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); }
-.backend-metal { color: var(--primary) !important; font-weight: 750; text-transform: uppercase; }
+.backend-accelerator { color: var(--primary) !important; font-weight: 750; text-transform: uppercase; }
 .execution-summary, .telemetry-grid { display: grid; margin: 0.8rem 0 0; gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: 7px; overflow: hidden; }
 .execution-summary { grid-template-columns: repeat(3, 1fr); }
 .telemetry-grid { grid-template-columns: repeat(3, 1fr); }
@@ -145,7 +158,7 @@ h1 { margin: 0; font-size: clamp(2rem, 5vw, 3.45rem); line-height: 1.02; letter-
 
 .benchmark-chart { display: block; width: 100%; height: auto; margin-top: 0.7rem; }
 .cpu-bar { fill: var(--series-2); opacity: 0.84; }
-.metal-bar { fill: var(--series-1); opacity: 0.9; }
+.accelerator-bar { fill: var(--series-1); opacity: 0.9; }
 .bar-label { fill: var(--foreground); stroke: var(--background); stroke-width: 3px; paint-order: stroke; font-size: 11px; font-weight: 700; }
 .speedup-label { fill: var(--foreground); font-size: 13px; font-weight: 750; }
 .benchmark-table-wrap, .similarity-scroll { overflow-x: auto; }

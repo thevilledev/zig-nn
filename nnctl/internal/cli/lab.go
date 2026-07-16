@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -16,11 +17,13 @@ import (
 )
 
 type labOptions struct {
-	mode    string
-	host    string
-	port    int
-	assets  string
-	apiOnly bool
+	mode         string
+	host         string
+	port         int
+	assets       string
+	apiOnly      bool
+	cloud        bool
+	cloudBaseURL string
 }
 
 func defaultLabOptions() labOptions {
@@ -47,13 +50,18 @@ func (a *app) newLabCommand(withRepo repoRunner) *cobra.Command {
 	cmd.Flags().IntVar(&opts.port, "port", opts.port, "learning lab bind port")
 	cmd.Flags().StringVar(&opts.assets, "assets", opts.assets, "built frontend directory (default: web/dist)")
 	cmd.Flags().BoolVar(&opts.apiOnly, "api-only", opts.apiOnly, "serve only the API for Vite development")
+	cmd.Flags().BoolVar(&opts.cloud, "cloud", opts.cloud, "enable local Verda worker deployment and remote experiment execution")
+	cmd.Flags().StringVar(&opts.cloudBaseURL, "cloud-base-url", opts.cloudBaseURL, "Verda API base URL")
 	cmd.Flags().SortFlags = false
 	return cmd
 }
 
-func (a *app) runLab(ctx context.Context, opts labOptions) error {
+func (a *app) runLab(ctx context.Context, opts labOptions) (runErr error) {
 	if opts.port <= 0 || opts.port > 65535 {
 		return fmt.Errorf("--port must be between 1 and 65535")
+	}
+	if opts.cloud && !isLoopbackLabHost(opts.host) {
+		return fmt.Errorf("--cloud requires a loopback --host; refusing to expose cloud control on %q", opts.host)
 	}
 	assets := opts.assets
 	if assets == "" {
@@ -62,13 +70,32 @@ func (a *app) runLab(ctx context.Context, opts labOptions) error {
 		assets = filepath.Join(a.repoRoot, assets)
 	}
 
-	manager := learninglab.NewManager(learninglab.CommandExecutor{
+	localExecutor := learninglab.CommandExecutor{
 		RepoRoot: a.repoRoot,
 		Zig:      a.zig,
 		Mode:     opts.mode,
-	})
+	}
+	var cloud *learninglab.CloudManager
+	var executor learninglab.Executor = localExecutor
+	if opts.cloud {
+		var err error
+		cloud, err = learninglab.NewCloudManager(learninglab.CloudManagerOptions{
+			RepoRoot: a.repoRoot,
+			BaseURL:  opts.cloudBaseURL,
+			Mode:     opts.mode,
+		})
+		if err != nil {
+			return err
+		}
+		defer func() { runErr = errors.Join(runErr, cloud.Close()) }()
+		executor = learninglab.RoutingExecutor{Local: localExecutor, Cloud: cloud}
+	}
+	manager := learninglab.NewManager(executor)
 	defer manager.Close()
-	handler, err := learninglab.NewServer(manager, assets, opts.apiOnly)
+	handler, err := learninglab.NewServerWithOptions(manager, assets, learninglab.ServerOptions{
+		APIOnly: opts.apiOnly,
+		Cloud:   cloud,
+	})
 	if err != nil {
 		return err
 	}
@@ -92,4 +119,13 @@ func (a *app) runLab(ctx context.Context, opts labOptions) error {
 		return fmt.Errorf("learning lab server: %w", err)
 	}
 	return nil
+}
+
+func isLoopbackLabHost(host string) bool {
+	host = strings.TrimSpace(host)
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }

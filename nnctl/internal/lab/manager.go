@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"strings"
 	"sync"
 
 	"nnctl/internal/zig"
@@ -196,6 +197,14 @@ func (m *Manager) execute(ctx context.Context, r *run, spec ExperimentSpec, opti
 	}, func(line string) {
 		if line == "" {
 			return
+		}
+		if message, ok := strings.CutPrefix(line, "cloud: "); ok {
+			r.append(eventInput{
+				Version:    1,
+				Type:       "run_status",
+				Experiment: spec.ID,
+				Data:       marshalData(map[string]string{"message": message}),
+			})
 		}
 		r.append(eventInput{
 			Version:    1,

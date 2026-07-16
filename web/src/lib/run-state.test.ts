@@ -31,4 +31,10 @@ describe('reduceRunEvent', () => {
     expect(state.status).toBe('cancelled');
     expect(state.error).toBe('run cancelled');
   });
+
+  it('tracks infrastructure phases without changing native run state', () => {
+    const state = reduceRunEvent(initialRunState('starting'), event('run_status', 1, { message: 'Uploading committed source' }));
+    expect(state.status).toBe('starting');
+    expect(state.phase).toBe('Uploading committed source');
+  });
 });
