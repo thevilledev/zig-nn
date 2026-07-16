@@ -107,8 +107,8 @@ func (e CommandExecutor) Execute(ctx context.Context, spec ExperimentSpec, optio
 		})
 	}()
 
-	waitErr := cmd.Wait()
 	wg.Wait()
+	waitErr := cmd.Wait()
 	close(scanErrors)
 	for scanErr := range scanErrors {
 		if scanErr != nil {

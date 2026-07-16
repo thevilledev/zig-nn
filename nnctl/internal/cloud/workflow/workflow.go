@@ -233,8 +233,8 @@ func StreamSSH(
 			return nil
 		})
 	}()
-	waitErr := cmd.Wait()
 	scanErr := errors.Join(<-results, <-results)
+	waitErr := cmd.Wait()
 	if scanErr != nil {
 		return scanErr
 	}
