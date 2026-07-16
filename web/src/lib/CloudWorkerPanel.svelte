@@ -21,9 +21,6 @@
   } = $props();
 
   let selectedPriceKey = $state('');
-  let selectedSSHKey = $state('');
-  let selectedVolume = $state('');
-  let volumeInitialized = $state(false);
   let autoDestroy = $state(true);
   let now = $state(Date.now());
   const clock = window.setInterval(() => (now = Date.now()), 10_000);
@@ -31,24 +28,10 @@
 
   let activeWorker = $derived(worker?.state === 'destroyed' ? null : worker);
   let selectedPrice = $derived(options?.prices.find((price) => priceKey(price) === selectedPriceKey) ?? null);
-  let compatibleVolumes = $derived(
-    (options?.volumes ?? []).filter((volume) => !selectedPrice || volume.location === selectedPrice.location_code)
-  );
 
   $effect(() => {
     if (!selectedPriceKey && options?.prices.length) {
       selectedPriceKey = priceKey(options.prices.find((price) => price.market === 'spot') ?? options.prices[0]);
-    }
-    if (!selectedSSHKey && options?.ssh_keys.length) selectedSSHKey = options.ssh_keys[0].id;
-  });
-
-  $effect(() => {
-    const volumes = compatibleVolumes;
-    if (!volumeInitialized && volumes.length) {
-      selectedVolume = volumes[0].id;
-      volumeInitialized = true;
-    } else if (selectedVolume && !volumes.some((volume) => volume.id === selectedVolume)) {
-      selectedVolume = volumes[0]?.id ?? '';
     }
   });
 
@@ -63,13 +46,11 @@
   }
 
   async function deploy() {
-    if (!selectedPrice || !selectedSSHKey) return;
+    if (!selectedPrice) return;
     await onDeploy({
       instance_type: selectedPrice.instance_type,
       market: selectedPrice.market,
       location_code: selectedPrice.location_code,
-      ssh_key_id: selectedSSHKey,
-      source_os_volume_id: selectedVolume,
       auto_destroy: autoDestroy
     });
   }
@@ -119,31 +100,17 @@
         {#each options.prices as price}<option value={priceKey(price)}>{priceLabel(price)}</option>{/each}
       </select>
     </label>
-    <label class="cloud-field">
-      <span>SSH key</span>
-      <select bind:value={selectedSSHKey} disabled={loading || !options.ssh_keys.length}>
-        {#each options.ssh_keys as key}<option value={key.id}>{key.name} · {key.fingerprint}</option>{/each}
-      </select>
-    </label>
-    <label class="cloud-field">
-      <span>Golden OS volume</span>
-      <select bind:value={selectedVolume} disabled={loading}>
-        <option value="">Bootstrap a fresh CUDA image (slower)</option>
-        {#each compatibleVolumes as volume}<option value={volume.id}>{volume.name || volume.id} · {volume.location}</option>{/each}
-      </select>
-    </label>
-    {#if selectedPrice && !compatibleVolumes.length}
-      <p class="cloud-note">No ready golden volume is available in {selectedPrice.location_code}; the worker will bootstrap from the CUDA base image.</p>
-    {/if}
+    <p class="cloud-note">Workers always clone <code>{options.source_os_volume_name}</code>. Its authorized keys and CUDA/Zig tooling are baked in, so the lab does not attach SSH key IDs.</p>
+    {#if !options.prices.length}<p class="inline-error" role="alert">No available GPU instances share a location with the ready golden volume.</p>{/if}
     <label class="cleanup-choice"><input type="checkbox" bind:checked={autoDestroy} /> Automatically destroy after the run or when the lab exits</label>
     <button
       class="primary"
       type="button"
-      disabled={loading || !selectedPrice || !selectedSSHKey}
+      disabled={loading || !selectedPrice}
       onclick={deploy}
     >Deploy worker</button>
   {:else}
-    <p class="cloud-note">Loading available GPUs, SSH keys, and golden volumes…</p>
+    <p class="cloud-note">Loading available GPU instances…</p>
   {/if}
 
   {#if error}<p class="inline-error" role="alert">{error}</p>{/if}

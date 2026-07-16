@@ -19,7 +19,6 @@ import (
 
 const (
 	defaultCloudSourceVolumeName = "packer-verda-zig-nn-volume-root"
-	defaultCloudImage            = "ubuntu-24.04-cuda-13.0-open"
 	defaultCloudSSHUser          = "root"
 	defaultCloudTimeout          = 20 * time.Minute
 	defaultCloudPollInterval     = 10 * time.Second
@@ -77,26 +76,16 @@ type CloudStatus struct {
 }
 
 type CloudOptions struct {
-	Prices   []verda.InstancePrice `json:"prices"`
-	SSHKeys  []CloudSSHKey         `json:"ssh_keys"`
-	Volumes  []verda.Volume        `json:"volumes"`
-	Provider string                `json:"provider"`
-}
-
-type CloudSSHKey struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Fingerprint string `json:"fingerprint"`
+	Prices             []verda.InstancePrice `json:"prices"`
+	Provider           string                `json:"provider"`
+	SourceOSVolumeName string                `json:"source_os_volume_name"`
 }
 
 type CloudDeployRequest struct {
-	InstanceType       string `json:"instance_type"`
-	Market             string `json:"market"`
-	LocationCode       string `json:"location_code,omitempty"`
-	SSHKeyID           string `json:"ssh_key_id"`
-	SourceOSVolumeID   string `json:"source_os_volume_id,omitempty"`
-	SourceOSVolumeName string `json:"source_os_volume_name,omitempty"`
-	AutoDestroy        *bool  `json:"auto_destroy,omitempty"`
+	InstanceType string `json:"instance_type"`
+	Market       string `json:"market"`
+	LocationCode string `json:"location_code,omitempty"`
+	AutoDestroy  *bool  `json:"auto_destroy,omitempty"`
 }
 
 type cloudClientFactory func(context.Context, string) (cloudworkflow.Client, error)
@@ -242,28 +231,30 @@ func (m *CloudManager) Options(ctx context.Context) (CloudOptions, error) {
 	if err != nil {
 		return CloudOptions{}, fmt.Errorf("list Verda prices: %w", err)
 	}
-	verda.SortInstancePrices(prices, "price")
-	keys, err := client.ListSSHKeys(ctx)
-	if err != nil {
-		return CloudOptions{}, fmt.Errorf("list Verda SSH keys: %w", err)
-	}
 	volumes, err := verda.ListVolumes(ctx, client, verda.ListVolumesOptions{})
 	if err != nil {
-		return CloudOptions{}, err
+		return CloudOptions{}, fmt.Errorf("list Verda volumes: %w", err)
 	}
-	volumes = slices.DeleteFunc(volumes, func(volume verda.Volume) bool {
-		return !volume.IsOSVolume || !cloudVolumeReady(volume.Status)
-	})
-	publicKeys := make([]CloudSSHKey, 0, len(keys))
-	for _, key := range keys {
-		publicKeys = append(publicKeys, CloudSSHKey{ID: key.ID, Name: key.Name, Fingerprint: key.Fingerprint})
+	goldenLocations := make(map[string]struct{})
+	for _, volume := range volumes {
+		if strings.EqualFold(strings.TrimSpace(volume.Name), defaultCloudSourceVolumeName) && volume.IsOSVolume && cloudVolumeReady(volume.Status) {
+			goldenLocations[strings.ToUpper(strings.TrimSpace(volume.Location))] = struct{}{}
+		}
 	}
-	return CloudOptions{Prices: prices, SSHKeys: publicKeys, Volumes: volumes, Provider: verda.ProviderName}, nil
+	compatiblePrices := make([]verda.InstancePrice, 0, len(prices))
+	for _, price := range prices {
+		if _, ok := goldenLocations[strings.ToUpper(strings.TrimSpace(price.LocationCode))]; ok {
+			compatiblePrices = append(compatiblePrices, price)
+		}
+	}
+	prices = compatiblePrices
+	verda.SortInstancePrices(prices, "price")
+	return CloudOptions{Prices: prices, Provider: verda.ProviderName, SourceOSVolumeName: defaultCloudSourceVolumeName}, nil
 }
 
 func cloudVolumeReady(status string) bool {
 	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "available", "ready", "detached", "in-use", "in_use":
+	case "available", "created", "ready", "detached", "in-use", "in_use":
 		return true
 	default:
 		return false
@@ -274,20 +265,14 @@ func (m *CloudManager) Deploy(ctx context.Context, request CloudDeployRequest) (
 	request.InstanceType = strings.TrimSpace(request.InstanceType)
 	request.Market = strings.ToLower(strings.TrimSpace(request.Market))
 	request.LocationCode = strings.ToUpper(strings.TrimSpace(request.LocationCode))
-	request.SSHKeyID = strings.TrimSpace(request.SSHKeyID)
-	request.SourceOSVolumeID = strings.TrimSpace(request.SourceOSVolumeID)
-	request.SourceOSVolumeName = strings.TrimSpace(request.SourceOSVolumeName)
-	if request.InstanceType == "" || request.SSHKeyID == "" {
-		return CloudWorker{}, errors.New("instance type and SSH key are required")
+	if request.InstanceType == "" {
+		return CloudWorker{}, errors.New("instance type is required")
 	}
 	if request.Market == "" {
 		request.Market = verda.PricingMarketSpot
 	}
 	if request.Market != verda.PricingMarketSpot && request.Market != verda.PricingMarketOnDemand {
 		return CloudWorker{}, errors.New("market must be spot or on-demand")
-	}
-	if request.SourceOSVolumeID != "" && request.SourceOSVolumeName != "" {
-		return CloudWorker{}, errors.New("source OS volume ID and name cannot be combined")
 	}
 	if err := ctx.Err(); err != nil {
 		return CloudWorker{}, err
@@ -356,18 +341,12 @@ func (m *CloudManager) provision(ctx context.Context, workerID string, request C
 		return
 	}
 	m.updateWorker(workerID, func(worker *managedCloudWorker) {
-		worker.Message = "Creating Verda instance and OS-volume clone"
+		worker.Message = "Cloning the golden OS volume and creating a Verda instance"
 	})
 	deployOptions := verda.DefaultDeployOptions(request.InstanceType)
-	deployOptions.SourceOSVolumeID = request.SourceOSVolumeID
-	deployOptions.SourceOSVolumeName = request.SourceOSVolumeName
-	if request.SourceOSVolumeID == "" && request.SourceOSVolumeName == "" {
-		deployOptions.Image = defaultCloudImage
-		deployOptions.UserDataScript = verda.DefaultUserDataScript
-	}
+	deployOptions.SourceOSVolumeName = defaultCloudSourceVolumeName
 	deployOptions.Market = request.Market
 	deployOptions.LocationCode = request.LocationCode
-	deployOptions.SSHKeyIDs = []string{request.SSHKeyID}
 	deployOptions.Hostname = "nnctl-lab-" + workerID[:8]
 	deployOptions.Description = "nnctl learning lab cloud worker " + workerID
 	deployOptions.BaseURL = m.baseURL

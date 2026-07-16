@@ -45,18 +45,16 @@ func TestCloudManagerDeployExecuteDestroyAndRecover(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(options.Prices) != 1 || len(options.SSHKeys) != 1 || len(options.Volumes) != 1 {
+	if len(options.Prices) != 1 || options.SourceOSVolumeName != defaultCloudSourceVolumeName {
 		t.Fatalf("cloud options = %#v", options)
 	}
 
 	autoDestroy := false
 	created, err := manager.Deploy(context.Background(), CloudDeployRequest{
-		InstanceType:     "1A100.22V",
-		Market:           verda.PricingMarketSpot,
-		LocationCode:     "FIN-02",
-		SSHKeyID:         "00000000-0000-0000-0000-000000000001",
-		SourceOSVolumeID: "source-1",
-		AutoDestroy:      &autoDestroy,
+		InstanceType: "1A100.22V",
+		Market:       verda.PricingMarketSpot,
+		LocationCode: "FIN-02",
+		AutoDestroy:  &autoDestroy,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -64,6 +62,23 @@ func TestCloudManagerDeployExecuteDestroyAndRecover(t *testing.T) {
 	worker := waitForCloudWorkerState(t, manager, created.ID, CloudWorkerReady)
 	if worker.IP != "192.0.2.10" || !strings.Contains(worker.Message, "Ready") {
 		t.Fatalf("ready worker = %#v", worker)
+	}
+	client.mu.Lock()
+	createRequest := client.createRequest
+	cloneRequest := client.cloneRequest
+	cloneCalls := client.cloneCalls
+	client.mu.Unlock()
+	if createRequest.Image != "clone-1" || createRequest.StartupScriptID != "" {
+		t.Fatalf("golden-volume create request = %#v", createRequest)
+	}
+	if len(createRequest.SSHKeyIDs) != 0 {
+		t.Fatalf("golden-volume create request attached SSH keys: %#v", createRequest.SSHKeyIDs)
+	}
+	if cloneCalls != 1 {
+		t.Fatalf("golden-volume deployment cloned %d OS volumes", cloneCalls)
+	}
+	if cloneRequest.SourceVolumeID != "source-1" || cloneRequest.LocationCode != "FIN-02" {
+		t.Fatalf("golden-volume clone request = %#v", cloneRequest)
 	}
 
 	spec, _ := ResolveExperiment("optimizer-lab")
@@ -116,7 +131,7 @@ func TestCloudManagerDeployExecuteDestroyAndRecover(t *testing.T) {
 	client.mu.Lock()
 	destroyed := append([]verda.DestroyInstanceRequest(nil), client.destroyed...)
 	client.mu.Unlock()
-	if len(destroyed) != 1 || destroyed[0].InstanceIDs[0] != "instance-1" || destroyed[0].VolumeIDs[0] != "clone-1" {
+	if len(destroyed) != 1 || destroyed[0].InstanceIDs[0] != "instance-1" || len(destroyed[0].VolumeIDs) != 1 || destroyed[0].VolumeIDs[0] != "clone-1" {
 		t.Fatalf("destroy requests = %#v", destroyed)
 	}
 }
@@ -141,7 +156,6 @@ func TestCloudManagerDefaultsToAutomaticCleanup(t *testing.T) {
 		InstanceType: "1A100.22V",
 		Market:       "spot",
 		LocationCode: "FIN-02",
-		SSHKeyID:     "00000000-0000-0000-0000-000000000001",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -178,11 +192,9 @@ func TestCloudManagerDestroysIdleAutomaticWorker(t *testing.T) {
 		t.Fatal(err)
 	}
 	created, err := manager.Deploy(context.Background(), CloudDeployRequest{
-		InstanceType:     "1A100.22V",
-		Market:           "spot",
-		LocationCode:     "FIN-02",
-		SSHKeyID:         "00000000-0000-0000-0000-000000000001",
-		SourceOSVolumeID: "source-1",
+		InstanceType: "1A100.22V",
+		Market:       "spot",
+		LocationCode: "FIN-02",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -208,11 +220,9 @@ func TestCloudManagerCancelsProvisioningBeforeDestroy(t *testing.T) {
 		t.Fatal(err)
 	}
 	created, err := manager.Deploy(context.Background(), CloudDeployRequest{
-		InstanceType:     "1A100.22V",
-		Market:           "spot",
-		LocationCode:     "FIN-02",
-		SSHKeyID:         "00000000-0000-0000-0000-000000000001",
-		SourceOSVolumeID: "source-1",
+		InstanceType: "1A100.22V",
+		Market:       "spot",
+		LocationCode: "FIN-02",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -246,11 +256,9 @@ func TestCloudManagerClosesAutomaticWorker(t *testing.T) {
 		t.Fatal(err)
 	}
 	created, err := manager.Deploy(context.Background(), CloudDeployRequest{
-		InstanceType:     "1A100.22V",
-		Market:           "spot",
-		LocationCode:     "FIN-02",
-		SSHKeyID:         "00000000-0000-0000-0000-000000000001",
-		SourceOSVolumeID: "source-1",
+		InstanceType: "1A100.22V",
+		Market:       "spot",
+		LocationCode: "FIN-02",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -264,7 +272,7 @@ func TestCloudManagerClosesAutomaticWorker(t *testing.T) {
 
 func waitForCloudWorkerState(t *testing.T, manager *CloudManager, id string, state CloudWorkerState) CloudWorker {
 	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(cloudTestTimeout)
 	for time.Now().Before(deadline) {
 		workers := manager.Workers()
 		if len(workers) == 1 && workers[0].ID == id && workers[0].State == state {
@@ -281,7 +289,7 @@ func waitForCloudWorkerState(t *testing.T, manager *CloudManager, id string, sta
 
 func waitForCloudWorkerInstance(t *testing.T, manager *CloudManager, id string) CloudWorker {
 	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(cloudTestTimeout)
 	for time.Now().Before(deadline) {
 		workers := manager.Workers()
 		if len(workers) == 1 && workers[0].ID == id && workers[0].InstanceID != "" {
@@ -324,6 +332,9 @@ exit 0
 type fakeCloudClient struct {
 	mu                 sync.Mutex
 	instance           verda.Instance
+	createRequest      verda.CreateInstanceRequest
+	cloneRequest       verda.CloneVolumeRequest
+	cloneCalls         int
 	destroyed          []verda.DestroyInstanceRequest
 	listInstancesBlock <-chan struct{}
 }
@@ -339,6 +350,7 @@ func (c *fakeCloudClient) GetVolume(context.Context, string) (verda.Volume, erro
 func (c *fakeCloudClient) ListVolumes(context.Context) ([]verda.Volume, error) {
 	return []verda.Volume{
 		{ID: "source-1", Name: defaultCloudSourceVolumeName, Status: "detached", Location: "FIN-02", IsOSVolume: true},
+		{ID: "source-2", Name: defaultCloudSourceVolumeName, Status: "creating", Location: "FIN-03", IsOSVolume: true},
 		{ID: "data-1", Name: "data", Status: "detached", Location: "FIN-02"},
 	}, nil
 }
@@ -360,6 +372,10 @@ func (c *fakeCloudClient) CreateStartupScript(context.Context, string, string) (
 }
 
 func (c *fakeCloudClient) CloneVolume(_ context.Context, request verda.CloneVolumeRequest) (verda.Volume, error) {
+	c.mu.Lock()
+	c.cloneRequest = request
+	c.cloneCalls++
+	c.mu.Unlock()
 	return verda.Volume{ID: "clone-1", Name: request.Name, Status: "cloning", Location: request.LocationCode}, nil
 }
 
@@ -372,6 +388,7 @@ func (c *fakeCloudClient) DeleteVolume(context.Context, string, bool) error { re
 func (c *fakeCloudClient) CreateInstance(_ context.Context, request verda.CreateInstanceRequest) (verda.Instance, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.createRequest = request
 	ip := "192.0.2.10"
 	c.instance = verda.Instance{
 		ID: "instance-1", Hostname: request.Hostname, Status: "running", IP: &ip,
@@ -413,11 +430,18 @@ func (c *fakeCloudClient) ListSSHKeys(context.Context) ([]verda.SSHKey, error) {
 }
 
 func (c *fakeCloudClient) ListInstancePrices(context.Context, verda.PricingFilters) ([]verda.InstancePrice, error) {
-	return []verda.InstancePrice{{
-		InstanceType: "1A100.22V", Model: "A100", Manufacturer: "NVIDIA", GPUCount: 1,
-		LocationCode: "FIN-02", Market: "spot", IsSpot: true, PricePerHour: 1.25,
-		PriceKnown: true, Currency: "EUR", Available: true,
-	}}, nil
+	return []verda.InstancePrice{
+		{
+			InstanceType: "1A100.22V", Model: "A100", Manufacturer: "NVIDIA", GPUCount: 1,
+			LocationCode: "FIN-02", Market: "spot", IsSpot: true, PricePerHour: 1.25,
+			PriceKnown: true, Currency: "EUR", Available: true,
+		},
+		{
+			InstanceType: "1H100.80V", Model: "H100", Manufacturer: "NVIDIA", GPUCount: 1,
+			LocationCode: "FIN-03", Market: "spot", IsSpot: true, PricePerHour: 2.5,
+			PriceKnown: true, Currency: "EUR", Available: true,
+		},
+	}, nil
 }
 
 func TestManagedCloudWorkerJournalDoesNotContainCredentials(t *testing.T) {

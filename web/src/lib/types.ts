@@ -65,25 +65,10 @@ export interface CloudPrice {
   available: boolean;
 }
 
-export interface CloudSSHKey {
-  id: string;
-  name: string;
-  fingerprint: string;
-}
-
-export interface CloudVolume {
-  id: string;
-  name?: string;
-  status?: string;
-  location?: string;
-  is_os_volume?: boolean;
-}
-
 export interface CloudOptions {
   provider: string;
   prices: CloudPrice[];
-  ssh_keys: CloudSSHKey[];
-  volumes: CloudVolume[];
+  source_os_volume_name: string;
 }
 
 export type CloudWorkerState = 'provisioning' | 'ready' | 'busy' | 'destroying' | 'failed' | 'destroyed';
@@ -113,8 +98,6 @@ export interface CloudDeployRequest {
   instance_type: string;
   market: 'spot' | 'on-demand';
   location_code: string;
-  ssh_key_id: string;
-  source_os_volume_id: string;
   auto_destroy: boolean;
 }
 

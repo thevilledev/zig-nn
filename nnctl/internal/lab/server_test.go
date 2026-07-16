@@ -159,19 +159,17 @@ func TestServerCloudWorkerAndRemoteRunLifecycle(t *testing.T) {
 	}
 	optionsResponse := httptest.NewRecorder()
 	server.Handler().ServeHTTP(optionsResponse, httptest.NewRequest(http.MethodGet, "/api/cloud/options", nil))
-	if optionsResponse.Code != http.StatusOK || !strings.Contains(optionsResponse.Body.String(), "1A100.22V") {
+	if optionsResponse.Code != http.StatusOK || !strings.Contains(optionsResponse.Body.String(), "1A100.22V") || !strings.Contains(optionsResponse.Body.String(), defaultCloudSourceVolumeName) {
 		t.Fatalf("cloud options = %d: %s", optionsResponse.Code, optionsResponse.Body.String())
 	}
-	if strings.Contains(optionsResponse.Body.String(), "private-browser-boundary-test") {
-		t.Fatalf("cloud options exposed an SSH public-key body: %s", optionsResponse.Body.String())
+	if strings.Contains(optionsResponse.Body.String(), "ssh_keys") || strings.Contains(optionsResponse.Body.String(), "volumes") {
+		t.Fatalf("cloud options exposed removed SSH-key or volume selectors: %s", optionsResponse.Body.String())
 	}
 
 	deployBody := `{
 		"instance_type":"1A100.22V",
 		"market":"spot",
 		"location_code":"FIN-02",
-		"ssh_key_id":"00000000-0000-0000-0000-000000000001",
-		"source_os_volume_id":"source-1",
 		"auto_destroy":false
 	}`
 	crossOriginRequest := httptest.NewRequest(http.MethodPost, "/api/cloud/workers", strings.NewReader(deployBody))
@@ -181,6 +179,12 @@ func TestServerCloudWorkerAndRemoteRunLifecycle(t *testing.T) {
 	server.Handler().ServeHTTP(crossOriginResponse, crossOriginRequest)
 	if crossOriginResponse.Code != http.StatusForbidden {
 		t.Fatalf("cross-origin deploy = %d: %s", crossOriginResponse.Code, crossOriginResponse.Body.String())
+	}
+	legacyResponse := httptest.NewRecorder()
+	legacyBody := `{"instance_type":"1A100.22V","market":"spot","ssh_key_id":"00000000-0000-0000-0000-000000000001"}`
+	server.Handler().ServeHTTP(legacyResponse, httptest.NewRequest(http.MethodPost, "/api/cloud/workers", strings.NewReader(legacyBody)))
+	if legacyResponse.Code != http.StatusBadRequest {
+		t.Fatalf("legacy SSH-key deploy = %d: %s", legacyResponse.Code, legacyResponse.Body.String())
 	}
 	deployResponse := httptest.NewRecorder()
 	deployRequest := httptest.NewRequest(http.MethodPost, "/api/cloud/workers", strings.NewReader(deployBody))

@@ -90,8 +90,8 @@ With `--cloud`, the server also exposes:
 
 - `GET /api/cloud/status` for keyring configuration and the committed/dirty
   repository state;
-- `GET /api/cloud/options` for available single-NVIDIA-GPU prices, SSH keys,
-  and ready golden OS volumes;
+- `GET /api/cloud/options` for available single-NVIDIA-GPU prices and the
+  fixed golden OS volume name;
 - `GET|POST /api/cloud/workers` to inspect or asynchronously create the one
   worker managed by this lab process;
 - `GET /api/cloud/workers/{id}/events` for worker lifecycle SSE;
@@ -126,18 +126,18 @@ security add-generic-password -U -s nnctl/verda -a client_secret -w "$VERDA_CLIE
 ```
 
 On Linux, store the same service/account pairs in the desktop Secret Service
-keyring. Verify access and find the SSH key ID with:
+keyring. Verify access with:
 
 ```bash
-nnctl cloud ssh-keys
 nnctl cloud pricing --single-gpu
-nnctl cloud volume
 ```
 
-The UI prefers a ready golden OS volume in the selected location. If none is
-available, it can boot the existing CUDA base image and apply the embedded
-bootstrap script; this is slower because Zig and CUDA tooling finish installing
-after the instance starts.
+The lab always clones `packer-verda-zig-nn-volume-root`. Authorized root keys
+and the CUDA/Zig tooling are baked into that golden volume, so deploy requests
+intentionally omit `ssh_key_ids`. The UI does not allow selecting another SSH
+key or OS volume, and only offers GPU capacity in locations with a ready golden
+volume. SSH itself uses the local process's normal identity and agent
+configuration.
 
 Workers default to spot capacity and automatic cleanup. They are destroyed
 after a run (including cancellation or failure), after 30 minutes idle, or when

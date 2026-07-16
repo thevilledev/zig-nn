@@ -34,6 +34,7 @@ const cloudStatus: CloudStatus = {
 
 const cloudOptions: CloudOptions = {
   provider: 'verda',
+  source_os_volume_name: 'packer-verda-zig-nn-volume-root',
   prices: [
     {
       instance_type: '1A100.22V',
@@ -48,9 +49,7 @@ const cloudOptions: CloudOptions = {
       currency: 'EUR',
       available: true
     }
-  ],
-  ssh_keys: [{ id: 'key-1', name: 'lab', fingerprint: 'SHA256:test' }],
-  volumes: [{ id: 'volume-1', name: 'zig-nn-golden', status: 'detached', location: 'FIN-02', is_os_volume: true }]
+  ]
 };
 
 const readyWorker: CloudWorker = {
@@ -237,6 +236,9 @@ describe('App', () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(5));
     await fireEvent.change(screen.getByRole('combobox', { name: /Execution target/ }), { target: { value: 'cloud' } });
     expect(await screen.findByRole('heading', { name: 'Cloud worker' })).toBeTruthy();
+    expect(screen.queryByRole('combobox', { name: 'SSH key' })).toBeNull();
+    expect(screen.queryByRole('combobox', { name: 'Golden OS volume' })).toBeNull();
+    expect(screen.getByText('packer-verda-zig-nn-volume-root')).toBeTruthy();
     await fireEvent.click(screen.getByRole('button', { name: 'Deploy worker' }));
 
     await waitFor(() => expect(screen.getByText('Ready for experiments')).toBeTruthy());
@@ -245,8 +247,6 @@ describe('App', () => {
       instance_type: '1A100.22V',
       market: 'spot',
       location_code: 'FIN-02',
-      ssh_key_id: 'key-1',
-      source_os_volume_id: 'volume-1',
       auto_destroy: true
     });
 
