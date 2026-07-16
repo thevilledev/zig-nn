@@ -61,13 +61,13 @@ docker build \
 
 ## GitHub Container Registry
 
-The `Container` GitHub Actions workflow validates both targets on pull
-requests. Pushes to `main` build native `linux/amd64` images and publish them
-to `ghcr.io/thevilledev/zig-nn` with these tags:
+The `Container` GitHub Actions workflow runs only when a Git tag is pushed. It
+builds native `linux/amd64` images and publishes them to
+`ghcr.io/thevilledev/zig-nn`. The Git tag is preserved in each image tag, with
+a suffix distinguishing the two runtime targets:
 
-- `cpu` and `cuda` for the latest build from `main`
-- `main-cpu` and `main-cuda` as branch-qualified aliases
-- `sha-<commit>-cpu` and `sha-<commit>-cuda` for a specific source revision
+- Git tag `v0.2.0` publishes `v0.2.0-cpu`
+- Git tag `v0.2.0` publishes `v0.2.0-cuda`
 
 Each published digest includes BuildKit provenance and an SPDX SBOM. The
 workflow adds a keyless Cosign image signature, signs SLSA provenance and the
@@ -76,18 +76,20 @@ signature and both attestations to GHCR. Verify a published image and its
 keyless signature with:
 
 ```bash
+TAG=v0.2.0
 cosign verify \
   --certificate-identity \
-    https://github.com/thevilledev/zig-nn/.github/workflows/container.yml@refs/heads/main \
+    "https://github.com/thevilledev/zig-nn/.github/workflows/container.yml@refs/tags/${TAG}" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  ghcr.io/thevilledev/zig-nn:cuda
+  "ghcr.io/thevilledev/zig-nn:${TAG}-cuda"
 ```
 
 Verify its provenance and SBOM attestations against this repository with:
 
 ```bash
+TAG=v0.2.0
 gh attestation verify \
-  oci://ghcr.io/thevilledev/zig-nn:cuda \
+  "oci://ghcr.io/thevilledev/zig-nn:${TAG}-cuda" \
   --repo thevilledev/zig-nn
 ```
 
