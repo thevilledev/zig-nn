@@ -9,16 +9,18 @@ Use the commands declared in `mise.toml` instead of installing tools ad hoc. The
 - golangci-lint 2.12.2
 - zizmor 1.26.1
 - Node 25.9.0 with hook dependencies pinned by `package-lock.json`
+- Oxlint 1.74.0 for `web/`, pinned by `web/package-lock.json`
 
 If a tool is missing, run `mise install` from the repository root. Do not run `cargo install zizmor`, install golangci-lint manually, or create per-worktree tool installs.
 
 ## Required Checks
 
-Run the smallest check set that covers the files you changed:
+Run the smallest check set that covers the files you changed. Include the applicable linting or formatting check for every area you touch:
 
 - Go changes under `nnctl/`: `mise run go:lint` and `mise run go:test`
-- Zig source, experiments, benchmarks, or build files: `mise run zig:test`
+- Zig source, experiments, benchmarks, or build files: `mise run zig:fmt-check` and `mise run zig:test`
 - Zig acceptance behavior: `mise run zig:test-acceptance`
+- Web changes under `web/`: `mise run web:lint`, `mise run web:check`, and `mise run web:test`
 - GitHub Actions workflow changes: `mise run actions:lint`
 - Hook, formatting, or repository hygiene changes: `mise run hooks:check`
 - Broad or cross-language changes: `mise run ci`

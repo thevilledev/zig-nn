@@ -57,6 +57,12 @@ depends = ["web:install"]
 dir = "web"
 run = "npm run check"
 
+[tasks."web:lint"]
+description = "Lint the Svelte learning lab with Oxlint"
+depends = ["web:install"]
+dir = "web"
+run = "npm run lint"
+
 [tasks."web:test"]
 description = "Run Svelte learning lab tests"
 depends = ["web:install"]
@@ -82,12 +88,12 @@ run = "go run ./cmd/nnctl lab --api-only"
 
 [tasks."hooks:install"]
 description = "Install git hooks through prek"
-depends = ["npm:install"]
+depends = ["npm:install", "web:install"]
 run = "npm run hooks:install"
 
 [tasks."hooks:check"]
 description = "Run prek hooks on all files"
-depends = ["npm:install"]
+depends = ["npm:install", "web:install"]
 run = "npm run prek:all"
 
 [tasks."commitlint:head"]
@@ -106,6 +112,7 @@ depends = [
   "actions:lint",
   "hooks:check",
   "web:check",
+  "web:lint",
   "web:test",
   "web:build",
 ]

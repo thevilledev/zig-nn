@@ -23,3 +23,11 @@ entry = "npx --no-install commitlint --edit"
 language = "system"
 stages = ["commit-msg"]
 always_run = true
+
+[[repos.hooks]]
+id = "oxlint"
+name = "oxlint"
+entry = "npx --prefix web --no-install oxlint --deny-warnings"
+language = "system"
+files = "^web/.*\\.(?:[cm]?[jt]sx?|svelte)$"
+stages = ["pre-commit"]

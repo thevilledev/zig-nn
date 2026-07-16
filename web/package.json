@@ -6,6 +6,7 @@
     "dev": "vite",
     "build": "vite build",
     "check": "svelte-check --tsconfig ./tsconfig.json",
+    "lint": "oxlint . --deny-warnings",
     "test": "vitest run",
     "test:watch": "vitest"
   },
@@ -15,9 +16,10 @@
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "7.2.0",
     "@testing-library/svelte": "5.4.2",
-    "@typescript/native": "npm:typescript@7.0.2",
     "@types/node": "26.1.1",
+    "@typescript/native": "npm:typescript@7.0.2",
     "jsdom": "29.1.1",
+    "oxlint": "1.74.0",
     "svelte-check": "4.7.3",
     "typescript": "npm:@typescript/typescript6@6.0.2",
     "vite": "8.1.4",
