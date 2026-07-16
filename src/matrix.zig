@@ -116,10 +116,15 @@ pub const Matrix = struct {
     ///   - max: Maximum value (inclusive)
     pub fn randomize(self: *Matrix, min: f64, max: f64) void {
         var prng = std.Random.DefaultPrng.init(randomSeed());
-        const rand = prng.random();
+        self.randomizeWith(prng.random(), min, max);
+    }
 
+    /// Fills the matrix from a caller-provided random stream.
+    /// This is useful for reproducible experiments while `randomize` remains
+    /// the convenient entropy-seeded default.
+    pub fn randomizeWith(self: *Matrix, random: std.Random, min: f64, max: f64) void {
         for (self.data) |*element| {
-            element.* = min + rand.float(f64) * (max - min);
+            element.* = min + random.float(f64) * (max - min);
         }
     }
 

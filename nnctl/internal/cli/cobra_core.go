@@ -70,6 +70,7 @@ func (a *app) newRootCommand() *cobra.Command {
 		a.newRunCommand(withRepo),
 		a.newTrainCommand(withRepo),
 		a.newChatCommand(withRepo),
+		a.newLabCommand(withRepo),
 		a.newListCommand(root),
 		a.newFormatCommand(withRepo),
 		a.newCleanCommand(withRepo),

@@ -34,6 +34,7 @@ func TestDirectHelpAvailableForEveryCommand(t *testing.T) {
 		{"train", "tiny-gpt", "--help"},
 		{"train", "speech-commands", "--help"},
 		{"chat", "--help"},
+		{"lab", "--help"},
 		{"list", "--help"},
 		{"fmt", "--help"},
 		{"format", "--help"},

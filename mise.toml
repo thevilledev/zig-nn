@@ -46,6 +46,40 @@ run = "zizmor .github/workflows"
 description = "Install Node hook dependencies"
 run = "npm ci"
 
+[tasks."web:install"]
+description = "Install Svelte learning lab dependencies"
+dir = "web"
+run = "npm ci"
+
+[tasks."web:check"]
+description = "Type-check the Svelte learning lab"
+depends = ["web:install"]
+dir = "web"
+run = "npm run check"
+
+[tasks."web:test"]
+description = "Run Svelte learning lab tests"
+depends = ["web:install"]
+dir = "web"
+run = "npm test"
+
+[tasks."web:build"]
+description = "Build the Svelte learning lab"
+depends = ["web:install"]
+dir = "web"
+run = "npm run build"
+
+[tasks.lab]
+description = "Build and run the real-time learning lab"
+depends = ["web:build"]
+dir = "nnctl"
+run = "go run ./cmd/nnctl lab"
+
+[tasks."lab:api"]
+description = "Run only the learning lab API for Vite development"
+dir = "nnctl"
+run = "go run ./cmd/nnctl lab --api-only"
+
 [tasks."hooks:install"]
 description = "Install git hooks through prek"
 depends = ["npm:install"]
@@ -71,4 +105,7 @@ depends = [
   "go:lint",
   "actions:lint",
   "hooks:check",
+  "web:check",
+  "web:test",
+  "web:build",
 ]

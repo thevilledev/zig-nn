@@ -115,6 +115,27 @@ pub const Layer = struct {
         activation_fn: *const fn (f64) f64,
         activation_derivative_fn: *const fn (f64) f64,
     ) !Layer {
+        var prng = std.Random.DefaultPrng.init(matrix_mod.randomSeed());
+        return initWithRandom(
+            allocator,
+            input_size,
+            output_size,
+            activation_fn,
+            activation_derivative_fn,
+            prng.random(),
+        );
+    }
+
+    /// Initializes a fully connected layer from a caller-provided random
+    /// stream so model construction can be reproduced exactly.
+    pub fn initWithRandom(
+        allocator: std.mem.Allocator,
+        input_size: usize,
+        output_size: usize,
+        activation_fn: *const fn (f64) f64,
+        activation_derivative_fn: *const fn (f64) f64,
+        random: std.Random,
+    ) !Layer {
         if (input_size == 0 or output_size == 0) {
             return error.InvalidLayerDimensions;
         }
@@ -136,11 +157,9 @@ pub const Layer = struct {
         }
 
         // Initialize weights with scaled normal distribution
-        var prng = std.Random.DefaultPrng.init(matrix_mod.randomSeed());
-        const rand = prng.random();
         for (0..input_size) |i| {
             for (0..output_size) |j| {
-                try weights.set(i, j, standardNormal(rand) * scale);
+                try weights.set(i, j, standardNormal(random) * scale);
             }
         }
 
@@ -150,7 +169,7 @@ pub const Layer = struct {
             bias.fill(0.0);
         } else {
             // For other activations, small random values
-            bias.randomize(-0.1, 0.1);
+            bias.randomizeWith(random, -0.1, 0.1);
         }
 
         return Layer{

@@ -34,6 +34,17 @@ Every individual command maps to a stable Zig step. For example,
 See [Getting Started](../docs/getting-started.md) for direct Zig commands and
 [GPU and Backend Notes](../docs/gpu.md) for backend requirements.
 
+XOR Training, Regression, and Binary Classification also expose structured
+live evidence in the local browser lab:
+
+```bash
+mise run lab
+```
+
+Their normal terminal output remains the default. The lab invokes them with
+`--format ndjson`; see the [learning lab guide](../docs/learning-lab.md) for the
+event contract and extension steps.
+
 ## Suggested Learning Routes
 
 - **Foundations:** Simple XOR → XOR Training → Binary Classification →

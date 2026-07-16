@@ -1309,10 +1309,23 @@ pub const Network = struct {
     ///   - activation_fn: Activation function σ(x)
     ///   - activation_derivative_fn: Derivative σ'(x) for backpropagation
     pub fn addLayer(self: *Network, input_size: usize, output_size: usize, activation_fn: *const fn (f64) f64, activation_derivative_fn: *const fn (f64) f64) !void {
+        var prng = std.Random.DefaultPrng.init(matrix_mod.randomSeed());
+        return self.addLayerWithRandom(input_size, output_size, activation_fn, activation_derivative_fn, prng.random());
+    }
+
+    /// Adds a standard layer initialized from a caller-provided random stream.
+    pub fn addLayerWithRandom(
+        self: *Network,
+        input_size: usize,
+        output_size: usize,
+        activation_fn: *const fn (f64) f64,
+        activation_derivative_fn: *const fn (f64) f64,
+        random: std.Random,
+    ) !void {
         try self.validateNextLayerInput(input_size);
         const layer_ptr = try self.allocator.create(Layer);
         errdefer self.allocator.destroy(layer_ptr);
-        layer_ptr.* = try Layer.init(self.allocator, input_size, output_size, activation_fn, activation_derivative_fn);
+        layer_ptr.* = try Layer.initWithRandom(self.allocator, input_size, output_size, activation_fn, activation_derivative_fn, random);
         errdefer layer_ptr.deinit();
         try self.layers.append(self.allocator, LayerVariant{ .Standard = layer_ptr });
     }
@@ -2222,6 +2235,25 @@ test "network initialization and layer addition" {
 
     try testing.expectEqual(@as(usize, 2), try network.getInputSize());
     try testing.expectEqual(@as(usize, 1), try network.getOutputSize());
+}
+
+test "network initialization is reproducible with a supplied random stream" {
+    const allocator = testing.allocator;
+
+    var first = Network.init(allocator, 0.1, .MeanSquaredError);
+    defer first.deinit();
+    var second = Network.init(allocator, 0.1, .MeanSquaredError);
+    defer second.deinit();
+
+    var first_prng = std.Random.DefaultPrng.init(42);
+    var second_prng = std.Random.DefaultPrng.init(42);
+    try first.addLayerWithRandom(2, 3, Activation.sigmoid, Activation.sigmoid_derivative, first_prng.random());
+    try second.addLayerWithRandom(2, 3, Activation.sigmoid, Activation.sigmoid_derivative, second_prng.random());
+
+    const first_layer = first.layers.items[0].Standard;
+    const second_layer = second.layers.items[0].Standard;
+    try testing.expectEqualSlices(f64, first_layer.weights.data, second_layer.weights.data);
+    try testing.expectEqualSlices(f64, first_layer.bias.data, second_layer.bias.data);
 }
 
 test "network rejects disconnected layer topology" {

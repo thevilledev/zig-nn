@@ -35,6 +35,17 @@ Continue with `nnctl run quick`, or choose a topic from the
 commands, data requirements, and full validation workflow are in
 [Getting Started](docs/getting-started.md).
 
+For a guided browser view of live training, run:
+
+```bash
+mise run lab
+```
+
+The local learning lab starts with XOR training, nonlinear regression, and
+binary classification. It streams native Zig metrics and snapshots through
+`nnctl`; see the [learning lab guide](docs/learning-lab.md) for the interface,
+development workflow, and experiment event protocol.
+
 ## Documentation
 
 - [Experiments](experiments/README.md) — learning routes, runnable programs,
@@ -52,6 +63,8 @@ commands, data requirements, and full validation workflow are in
 - [Benchmarks](docs/benchmarks.md) — repeatable local and remote measurements
 - [Development Environment](docs/development.md) — pinned tools, hooks, and
   repository-wide checks
+- [Real-Time Learning Lab](docs/learning-lab.md) — live browser experiments,
+  controls, and the structured event protocol
 
 ## License
 

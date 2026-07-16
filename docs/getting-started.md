@@ -54,6 +54,29 @@ nnctl clean
 nnctl help
 ```
 
+## Real-Time Learning Lab
+
+The browser lab builds the Svelte frontend and starts the local `nnctl` server:
+
+```bash
+mise run lab
+```
+
+Open the printed `http://127.0.0.1:8091` URL. Runs execute as native Zig
+processes, so the UI is local-only and uses the same implementation as the
+terminal experiments.
+
+For frontend development, run the API and Vite in separate terminals:
+
+```bash
+mise run web:install
+mise run lab:api
+cd web && npm run dev
+```
+
+Vite proxies `/api` to port 8091. See [Real-Time Learning Lab](learning-lab.md)
+for the supported controls and event format.
+
 You can change the optimization mode used by `nnctl`:
 
 ```bash

@@ -54,6 +54,7 @@ const SourceTest = struct {
 };
 
 const source_tests = [_]SourceTest{
+    .{ .name = "experiment_events", .src = "experiments/support/events.zig" },
     .{ .name = "dimensions", .src = "src/dimensions.zig" },
     .{ .name = "matrix", .src = "src/matrix.zig" },
     .{ .name = "activation", .src = "src/activation.zig" },
@@ -150,6 +151,11 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    const experiment_events_mod = b.createModule(.{
+        .root_source_file = b.path("experiments/support/events.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
     // Add the build options to the module
     lib_mod.addOptions("build_options", build_options);
 
@@ -185,6 +191,7 @@ pub fn build(b: *std.Build) void {
 
         // Add the library module to the experiment executable
         exe_mod.addImport("nn", lib_mod);
+        exe_mod.addImport("experiment_events", experiment_events_mod);
 
         // Build the experiment executable
         const exe = b.addExecutable(.{
@@ -436,6 +443,11 @@ fn createTestArtifact(
         .optimize = optimize,
     });
     test_mod.addOptions("build_options", build_options);
+    test_mod.addImport("experiment_events", b.createModule(.{
+        .root_source_file = b.path("experiments/support/events.zig"),
+        .target = target,
+        .optimize = optimize,
+    }));
     if (nn_mod) |module| {
         test_mod.addImport("nn", module);
     }
