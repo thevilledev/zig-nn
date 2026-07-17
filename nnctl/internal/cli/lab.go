@@ -86,6 +86,7 @@ func (a *app) runLab(ctx context.Context, opts labOptions) (runErr error) {
 		}
 		var err error
 		cloud, err = learninglab.NewCloudManager(learninglab.CloudManagerOptions{
+			Parent:       ctx,
 			RepoRoot:     a.repoRoot,
 			BaseURL:      opts.cloudBaseURL,
 			Mode:         opts.mode,
