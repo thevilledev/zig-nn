@@ -1,6 +1,9 @@
 package cli
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestIsLoopbackLabHost(t *testing.T) {
 	tests := map[string]bool{
@@ -15,5 +18,15 @@ func TestIsLoopbackLabHost(t *testing.T) {
 		if actual := isLoopbackLabHost(host); actual != expected {
 			t.Errorf("isLoopbackLabHost(%q) = %t, want %t", host, actual, expected)
 		}
+	}
+}
+
+func TestRunLabRequiresLoopbackHost(t *testing.T) {
+	t.Parallel()
+	a := newApp(nil, nil, nil)
+	opts := defaultLabOptions()
+	opts.host = "0.0.0.0"
+	if err := a.runLab(t.Context(), opts); err == nil || !strings.Contains(err.Error(), "loopback") {
+		t.Fatalf("runLab() error = %v", err)
 	}
 }

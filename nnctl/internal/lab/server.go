@@ -7,9 +7,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -17,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"nnctl/internal/localhttp"
 )
 
 type Server struct {
@@ -63,7 +63,7 @@ func NewServerWithOptions(manager *Manager, assets string, options ServerOptions
 		}
 		mux.Handle("/", spa)
 	}
-	server.handler = securityHeaders(mux)
+	server.handler = localhttp.SecurityHeaders(mux)
 	return server, nil
 }
 
@@ -168,7 +168,7 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	options.Target = request.Target.Kind
-	id, err := s.manager.Start(context.Background(), spec, options)
+	id, err := s.manager.Start(spec, options)
 	if errors.Is(err, ErrBusy) {
 		writeAPIError(w, http.StatusConflict, "run_busy", err.Error())
 		return
@@ -480,24 +480,11 @@ func methodNotAllowed(w http.ResponseWriter, allowed string) {
 }
 
 func requireSameOrigin(w http.ResponseWriter, r *http.Request) bool {
-	origin := strings.TrimSpace(r.Header.Get("Origin"))
-	if origin == "" {
-		return true
-	}
-	parsed, err := url.Parse(origin)
-	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || !strings.EqualFold(parsed.Host, r.Host) || !loopbackHostname(parsed.Hostname()) {
+	if !localhttp.SameOrigin(r) {
 		writeAPIError(w, http.StatusForbidden, "cross_origin_request", "cross-origin state changes are not allowed")
 		return false
 	}
 	return true
-}
-
-func loopbackHostname(host string) bool {
-	if strings.EqualFold(strings.TrimSpace(host), "localhost") {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
 }
 
 func newSPAHandler(assets string) (http.Handler, error) {
@@ -520,13 +507,4 @@ func newSPAHandler(assets string) (http.Handler, error) {
 		r.URL.Path = "/"
 		files.ServeHTTP(w, r)
 	}), nil
-}
-
-func securityHeaders(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; base-uri 'none'; frame-ancestors 'none'")
-		w.Header().Set("Referrer-Policy", "no-referrer")
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		next.ServeHTTP(w, r)
-	})
 }

@@ -68,6 +68,7 @@ func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
 func TestChatProxyRejectsMissingMessages(t *testing.T) {
 	proxy := chatProxy{apiBaseURL: "http://127.0.0.1:1"}
 	request := httptest.NewRequest(http.MethodPost, "/api/chat", strings.NewReader(`{}`))
+	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 
 	proxy.ServeHTTP(response, request)
@@ -89,7 +90,63 @@ func TestServeChatApp(t *testing.T) {
 	if !strings.Contains(response.Body.String(), "zig-nn TinyGPT Chat") {
 		t.Fatalf("chat page did not render expected title")
 	}
-	if !strings.Contains(response.Body.String(), "/api/chat") {
-		t.Fatalf("chat page does not post to proxy endpoint")
+	if !strings.Contains(response.Body.String(), "/app.js") {
+		t.Fatalf("chat page does not load its script")
+	}
+
+	scriptResponse := httptest.NewRecorder()
+	serveChatApp(scriptResponse, httptest.NewRequest(http.MethodGet, "/app.js", nil))
+	if scriptResponse.Code != http.StatusOK || !strings.Contains(scriptResponse.Body.String(), "/api/chat") {
+		t.Fatalf("chat script does not post to proxy endpoint")
+	}
+}
+
+func TestChatProxyRejectsUnsafeRequests(t *testing.T) {
+	t.Parallel()
+	proxy := chatProxy{apiBaseURL: "http://127.0.0.1:1", maxTokens: 64, temperature: 1}
+	tests := []struct {
+		name        string
+		body        string
+		contentType string
+		origin      string
+		host        string
+		want        int
+	}{
+		{name: "wrong content type", body: `{}`, contentType: "text/plain", want: http.StatusUnsupportedMediaType},
+		{name: "unknown field", body: `{"messages":[{"role":"user","content":"hi"}],"stream":true}`, contentType: "application/json", want: http.StatusBadRequest},
+		{name: "excess tokens", body: `{"messages":[{"role":"user","content":"hi"}],"max_tokens":513}`, contentType: "application/json", want: http.StatusBadRequest},
+		{name: "invalid role", body: `{"messages":[{"role":"tool","content":"hi"}]}`, contentType: "application/json", want: http.StatusBadRequest},
+		{name: "cross origin", body: `{"messages":[{"role":"user","content":"hi"}]}`, contentType: "application/json", origin: "https://attacker.example", host: "attacker.example", want: http.StatusForbidden},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/chat", strings.NewReader(test.body))
+			request.Header.Set("Content-Type", test.contentType)
+			request.Header.Set("Origin", test.origin)
+			if test.host != "" {
+				request.Host = test.host
+			}
+			response := httptest.NewRecorder()
+			proxy.ServeHTTP(response, request)
+			if response.Code != test.want {
+				t.Fatalf("status = %d, want %d: %s", response.Code, test.want, response.Body.String())
+			}
+		})
+	}
+}
+
+func TestValidateChatOptionsRequiresLoopback(t *testing.T) {
+	t.Parallel()
+	opts := defaultChatOptions()
+	opts.allowUntrained = true
+	opts.host = "0.0.0.0"
+	if _, err := validateChatOptions(opts); err == nil || !strings.Contains(err.Error(), "loopback") {
+		t.Fatalf("validateChatOptions() error = %v", err)
+	}
+	opts = defaultChatOptions()
+	opts.allowUntrained = true
+	opts.apiHost = "example.test"
+	if _, err := validateChatOptions(opts); err == nil || !strings.Contains(err.Error(), "loopback") {
+		t.Fatalf("validateChatOptions() error = %v", err)
 	}
 }

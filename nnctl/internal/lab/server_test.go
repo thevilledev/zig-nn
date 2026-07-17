@@ -17,7 +17,7 @@ import (
 )
 
 func TestServerCatalogRunAndSSEReplay(t *testing.T) {
-	manager := NewManager(successfulExecutor())
+	manager := NewManager(t.Context(), successfulExecutor())
 	defer manager.Close()
 	server, err := NewServer(manager, "", true)
 	if err != nil {
@@ -67,7 +67,7 @@ func TestServerCatalogRunAndSSEReplay(t *testing.T) {
 }
 
 func TestServerRejectsInvalidInputs(t *testing.T) {
-	manager := NewManager(successfulExecutor())
+	manager := NewManager(t.Context(), successfulExecutor())
 	defer manager.Close()
 	server, _ := NewServer(manager, "", true)
 
@@ -109,7 +109,7 @@ func TestServerRejectsInvalidInputs(t *testing.T) {
 
 func TestServerReturnsConflictWhileRunActive(t *testing.T) {
 	release := make(chan struct{})
-	manager := NewManager(ExecutorFunc(func(_ context.Context, _ ExperimentSpec, _ RunOptions, _ func([]byte) error, _ func(string)) error {
+	manager := NewManager(t.Context(), ExecutorFunc(func(_ context.Context, _ ExperimentSpec, _ RunOptions, _ func([]byte) error, _ func(string)) error {
 		<-release
 		return nil
 	}))
@@ -146,7 +146,7 @@ func TestServerCloudWorkerAndRemoteRunLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = cloud.Close() }()
-	manager := NewManager(RoutingExecutor{Local: successfulExecutor(), Cloud: cloud})
+	manager := NewManager(t.Context(), RoutingExecutor{Local: successfulExecutor(), Cloud: cloud})
 	defer manager.Close()
 	server, err := NewServerWithOptions(manager, "", ServerOptions{APIOnly: true, Cloud: cloud})
 	if err != nil {
@@ -245,7 +245,7 @@ func TestSPAHandlerServesAssetsAndFallback(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "app.js"), []byte("export {}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	manager := NewManager(successfulExecutor())
+	manager := NewManager(t.Context(), successfulExecutor())
 	defer manager.Close()
 	server, err := NewServer(manager, dir, false)
 	if err != nil {

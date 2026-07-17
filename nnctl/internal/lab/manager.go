@@ -16,7 +16,11 @@ import (
 	"nnctl/internal/zig"
 )
 
-const maxRunEvents = 512
+const (
+	maxRunEvents     = 512
+	maxRunEventBytes = 32 * 1024 * 1024
+	maxCompletedRuns = 32
+)
 
 var (
 	ErrBusy        = errors.New("an experiment is already running")
@@ -141,6 +145,7 @@ type run struct {
 
 	mu          sync.Mutex
 	events      []Event
+	eventBytes  int
 	nextSeq     uint64
 	subscribers map[chan Event]struct{}
 	completed   bool
@@ -152,24 +157,32 @@ type run struct {
 
 type Manager struct {
 	executor Executor
+	ctx      context.Context
+	cancel   context.CancelFunc
 
-	mu     sync.Mutex
-	runs   map[string]*run
-	active *run
+	mu        sync.Mutex
+	runs      map[string]*run
+	completed []string
+	active    *run
+	closed    bool
 }
 
-func NewManager(executor Executor) *Manager {
-	return &Manager{executor: executor, runs: make(map[string]*run)}
+func NewManager(parent context.Context, executor Executor) *Manager {
+	ctx, cancel := context.WithCancel(parent)
+	return &Manager{executor: executor, ctx: ctx, cancel: cancel, runs: make(map[string]*run)}
 }
 
-func (m *Manager) Start(parent context.Context, spec ExperimentSpec, options RunOptions) (string, error) {
+func (m *Manager) Start(spec ExperimentSpec, options RunOptions) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.closed {
+		return "", errors.New("run manager is closed")
+	}
 	if m.active != nil {
 		return "", ErrBusy
 	}
 
-	ctx, cancel := context.WithCancel(parent)
+	ctx, cancel := context.WithCancel(m.ctx)
 	r := &run{
 		id:          newRunID(),
 		experiment:  spec.ID,
@@ -237,13 +250,18 @@ func (m *Manager) execute(ctx context.Context, r *run, spec ExperimentSpec, opti
 			Data:       marshalData(map[string]string{"message": "experiment exited without a completion event"}),
 		})
 	}
-	r.finish()
-
 	m.mu.Lock()
 	if m.active == r {
 		m.active = nil
 	}
+	m.completed = append(m.completed, r.id)
+	for len(m.completed) > maxCompletedRuns {
+		oldest := m.completed[0]
+		m.completed = m.completed[1:]
+		delete(m.runs, oldest)
+	}
 	m.mu.Unlock()
+	r.finish()
 }
 
 func (r *run) validateProtocol(input eventInput) error {
@@ -325,11 +343,12 @@ func (r *run) append(input eventInput) Event {
 		TotalSteps: input.TotalSteps,
 		Data:       input.Data,
 	}
-	if len(r.events) == maxRunEvents {
+	r.events = append(r.events, event)
+	r.eventBytes += eventRetainedBytes(event)
+	for len(r.events) > maxRunEvents || r.eventBytes > maxRunEventBytes {
+		r.eventBytes -= eventRetainedBytes(r.events[0])
 		copy(r.events, r.events[1:])
-		r.events[len(r.events)-1] = event
-	} else {
-		r.events = append(r.events, event)
+		r.events = r.events[:len(r.events)-1]
 	}
 	if event.Type == "run_completed" {
 		r.completed = true
@@ -347,6 +366,10 @@ func (r *run) append(input eventInput) Event {
 		}
 	}
 	return event
+}
+
+func eventRetainedBytes(event Event) int {
+	return len(event.Type) + len(event.Experiment) + len(event.Data) + 64
 }
 
 func (r *run) hasCompleted() bool {
@@ -431,10 +454,15 @@ func (m *Manager) Cancel(id string) error {
 
 func (m *Manager) Close() {
 	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return
+	}
+	m.closed = true
 	active := m.active
+	m.cancel()
 	m.mu.Unlock()
 	if active != nil {
-		active.cancel()
 		<-active.done
 	}
 }

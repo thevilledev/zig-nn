@@ -7,13 +7,25 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
+	"mime"
 	"net"
 	"net/http"
 	"os/exec"
 	"strconv"
+	"strings"
 	"time"
 
+	"nnctl/internal/localhttp"
 	"nnctl/internal/zig"
+)
+
+const (
+	chatMaxRequestBytes = 64 * 1024
+	chatMaxMessages     = 128
+	chatMaxContentBytes = 32 * 1024
+	chatMaxTokens       = 512
+	chatMaxTemperature  = 4.0
 )
 
 type chatOptions struct {
@@ -105,11 +117,7 @@ func (a *app) runChat(ctx context.Context, opts chatOptions) error {
 	})
 
 	chatAddr := net.JoinHostPort(opts.host, strconv.Itoa(opts.port))
-	chatServer := &http.Server{
-		Addr:              chatAddr,
-		Handler:           mux,
-		ReadHeaderTimeout: 5 * time.Second,
-	}
+	chatServer := localhttp.NewServer(chatAddr, localhttp.SecurityHeaders(mux))
 
 	httpDone := make(chan error, 1)
 	output := newErrorWriter(a.stdout())
@@ -126,7 +134,7 @@ func (a *app) runChat(ctx context.Context, opts chatOptions) error {
 
 	select {
 	case err := <-childDone:
-		_ = chatServer.Shutdown(context.Background())
+		_ = shutdownHTTPServer(ctx, chatServer)
 		if err != nil {
 			return fmt.Errorf("inference server exited: %w", err)
 		}
@@ -139,7 +147,7 @@ func (a *app) runChat(ctx context.Context, opts chatOptions) error {
 		}
 		return fmt.Errorf("chat app server failed: %w", err)
 	case <-ctx.Done():
-		_ = chatServer.Shutdown(context.Background())
+		_ = shutdownHTTPServer(ctx, chatServer)
 		_ = serverCmd.Process.Kill()
 		<-childDone
 		return ctx.Err()
@@ -156,18 +164,57 @@ func validateChatOptions(opts chatOptions) (time.Duration, error) {
 	if opts.apiPort <= 0 || opts.apiPort > 65535 {
 		return 0, fmt.Errorf("--api-port must be between 1 and 65535")
 	}
-	if opts.maxTokens < 0 {
-		return 0, fmt.Errorf("--max-tokens must be non-negative")
+	if !localhttp.IsLoopbackHost(opts.host) {
+		return 0, fmt.Errorf("--host must be a loopback address; use an SSH tunnel for remote access")
 	}
-	if opts.topK < 0 {
-		return 0, fmt.Errorf("--top-k must be non-negative")
+	if !localhttp.IsLoopbackHost(opts.apiHost) {
+		return 0, fmt.Errorf("--api-host must be a loopback address")
+	}
+	if strings.TrimSpace(opts.modelName) == "" {
+		return 0, fmt.Errorf("--model-name must not be empty")
+	}
+	if opts.maxTokens < 0 || opts.maxTokens > chatMaxTokens {
+		return 0, fmt.Errorf("--max-tokens must be between 0 and %d", chatMaxTokens)
+	}
+	if math.IsNaN(opts.temperature) || math.IsInf(opts.temperature, 0) || opts.temperature < 0 || opts.temperature > chatMaxTemperature {
+		return 0, fmt.Errorf("--temperature must be between 0 and %g", chatMaxTemperature)
+	}
+	if opts.topK < 0 || opts.topK > 65536 {
+		return 0, fmt.Errorf("--top-k must be between 0 and 65536")
 	}
 
 	readyTimeout, err := time.ParseDuration(opts.readyTimeoutText)
 	if err != nil {
 		return 0, fmt.Errorf("parse --ready-timeout: %w", err)
 	}
+	if readyTimeout <= 0 {
+		return 0, fmt.Errorf("--ready-timeout must be positive")
+	}
 	return readyTimeout, nil
+}
+
+func shutdownHTTPServer(parent context.Context, server *http.Server) error {
+	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(parent), 5*time.Second)
+	defer cancel()
+	return server.Shutdown(shutdownCtx)
+}
+
+type chatMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+type chatCompletionRequest struct {
+	Messages    []chatMessage `json:"messages"`
+	MaxTokens   *int          `json:"max_tokens,omitempty"`
+	Temperature *float64      `json:"temperature,omitempty"`
+}
+
+type chatUpstreamRequest struct {
+	Model       string        `json:"model"`
+	Messages    []chatMessage `json:"messages"`
+	MaxTokens   int           `json:"max_tokens"`
+	Temperature float64       `json:"temperature"`
 }
 
 type chatProxy struct {
@@ -180,31 +227,50 @@ type chatProxy struct {
 
 func (p chatProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !localhttp.RequireSameOrigin(w, r) {
+		return
+	}
+	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || mediaType != "application/json" {
+		http.Error(w, "content type must be application/json", http.StatusUnsupportedMediaType)
 		return
 	}
 	defer func() { _ = r.Body.Close() }()
 
-	var payload map[string]any
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64*1024))
-	decoder.UseNumber()
-	if err := decoder.Decode(&payload); err != nil {
+	var input chatCompletionRequest
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, chatMaxRequestBytes))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil {
 		http.Error(w, "invalid json", http.StatusBadRequest)
 		return
 	}
-	if _, ok := payload["messages"]; !ok {
-		http.Error(w, "missing messages", http.StatusBadRequest)
+	if err := ensureChatJSONEOF(decoder); err != nil {
+		http.Error(w, "request body must contain one json object", http.StatusBadRequest)
 		return
 	}
-	payload["model"] = p.modelName
-	if _, ok := payload["max_tokens"]; !ok {
-		payload["max_tokens"] = p.maxTokens
+	if err := validateChatRequest(input); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
-	if _, ok := payload["temperature"]; !ok {
-		payload["temperature"] = p.temperature
+	maxTokens := p.maxTokens
+	if input.MaxTokens != nil {
+		maxTokens = *input.MaxTokens
+	}
+	temperature := p.temperature
+	if input.Temperature != nil {
+		temperature = *input.Temperature
 	}
 
-	body, err := json.Marshal(payload)
+	body, err := json.Marshal(chatUpstreamRequest{
+		Model:       p.modelName,
+		Messages:    input.Messages,
+		MaxTokens:   maxTokens,
+		Temperature: temperature,
+	})
 	if err != nil {
 		http.Error(w, "encode request", http.StatusInternalServerError)
 		return
@@ -233,17 +299,66 @@ func (p chatProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	} else {
 		w.Header().Set("Content-Type", "application/json")
 	}
+	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(w, resp.Body)
 }
 
+func ensureChatJSONEOF(decoder *json.Decoder) error {
+	var extra any
+	if err := decoder.Decode(&extra); errors.Is(err, io.EOF) {
+		return nil
+	} else {
+		return err
+	}
+}
+
+func validateChatRequest(request chatCompletionRequest) error {
+	if len(request.Messages) == 0 || len(request.Messages) > chatMaxMessages {
+		return fmt.Errorf("messages must contain between 1 and %d entries", chatMaxMessages)
+	}
+	hasUserMessage := false
+	for _, message := range request.Messages {
+		switch message.Role {
+		case "system", "user", "assistant":
+		default:
+			return fmt.Errorf("unsupported message role %q", message.Role)
+		}
+		if len(message.Content) > chatMaxContentBytes {
+			return fmt.Errorf("message content exceeds %d bytes", chatMaxContentBytes)
+		}
+		if message.Role == "user" && strings.TrimSpace(message.Content) != "" {
+			hasUserMessage = true
+		}
+	}
+	if !hasUserMessage {
+		return fmt.Errorf("messages must include a non-empty user message")
+	}
+	if request.MaxTokens != nil && (*request.MaxTokens < 0 || *request.MaxTokens > chatMaxTokens) {
+		return fmt.Errorf("max_tokens must be between 0 and %d", chatMaxTokens)
+	}
+	if request.Temperature != nil && (math.IsNaN(*request.Temperature) || math.IsInf(*request.Temperature, 0) || *request.Temperature < 0 || *request.Temperature > chatMaxTemperature) {
+		return fmt.Errorf("temperature must be between 0 and %g", chatMaxTemperature)
+	}
+	return nil
+}
+
 func serveChatApp(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" {
-		http.NotFound(w, r)
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Allow", http.MethodGet+", "+http.MethodHead)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = io.WriteString(w, chatHTML)
+	switch r.URL.Path {
+	case "/":
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = io.WriteString(w, chatHTML)
+	case "/app.js":
+		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		_, _ = io.WriteString(w, chatJS)
+	default:
+		http.NotFound(w, r)
+	}
 }
 
 func waitForInference(ctx context.Context, url string, timeout time.Duration, childDone <-chan error) (bool, error) {
@@ -329,7 +444,12 @@ const chatHTML = `<!doctype html>
     </div>
   </form>
 </main>
-<script>
+<script src="/app.js" defer></script>
+</body>
+</html>
+`
+
+const chatJS = `
 const log = document.querySelector("#log");
 const form = document.querySelector("#chat");
 const promptBox = document.querySelector("#prompt");
@@ -377,7 +497,4 @@ form.addEventListener("submit", async (event) => {
     promptBox.focus();
   }
 });
-</script>
-</body>
-</html>
 `

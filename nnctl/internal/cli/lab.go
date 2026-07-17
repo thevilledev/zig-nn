@@ -8,12 +8,12 @@ import (
 	"net/http"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	learninglab "nnctl/internal/lab"
+	"nnctl/internal/localhttp"
 )
 
 type labOptions struct {
@@ -62,8 +62,8 @@ func (a *app) runLab(ctx context.Context, opts labOptions) (runErr error) {
 	if opts.port <= 0 || opts.port > 65535 {
 		return fmt.Errorf("--port must be between 1 and 65535")
 	}
-	if opts.cloud && !isLoopbackLabHost(opts.host) {
-		return fmt.Errorf("--cloud requires a loopback --host; refusing to expose cloud control on %q", opts.host)
+	if !isLoopbackLabHost(opts.host) {
+		return fmt.Errorf("--host must be a loopback address; use an SSH tunnel for remote access")
 	}
 	assets := opts.assets
 	if assets == "" {
@@ -97,7 +97,7 @@ func (a *app) runLab(ctx context.Context, opts labOptions) (runErr error) {
 		defer func() { runErr = errors.Join(runErr, cloud.Close()) }()
 		executor = learninglab.RoutingExecutor{Local: localExecutor, Cloud: cloud}
 	}
-	manager := learninglab.NewManager(executor)
+	manager := learninglab.NewManager(ctx, executor)
 	defer manager.Close()
 	handler, err := learninglab.NewServerWithOptions(manager, assets, learninglab.ServerOptions{
 		APIOnly: opts.apiOnly,
@@ -107,20 +107,22 @@ func (a *app) runLab(ctx context.Context, opts labOptions) (runErr error) {
 		return err
 	}
 	address := net.JoinHostPort(opts.host, strconv.Itoa(opts.port))
-	server := &http.Server{
-		Addr:              address,
-		Handler:           handler.Handler(),
-		ReadHeaderTimeout: 5 * time.Second,
-	}
+	server := localhttp.NewServer(address, handler.Handler())
 
 	if _, err := fmt.Fprintf(a.stdout(), "learning lab: http://%s\n", address); err != nil {
 		return fmt.Errorf("write learning lab endpoint: %w", err)
 	}
-	go func() {
-		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	shutdownDone := make(chan struct{})
+	stopShutdown := context.AfterFunc(ctx, func() {
+		defer close(shutdownDone)
+		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
 		_ = server.Shutdown(shutdownCtx)
+	})
+	defer func() {
+		if !stopShutdown() {
+			<-shutdownDone
+		}
 	}()
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("learning lab server: %w", err)
@@ -129,10 +131,5 @@ func (a *app) runLab(ctx context.Context, opts labOptions) (runErr error) {
 }
 
 func isLoopbackLabHost(host string) bool {
-	host = strings.TrimSpace(host)
-	if strings.EqualFold(host, "localhost") {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
+	return localhttp.IsLoopbackHost(host)
 }

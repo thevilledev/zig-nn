@@ -7,7 +7,9 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -64,7 +66,9 @@ func newApp(stdin io.Reader, stdout, stderr io.Writer) *app {
 // Main runs nnctl with the process standard streams and returns its exit code.
 func Main(args []string) int {
 	app := newApp(os.Stdin, os.Stdout, os.Stderr)
-	if err := app.execute(context.Background(), args); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := app.execute(ctx, args); err != nil {
 		_, _ = fmt.Fprintln(app.stderr(), "error:", err)
 		return 1
 	}
