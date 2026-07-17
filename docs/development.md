@@ -38,7 +38,13 @@ mise run zig:test
 mise run zig:test-acceptance
 mise run go:test
 mise run go:lint
+mise run go:vuln
+mise run packer:validate
 mise run actions:lint
 mise run hooks:check
 mise run ci
 ```
+
+The toolchain pins both Packer and `govulncheck` in `mise.toml`. The embedded
+Verda template also requires an exact plugin release, so `packer init` cannot
+silently select a newer provider plugin during an image build.

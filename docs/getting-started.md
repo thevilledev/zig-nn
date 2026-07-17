@@ -80,8 +80,8 @@ for the supported controls and event format.
 To deploy a Verda CUDA worker from the same UI, configure the `nnctl/verda`
 keyring credentials described in the learning-lab guide and start the server
 with `nnctl lab --cloud`. Cloud control remains loopback-only, uploads committed
-`HEAD`, streams the native experiment protocol over SSH, and defaults to
-destroying the worker after the run.
+`HEAD`, streams the native experiment protocol over SSH, and defaults to a
+reusable worker that requires explicit cleanup.
 
 You can change the optimization mode used by `nnctl`:
 
@@ -147,6 +147,10 @@ Most experiments are self-contained. Some workflows use local data or checkpoint
 - Speech Commands needs the external Mini Speech Commands WAV dataset and a
   locally trained checkpoint. Run `nnctl data speech-commands`, then
   `nnctl train speech-commands --output speech-commands.bin`.
+
+The MNIST and Mini Speech Commands downloads use pinned HTTPS sources, enforce
+compressed and extracted size limits, and verify exact SHA-256 digests before
+installing files.
 
 See [Experiments](../experiments/README.md) for the complete catalog and the
 evidence each program is designed to expose.

@@ -48,7 +48,7 @@ func TestCloudStorePersistsManagedWorker(t *testing.T) {
 		t.Fatalf("database permissions = %o", info.Mode().Perm())
 	}
 	var payload string
-	if err := store.db.QueryRow("SELECT CAST(worker_json AS TEXT) FROM cloud_workers WHERE id = ?", worker.ID).Scan(&payload); err != nil {
+	if err := store.db.QueryRowContext(t.Context(), "SELECT CAST(worker_json AS TEXT) FROM cloud_workers WHERE id = ?", worker.ID).Scan(&payload); err != nil {
 		t.Fatal(err)
 	}
 	for _, forbidden := range []string{"client_secret", "client_id", "credential"} {

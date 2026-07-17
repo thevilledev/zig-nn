@@ -24,7 +24,7 @@ func TestServerCatalogRunAndSSEReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	catalogResponse := httptest.NewRecorder()
-	server.Handler().ServeHTTP(catalogResponse, httptest.NewRequest(http.MethodGet, "/api/experiments", nil))
+	server.Handler().ServeHTTP(catalogResponse, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/experiments", nil))
 	var specs []ExperimentSpec
 	if err := json.NewDecoder(catalogResponse.Body).Decode(&specs); err != nil {
 		t.Fatal(err)
@@ -33,14 +33,14 @@ func TestServerCatalogRunAndSSEReplay(t *testing.T) {
 		t.Fatalf("catalog response = %#v", specs)
 	}
 	capabilitiesResponse := httptest.NewRecorder()
-	server.Handler().ServeHTTP(capabilitiesResponse, httptest.NewRequest(http.MethodGet, "/api/capabilities", nil))
+	server.Handler().ServeHTTP(capabilitiesResponse, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/capabilities", nil))
 	var capabilities Capabilities
 	if err := json.NewDecoder(capabilitiesResponse.Body).Decode(&capabilities); err != nil || !contains(capabilities.Backends, "cpu") {
 		t.Fatalf("capabilities = %#v, %v", capabilities, err)
 	}
 
 	runResponse := httptest.NewRecorder()
-	server.Handler().ServeHTTP(runResponse, httptest.NewRequest(http.MethodPost, "/api/runs", strings.NewReader(`{"experiment":"xor-training","parameters":{"epochs":100}}`)))
+	server.Handler().ServeHTTP(runResponse, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/runs", strings.NewReader(`{"experiment":"xor-training","parameters":{"epochs":100}}`)))
 	if runResponse.Code != http.StatusAccepted {
 		t.Fatalf("POST /api/runs = %d: %s", runResponse.Code, runResponse.Body.String())
 	}
@@ -49,7 +49,7 @@ func TestServerCatalogRunAndSSEReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	eventsResponse := httptest.NewRecorder()
-	server.Handler().ServeHTTP(eventsResponse, httptest.NewRequest(http.MethodGet, "/api/runs/"+created["id"]+"/events", nil))
+	server.Handler().ServeHTTP(eventsResponse, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/runs/"+created["id"]+"/events", nil))
 	text := eventsResponse.Body.String()
 	for _, want := range []string{"event: run_started", "event: metric", "event: run_completed", `"run_id":"` + created["id"] + `"`} {
 		if !strings.Contains(text, want) {
@@ -57,7 +57,7 @@ func TestServerCatalogRunAndSSEReplay(t *testing.T) {
 		}
 	}
 
-	replayRequest := httptest.NewRequest(http.MethodGet, "/api/runs/"+created["id"]+"/events", nil)
+	replayRequest := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/runs/"+created["id"]+"/events", nil)
 	replayRequest.Header.Set("Last-Event-ID", "1")
 	replayResponse := httptest.NewRecorder()
 	server.Handler().ServeHTTP(replayResponse, replayRequest)
@@ -82,7 +82,7 @@ func TestServerRejectsInvalidInputs(t *testing.T) {
 		{`{"experiment":"xor-training","parameters":{},"extra":true}`, http.StatusBadRequest},
 	}
 	for _, test := range tests {
-		request := httptest.NewRequest(http.MethodPost, "/api/runs", strings.NewReader(test.body))
+		request := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/runs", strings.NewReader(test.body))
 		response := httptest.NewRecorder()
 		server.Handler().ServeHTTP(response, request)
 		if response.Code != test.want {
@@ -92,12 +92,12 @@ func TestServerRejectsInvalidInputs(t *testing.T) {
 
 	oversized := `{"experiment":"xor-training","parameters":{}}` + strings.Repeat(" ", 65*1024)
 	response := httptest.NewRecorder()
-	server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/runs", strings.NewReader(oversized)))
+	server.Handler().ServeHTTP(response, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/runs", strings.NewReader(oversized)))
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("oversized request status = %d", response.Code)
 	}
 
-	crossOriginCancel := httptest.NewRequest(http.MethodDelete, "/api/runs/missing", nil)
+	crossOriginCancel := httptest.NewRequestWithContext(t.Context(), http.MethodDelete, "/api/runs/missing", nil)
 	crossOriginCancel.Host = "attacker.example"
 	crossOriginCancel.Header.Set("Origin", "https://attacker.example")
 	response = httptest.NewRecorder()
@@ -116,12 +116,12 @@ func TestServerReturnsConflictWhileRunActive(t *testing.T) {
 	server, _ := NewServer(manager, "", true)
 	requestBody := []byte(`{"experiment":"xor-training","parameters":{}}`)
 	first := httptest.NewRecorder()
-	server.Handler().ServeHTTP(first, httptest.NewRequest(http.MethodPost, "/api/runs", bytes.NewReader(requestBody)))
+	server.Handler().ServeHTTP(first, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/runs", bytes.NewReader(requestBody)))
 	if first.Code != http.StatusAccepted {
 		t.Fatalf("first run status = %d", first.Code)
 	}
 	second := httptest.NewRecorder()
-	server.Handler().ServeHTTP(second, httptest.NewRequest(http.MethodPost, "/api/runs", bytes.NewReader(requestBody)))
+	server.Handler().ServeHTTP(second, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/runs", bytes.NewReader(requestBody)))
 	if second.Code != http.StatusConflict {
 		t.Fatalf("second run status = %d: %s", second.Code, second.Body.String())
 	}
@@ -154,12 +154,12 @@ func TestServerCloudWorkerAndRemoteRunLifecycle(t *testing.T) {
 	}
 
 	statusResponse := httptest.NewRecorder()
-	server.Handler().ServeHTTP(statusResponse, httptest.NewRequest(http.MethodGet, "/api/cloud/status", nil))
+	server.Handler().ServeHTTP(statusResponse, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/cloud/status", nil))
 	if statusResponse.Code != http.StatusOK || !strings.Contains(statusResponse.Body.String(), `"configured":true`) {
 		t.Fatalf("cloud status = %d: %s", statusResponse.Code, statusResponse.Body.String())
 	}
 	optionsResponse := httptest.NewRecorder()
-	server.Handler().ServeHTTP(optionsResponse, httptest.NewRequest(http.MethodGet, "/api/cloud/options", nil))
+	server.Handler().ServeHTTP(optionsResponse, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/cloud/options", nil))
 	if optionsResponse.Code != http.StatusOK || !strings.Contains(optionsResponse.Body.String(), "1A100.22V") || !strings.Contains(optionsResponse.Body.String(), defaultCloudSourceVolumeName) {
 		t.Fatalf("cloud options = %d: %s", optionsResponse.Code, optionsResponse.Body.String())
 	}
@@ -173,7 +173,7 @@ func TestServerCloudWorkerAndRemoteRunLifecycle(t *testing.T) {
 		"location_code":"FIN-02",
 		"auto_destroy":false
 	}`
-	crossOriginRequest := httptest.NewRequest(http.MethodPost, "/api/cloud/workers", strings.NewReader(deployBody))
+	crossOriginRequest := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/cloud/workers", strings.NewReader(deployBody))
 	crossOriginRequest.Header.Set("Origin", "https://attacker.example")
 	crossOriginRequest.Host = "attacker.example"
 	crossOriginResponse := httptest.NewRecorder()
@@ -183,12 +183,12 @@ func TestServerCloudWorkerAndRemoteRunLifecycle(t *testing.T) {
 	}
 	legacyResponse := httptest.NewRecorder()
 	legacyBody := `{"instance_type":"1A100.22V","market":"spot","ssh_key_id":"00000000-0000-0000-0000-000000000001"}`
-	server.Handler().ServeHTTP(legacyResponse, httptest.NewRequest(http.MethodPost, "/api/cloud/workers", strings.NewReader(legacyBody)))
+	server.Handler().ServeHTTP(legacyResponse, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/cloud/workers", strings.NewReader(legacyBody)))
 	if legacyResponse.Code != http.StatusBadRequest {
 		t.Fatalf("legacy SSH-key deploy = %d: %s", legacyResponse.Code, legacyResponse.Body.String())
 	}
 	deployResponse := httptest.NewRecorder()
-	deployRequest := httptest.NewRequest(http.MethodPost, "/api/cloud/workers", strings.NewReader(deployBody))
+	deployRequest := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/cloud/workers", strings.NewReader(deployBody))
 	deployRequest.Host = "127.0.0.1:8091"
 	deployRequest.Header.Set("Origin", "http://127.0.0.1:8091")
 	server.Handler().ServeHTTP(deployResponse, deployRequest)
@@ -209,7 +209,7 @@ func TestServerCloudWorkerAndRemoteRunLifecycle(t *testing.T) {
 		"acknowledge_committed_head":true
 	}`, created.ID)
 	runResponse := httptest.NewRecorder()
-	server.Handler().ServeHTTP(runResponse, httptest.NewRequest(http.MethodPost, "/api/runs", strings.NewReader(runBody)))
+	server.Handler().ServeHTTP(runResponse, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/runs", strings.NewReader(runBody)))
 	if runResponse.Code != http.StatusAccepted {
 		t.Fatalf("cloud run = %d: %s", runResponse.Code, runResponse.Body.String())
 	}
@@ -218,7 +218,7 @@ func TestServerCloudWorkerAndRemoteRunLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	eventsResponse := httptest.NewRecorder()
-	server.Handler().ServeHTTP(eventsResponse, httptest.NewRequest(http.MethodGet, "/api/runs/"+run["id"]+"/events", nil))
+	server.Handler().ServeHTTP(eventsResponse, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/runs/"+run["id"]+"/events", nil))
 	for _, expected := range []string{"event: run_status", "event: run_started", "event: run_completed", `"selected_backend":"cuda"`} {
 		if !strings.Contains(eventsResponse.Body.String(), expected) {
 			t.Fatalf("cloud events missing %q:\n%s", expected, eventsResponse.Body.String())
@@ -226,12 +226,12 @@ func TestServerCloudWorkerAndRemoteRunLifecycle(t *testing.T) {
 	}
 
 	destroyResponse := httptest.NewRecorder()
-	server.Handler().ServeHTTP(destroyResponse, httptest.NewRequest(http.MethodDelete, "/api/cloud/workers/"+created.ID, nil))
+	server.Handler().ServeHTTP(destroyResponse, httptest.NewRequestWithContext(t.Context(), http.MethodDelete, "/api/cloud/workers/"+created.ID, nil))
 	if destroyResponse.Code != http.StatusNoContent {
 		t.Fatalf("destroy = %d: %s", destroyResponse.Code, destroyResponse.Body.String())
 	}
 	workerEvents := httptest.NewRecorder()
-	server.Handler().ServeHTTP(workerEvents, httptest.NewRequest(http.MethodGet, "/api/cloud/workers/"+created.ID+"/events", nil))
+	server.Handler().ServeHTTP(workerEvents, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/cloud/workers/"+created.ID+"/events", nil))
 	if !strings.Contains(workerEvents.Body.String(), "event: worker") || !strings.Contains(workerEvents.Body.String(), `"state":"destroyed"`) {
 		t.Fatalf("worker events = %s", workerEvents.Body.String())
 	}
@@ -253,7 +253,7 @@ func TestSPAHandlerServesAssetsAndFallback(t *testing.T) {
 	}
 	for _, route := range []string{"/", "/experiments/xor", "/app.js"} {
 		response := httptest.NewRecorder()
-		server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, route, nil))
+		server.Handler().ServeHTTP(response, httptest.NewRequestWithContext(t.Context(), http.MethodGet, route, nil))
 		if response.Code != http.StatusOK {
 			t.Fatalf("GET %s = %d", route, response.Code)
 		}

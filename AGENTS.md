@@ -4,7 +4,7 @@
 
 Use the commands declared in `mise.toml` instead of installing tools ad hoc. The pinned toolchain is:
 
-- Go 1.26.1 for `nnctl`
+- Go 1.26.5 for `nnctl`
 - Zig 0.16.0
 - golangci-lint 2.12.2
 - zizmor 1.26.1

@@ -95,7 +95,7 @@ func (a *app) runDataMNIST(ctx context.Context, dir string, force bool) error {
 	if !filepath.IsAbs(dir) {
 		dir = filepath.Join(a.repoRoot, dir)
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("create data directory: %w", err)
 	}
 	for _, file := range mnistFiles {
@@ -135,7 +135,7 @@ func (a *app) prepareSpeechCommands(ctx context.Context, artifact downloadArtifa
 	}
 
 	parent := filepath.Dir(dir)
-	if err := os.MkdirAll(parent, 0o755); err != nil {
+	if err := os.MkdirAll(parent, 0o700); err != nil {
 		return fmt.Errorf("create data parent: %w", err)
 	}
 	if _, err := fmt.Fprintln(a.stdout(), "download mini_speech_commands.zip"); err != nil {
@@ -196,7 +196,7 @@ func extractSpeechCommandsZip(archivePath, destination string) error {
 		}
 		seen[target] = struct{}{}
 		if file.FileInfo().IsDir() {
-			if err := os.MkdirAll(target, 0o755); err != nil {
+			if err := os.MkdirAll(target, 0o700); err != nil {
 				return fmt.Errorf("create extracted directory: %w", err)
 			}
 			continue
@@ -207,7 +207,7 @@ func extractSpeechCommandsZip(archivePath, destination string) error {
 		if file.UncompressedSize64 > uint64(maxSpeechCommandsEntryBytes) {
 			return fmt.Errorf("zip entry %q exceeds %d bytes", file.Name, maxSpeechCommandsEntryBytes)
 		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
 			return fmt.Errorf("create extracted file parent: %w", err)
 		}
 		remaining := maxSpeechCommandsExtractedBytes - extractedBytes
@@ -253,7 +253,7 @@ func copySpeechCommandsEntry(file *zip.File, target string, maxBytes int64) (int
 	if err != nil {
 		return 0, fmt.Errorf("open zip entry %q: %w", file.Name, err)
 	}
-	output, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	output, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		_ = source.Close()
 		return 0, fmt.Errorf("create extracted file %q: %w", target, err)
@@ -408,7 +408,7 @@ func installGzipArtifact(artifact gzipArtifact, archivePath, dest string) error 
 		return fmt.Errorf("close %s: %w", tmp, err)
 	}
 	out = nil
-	if err := os.Chmod(tmp, 0o644); err != nil {
+	if err := os.Chmod(tmp, 0o600); err != nil {
 		return fmt.Errorf("set permissions on %s: %w", tmp, err)
 	}
 	if err := os.Rename(tmp, dest); err != nil {

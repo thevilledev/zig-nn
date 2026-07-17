@@ -202,7 +202,7 @@ func writeCloudPackerTemplate(outputDir string, force bool) ([]string, error) {
 	if outputDir == "" {
 		return nil, fmt.Errorf("output directory is required")
 	}
-	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+	if err := os.MkdirAll(outputDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create Packer template directory: %w", err)
 	}
 
@@ -215,7 +215,7 @@ func writeCloudPackerTemplate(outputDir string, force bool) ([]string, error) {
 		} else {
 			flag |= os.O_EXCL
 		}
-		handle, err := os.OpenFile(path, flag, 0o644)
+		handle, err := os.OpenFile(path, flag, 0o600)
 		if err != nil {
 			if os.IsExist(err) {
 				return nil, fmt.Errorf("%s already exists; pass --force to overwrite", path)

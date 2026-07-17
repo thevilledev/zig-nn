@@ -330,7 +330,7 @@ func UploadSnapshot(ctx context.Context, options UploadOptions) (runErr error) {
 	}()
 
 	snapshotDir := filepath.Join(tmpDir, "snapshot")
-	if err := os.Mkdir(snapshotDir, 0o755); err != nil {
+	if err := os.Mkdir(snapshotDir, 0o700); err != nil {
 		return fmt.Errorf("create snapshot directory: %w", err)
 	}
 	archive := filepath.Join(tmpDir, "repo.tar")

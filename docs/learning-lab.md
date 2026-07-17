@@ -25,7 +25,8 @@ go run ./cmd/nnctl lab --cloud
 Cloud control is accepted only on a loopback bind address. The browser never
 receives provider credentials or SSH private keys; the local Go process reads
 Verda credentials from the OS keyring and performs provider, Git, rsync, and
-SSH operations itself.
+SSH operations itself. Mutating API requests are accepted only from the local
+same-origin UI, and request bodies and retained run history are bounded.
 
 The live labs are grouped into a learning route:
 

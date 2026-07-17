@@ -1,10 +1,12 @@
 [tools]
 # nnctl/go.mod declares the Go language version as 1.26; pin the patch
 # release used in this workspace so mise installs a concrete toolchain.
-go = "1.26.1"
+go = "1.26.5"
 zig = "0.16.0"
 golangci-lint = "2.12.2"
 "cargo:zizmor" = "1.26.1"
+packer = "1.15.4"
+"go:golang.org/x/vuln/cmd/govulncheck" = "1.1.4"
 node = "25.9.0"
 
 # Commit hook tooling is pinned by package-lock.json:
@@ -37,6 +39,24 @@ run = "go test -race ./..."
 description = "Run golangci-lint for nnctl"
 dir = "nnctl"
 run = "golangci-lint run --config ../.golangci.yml ./..."
+
+[tasks."go:vuln"]
+description = "Scan reachable nnctl dependencies for known vulnerabilities"
+dir = "nnctl"
+run = "govulncheck ./..."
+
+[tasks."packer:fmt-check"]
+description = "Check the embedded Verda Packer template formatting"
+run = "packer fmt -check nnctl/internal/cloud/verda/packer/ubuntu.pkr.hcl"
+
+[tasks."packer:validate"]
+description = "Initialize the pinned Verda plugin and validate the template"
+depends = ["packer:fmt-check"]
+dir = "nnctl/internal/cloud/verda/packer"
+run = """
+packer init .
+packer validate -syntax-only ubuntu.pkr.hcl
+"""
 
 [tasks."actions:lint"]
 description = "Scan GitHub Actions workflows with zizmor"
@@ -109,6 +129,8 @@ depends = [
   "zig:test-acceptance",
   "go:test-race",
   "go:lint",
+  "go:vuln",
+  "packer:validate",
   "actions:lint",
   "hooks:check",
   "web:check",

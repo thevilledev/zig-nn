@@ -3,6 +3,7 @@ zig-out
 bin/
 node_modules/
 web/dist/
+packer-manifest.json
 plan.md
 .cursor
 data

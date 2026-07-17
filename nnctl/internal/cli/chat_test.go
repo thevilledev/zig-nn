@@ -36,7 +36,7 @@ func TestChatProxyAddsDefaultsAndForwardsResponse(t *testing.T) {
 		client:      client,
 	}
 
-	request := httptest.NewRequest(http.MethodPost, "/api/chat", strings.NewReader(`{"messages":[{"role":"user","content":"hi"}]}`))
+	request := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/chat", strings.NewReader(`{"messages":[{"role":"user","content":"hi"}]}`))
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 
@@ -67,7 +67,7 @@ func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
 
 func TestChatProxyRejectsMissingMessages(t *testing.T) {
 	proxy := chatProxy{apiBaseURL: "http://127.0.0.1:1"}
-	request := httptest.NewRequest(http.MethodPost, "/api/chat", strings.NewReader(`{}`))
+	request := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/chat", strings.NewReader(`{}`))
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 
@@ -80,7 +80,7 @@ func TestChatProxyRejectsMissingMessages(t *testing.T) {
 
 func TestServeChatApp(t *testing.T) {
 	response := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	request := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
 
 	serveChatApp(response, request)
 
@@ -95,7 +95,7 @@ func TestServeChatApp(t *testing.T) {
 	}
 
 	scriptResponse := httptest.NewRecorder()
-	serveChatApp(scriptResponse, httptest.NewRequest(http.MethodGet, "/app.js", nil))
+	serveChatApp(scriptResponse, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/app.js", nil))
 	if scriptResponse.Code != http.StatusOK || !strings.Contains(scriptResponse.Body.String(), "/api/chat") {
 		t.Fatalf("chat script does not post to proxy endpoint")
 	}

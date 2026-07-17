@@ -173,7 +173,7 @@ func (a *app) cloudBenchmarkAuthorizedKeysFile(ctx context.Context, client cloud
 }
 
 func ensureCloudPackerTemplate(outputDir string, force bool) ([]string, error) {
-	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+	if err := os.MkdirAll(outputDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create Packer template directory: %w", err)
 	}
 	var written []string
@@ -189,7 +189,7 @@ func ensureCloudPackerTemplate(outputDir string, force bool) ([]string, error) {
 		if err == nil && bytes.Equal(current, []byte(file.Content)) {
 			continue
 		}
-		if err := os.WriteFile(path, []byte(file.Content), 0o644); err != nil {
+		if err := os.WriteFile(path, []byte(file.Content), 0o600); err != nil {
 			return nil, fmt.Errorf("write %s: %w", path, err)
 		}
 		written = append(written, path)

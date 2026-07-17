@@ -6,10 +6,13 @@ run:
 linters:
   default: standard
   enable:
+    - contextcheck
     - cyclop
     - errcheck
     - gocognit
+    - gosec
     - misspell
+    - noctx
   settings:
     cyclop:
       max-complexity: 20
@@ -24,3 +27,9 @@ linters:
         linters:
           - cyclop
           - gocognit
+          - gosec
+      # These boundaries intentionally use manager-owned or detached cleanup
+      # contexts so work can outlive an HTTP request or finish after cancel.
+      - path: internal/(cli/(app|cloud_benchmark_run|lab)|lab/(cloud.*|server))\.go
+        linters:
+          - contextcheck

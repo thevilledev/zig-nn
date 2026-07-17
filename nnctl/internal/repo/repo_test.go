@@ -28,7 +28,7 @@ func TestResolveRootUsesExplicitRepository(t *testing.T) {
 func TestResolveRootWalksParentDirectories(t *testing.T) {
 	root := newRepository(t)
 	nested := filepath.Join(root, "one", "two")
-	if err := os.MkdirAll(nested, 0o755); err != nil {
+	if err := os.MkdirAll(nested, 0o700); err != nil {
 		t.Fatalf("create nested directory: %v", err)
 	}
 	t.Chdir(nested)
@@ -93,7 +93,7 @@ func newRepository(t *testing.T) string {
 func writeFile(t *testing.T, path string) {
 	t.Helper()
 
-	if err := os.WriteFile(path, nil, 0o644); err != nil {
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
 		t.Fatalf("write %s: %v", path, err)
 	}
 }

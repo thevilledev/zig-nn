@@ -109,7 +109,7 @@ func cleanupCloudBenchmark(ctx context.Context, client cloudBenchmarkClient, ins
 }
 
 func writeCloudBenchmarkCSV(path string, metadata cloudBenchmarkMetadata, output []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("create benchmark CSV directory: %w", err)
 	}
 	var content bytes.Buffer
@@ -120,7 +120,7 @@ func writeCloudBenchmarkCSV(path string, metadata cloudBenchmarkMetadata, output
 	if content.Len() > 0 && content.Bytes()[content.Len()-1] != '\n' {
 		content.WriteByte('\n')
 	}
-	if err := os.WriteFile(path, content.Bytes(), 0o644); err != nil {
+	if err := os.WriteFile(path, content.Bytes(), 0o600); err != nil {
 		return fmt.Errorf("write benchmark CSV: %w", err)
 	}
 	return nil
@@ -215,7 +215,9 @@ func updateCloudBenchmarkDocs(path, csvPath string, metadata cloudBenchmarkMetad
 	if err != nil {
 		return fmt.Errorf("stat benchmark docs: %w", err)
 	}
-	if err := os.WriteFile(path, []byte(text), info.Mode().Perm()); err != nil {
+	// The path is an explicit CLI output selected by the user. It is not a
+	// filesystem path derived from benchmark or provider data.
+	if err := os.WriteFile(path, []byte(text), info.Mode().Perm()); err != nil { //nolint:gosec // User-selected output path.
 		return fmt.Errorf("update benchmark docs: %w", err)
 	}
 	return nil
