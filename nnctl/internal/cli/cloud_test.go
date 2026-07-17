@@ -476,6 +476,8 @@ func TestCloudPackerTemplateWritesEmbeddedFiles(t *testing.T) {
 		{name: "ubuntu.pkr.hcl", want: `/tmp/verda_authorized_keys`},
 		{name: "ubuntu.pkr.hcl", want: `post-processor "manifest"`},
 		{name: "bootstrap.sh", want: "cuda-toolkit-13-0"},
+		{name: "bootstrap.sh", want: "sha256sum --check --strict"},
+		{name: "bootstrap.sh", want: "--max-filesize"},
 	} {
 		content, err := os.ReadFile(dir + "/" + file.name)
 		if err != nil {

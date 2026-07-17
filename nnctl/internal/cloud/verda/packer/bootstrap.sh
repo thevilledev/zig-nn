@@ -3,6 +3,9 @@ set -euxo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
 
+BOOTSTRAP_TMP="$(/usr/bin/mktemp -d /tmp/zig-nn-bootstrap.XXXXXX)"
+trap '/bin/rm -rf "${BOOTSTRAP_TMP}"' EXIT
+
 /usr/bin/apt-get update
 /usr/bin/apt-get install -y \
   ca-certificates \
@@ -15,10 +18,17 @@ export DEBIAN_FRONTEND=noninteractive
 
 # CUDA toolkit repo for Ubuntu 24.04. Idempotent if already installed.
 if [ ! -f /etc/apt/sources.list.d/cuda-ubuntu2404-x86_64.list ]; then
+  CUDA_KEYRING="${BOOTSTRAP_TMP}/cuda-keyring_1.1-1_all.deb"
+  CUDA_KEYRING_SHA256="d2a6b11c096396d868758b86dab1823b25e14d70333f1dfa74da5ddaf6a06dba"
   /usr/bin/curl -fsSL \
+    --proto '=https' \
+    --tlsv1.2 \
+    --max-filesize 1048576 \
+    --retry 3 \
     https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb \
-    -o /tmp/cuda-keyring_1.1-1_all.deb
-  /usr/bin/dpkg -i /tmp/cuda-keyring_1.1-1_all.deb
+    -o "${CUDA_KEYRING}"
+  printf '%s  %s\n' "${CUDA_KEYRING_SHA256}" "${CUDA_KEYRING}" | /usr/bin/sha256sum --check --strict -
+  /usr/bin/dpkg -i "${CUDA_KEYRING}"
 fi
 
 /usr/bin/apt-get update
@@ -35,13 +45,19 @@ fi
 # Zig 0.16.0.
 ZIG_VERSION="0.16.0"
 ZIG_DIR="/opt/zig/${ZIG_VERSION}"
-ZIG_TARBALL="/tmp/zig-x86_64-linux-${ZIG_VERSION}.tar.xz"
+ZIG_TARBALL="${BOOTSTRAP_TMP}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz"
+ZIG_TARBALL_SHA256="70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00"
 
 if [ ! -x "${ZIG_DIR}/zig" ]; then
   /usr/bin/install -d /opt/zig
   /usr/bin/curl -fsSL \
+    --proto '=https' \
+    --tlsv1.2 \
+    --max-filesize 62914560 \
+    --retry 3 \
     "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz" \
     -o "${ZIG_TARBALL}"
+  printf '%s  %s\n' "${ZIG_TARBALL_SHA256}" "${ZIG_TARBALL}" | /usr/bin/sha256sum --check --strict -
   /usr/bin/tar -C /opt/zig -xf "${ZIG_TARBALL}"
   /bin/rm -rf "${ZIG_DIR}"
   /bin/mv "/opt/zig/zig-x86_64-linux-${ZIG_VERSION}" "${ZIG_DIR}"

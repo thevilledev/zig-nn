@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"io"
 	"net/http"
@@ -28,14 +30,15 @@ func TestPrepareSpeechCommandsExtractsIdempotentlyAndForcesReplacement(t *testin
 	destination := filepath.Join(t.TempDir(), "mini_speech_commands")
 	var stdout bytes.Buffer
 	app := &app{stdoutWriter: &stdout}
-	if err := app.prepareSpeechCommands(context.Background(), server.URL, destination, false); err != nil {
+	artifact := fixtureDownloadArtifact(server.URL, archive, int64(len(archive)+1024))
+	if err := app.prepareSpeechCommands(context.Background(), artifact, destination, false); err != nil {
 		t.Fatalf("prepareSpeechCommands() error = %v", err)
 	}
 	contents, err := os.ReadFile(filepath.Join(destination, "yes", "sample.wav"))
 	if err != nil || string(contents) != "first" {
 		t.Fatalf("extracted contents = %q, err = %v", contents, err)
 	}
-	if err := app.prepareSpeechCommands(context.Background(), server.URL, destination, false); err != nil {
+	if err := app.prepareSpeechCommands(context.Background(), artifact, destination, false); err != nil {
 		t.Fatalf("idempotent prepareSpeechCommands() error = %v", err)
 	}
 	if requests != 1 {
@@ -43,7 +46,8 @@ func TestPrepareSpeechCommandsExtractsIdempotentlyAndForcesReplacement(t *testin
 	}
 
 	archive = speechCommandsFixture(t, "second")
-	if err := app.prepareSpeechCommands(context.Background(), server.URL, destination, true); err != nil {
+	artifact = fixtureDownloadArtifact(server.URL, archive, int64(len(archive)+1024))
+	if err := app.prepareSpeechCommands(context.Background(), artifact, destination, true); err != nil {
 		t.Fatalf("forced prepareSpeechCommands() error = %v", err)
 	}
 	contents, err = os.ReadFile(filepath.Join(destination, "yes", "sample.wav"))
@@ -76,12 +80,42 @@ func TestPrepareSpeechCommandsRejectsTraversal(t *testing.T) {
 
 	app := &app{}
 	destination := filepath.Join(t.TempDir(), "mini_speech_commands")
-	err = app.prepareSpeechCommands(context.Background(), server.URL, destination, false)
+	artifact := fixtureDownloadArtifact(server.URL, buffer.Bytes(), int64(buffer.Len()+1024))
+	err = app.prepareSpeechCommands(context.Background(), artifact, destination, false)
 	if err == nil || !strings.Contains(err.Error(), "unsafe zip entry") {
 		t.Fatalf("prepareSpeechCommands() error = %v, want unsafe zip entry", err)
 	}
 	if _, statErr := os.Stat(filepath.Join(filepath.Dir(destination), "escape")); !os.IsNotExist(statErr) {
 		t.Fatalf("traversal target exists, stat error = %v", statErr)
+	}
+}
+
+func TestPrepareSpeechCommandsRejectsOversizedEntry(t *testing.T) {
+	var buffer bytes.Buffer
+	writer := zip.NewWriter(&buffer)
+	entry, err := writer.Create("mini_speech_commands/yes/oversized.wav")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := entry.Write(bytes.Repeat([]byte("x"), maxSpeechCommandsEntryBytes+1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(buffer.Bytes())
+	}))
+	defer server.Close()
+
+	artifact := fixtureDownloadArtifact(server.URL, buffer.Bytes(), int64(buffer.Len()+1024))
+	destination := filepath.Join(t.TempDir(), "mini_speech_commands")
+	err = (&app{}).prepareSpeechCommands(t.Context(), artifact, destination, false)
+	if err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("prepareSpeechCommands() error = %v, want extraction limit", err)
+	}
+	if _, statErr := os.Stat(destination); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("destination was installed after failure: %v", statErr)
 	}
 }
 
@@ -120,7 +154,8 @@ func TestDownloadGzipUsesConfiguredHTTPClient(t *testing.T) {
 	app := &app{httpClient: client}
 	destination := filepath.Join(t.TempDir(), "mnist")
 
-	if err := app.downloadGzip(t.Context(), "https://example.test/mnist.gz", destination, false); err != nil {
+	artifact := fixtureGzipArtifact("https://example.test/mnist.gz", compressed.Bytes(), []byte("mnist"), 1024)
+	if err := app.downloadGzip(t.Context(), artifact, destination, false); err != nil {
 		t.Fatalf("downloadGzip() error = %v", err)
 	}
 	if !requested {
@@ -142,10 +177,60 @@ func TestDownloadGzipReportsOutputFailure(t *testing.T) {
 	}
 	wantErr := errors.New("output unavailable")
 	app := &app{stdoutWriter: testErrorWriter{err: wantErr}}
+	artifact := fixtureGzipArtifact("https://example.test/mnist.gz", gzipFixture(t, nil), nil, 1024)
 
-	err := app.downloadGzip(t.Context(), "https://example.test/mnist.gz", destination, false)
+	err := app.downloadGzip(t.Context(), artifact, destination, false)
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("downloadGzip() error = %v, want %v", err, wantErr)
+	}
+}
+
+func TestDownloadGzipRejectsCorruptExistingFile(t *testing.T) {
+	t.Parallel()
+	destination := filepath.Join(t.TempDir(), "mnist")
+	if err := os.WriteFile(destination, []byte("corrupt"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	payload := []byte("mnist")
+	artifact := fixtureGzipArtifact("https://example.test/mnist.gz", gzipFixture(t, payload), payload, 1024)
+	err := (&app{}).downloadGzip(t.Context(), artifact, destination, false)
+	if err == nil || !strings.Contains(err.Error(), "--force") {
+		t.Fatalf("downloadGzip() error = %v, want replacement guidance", err)
+	}
+}
+
+func TestDownloadGzipRejectsUntrustedOrOversizedArtifacts(t *testing.T) {
+	t.Parallel()
+	payload := []byte(strings.Repeat("x", 2048))
+	compressed := gzipFixture(t, payload)
+	downloadLimited := fixtureGzipArtifact("https://example.test/mnist.gz", compressed, payload, 4096)
+	downloadLimited.MaxDownloadBytes = int64(len(compressed) - 1)
+	for _, test := range []struct {
+		name     string
+		artifact gzipArtifact
+		want     string
+	}{
+		{name: "checksum mismatch", artifact: corruptArtifactChecksum(fixtureGzipArtifact("https://example.test/mnist.gz", compressed, payload, 4096)), want: "SHA-256"},
+		{name: "download limit", artifact: downloadLimited, want: "exceeds"},
+		{name: "extraction limit", artifact: fixtureGzipArtifact("https://example.test/mnist.gz", compressed, payload, 1024), want: "exceeds"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Body: io.NopCloser(bytes.NewReader(compressed))}, nil
+			})}
+			destination := filepath.Join(t.TempDir(), "mnist")
+			err := (&app{httpClient: client}).downloadGzip(t.Context(), test.artifact, destination, false)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("downloadGzip() error = %v, want %q", err, test.want)
+			}
+			if _, statErr := os.Stat(destination); !errors.Is(statErr, os.ErrNotExist) {
+				t.Fatalf("destination was installed after failure: %v", statErr)
+			}
+			entries, readErr := os.ReadDir(filepath.Dir(destination))
+			if readErr != nil || len(entries) != 0 {
+				t.Fatalf("temporary artifacts remain after failure: entries=%v error=%v", entries, readErr)
+			}
+		})
 	}
 }
 
@@ -181,4 +266,39 @@ func speechCommandsFixture(t *testing.T, contents string) []byte {
 		t.Fatal(err)
 	}
 	return append([]byte(nil), buffer.Bytes()...)
+}
+
+func fixtureDownloadArtifact(url string, content []byte, maxBytes int64) downloadArtifact {
+	return downloadArtifact{URL: url, SHA256: sha256String(content), MaxDownloadBytes: maxBytes}
+}
+
+func fixtureGzipArtifact(url string, compressed, extracted []byte, maxExtracted int64) gzipArtifact {
+	return gzipArtifact{
+		downloadArtifact:  fixtureDownloadArtifact(url, compressed, int64(len(compressed)+1024)),
+		ExtractedSHA256:   sha256String(extracted),
+		MaxExtractedBytes: maxExtracted,
+	}
+}
+
+func corruptArtifactChecksum(artifact gzipArtifact) gzipArtifact {
+	artifact.SHA256 = strings.Repeat("0", sha256.Size*2)
+	return artifact
+}
+
+func gzipFixture(t *testing.T, content []byte) []byte {
+	t.Helper()
+	var compressed bytes.Buffer
+	writer := gzip.NewWriter(&compressed)
+	if _, err := writer.Write(content); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return compressed.Bytes()
+}
+
+func sha256String(content []byte) string {
+	sum := sha256.Sum256(content)
+	return hex.EncodeToString(sum[:])
 }
