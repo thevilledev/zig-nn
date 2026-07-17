@@ -61,8 +61,6 @@ type managedCloudWorker struct {
 	CloudWorker
 	SourceVolumeID string `json:"source_volume_id,omitempty"`
 	CloneVolumeID  string `json:"clone_volume_id,omitempty"`
-	KnownHosts     string `json:"known_hosts,omitempty"`
-	Host           string `json:"host,omitempty"`
 	BaseURL        string `json:"base_url,omitempty"`
 }
 
@@ -155,6 +153,10 @@ func NewCloudManager(options CloudManagerOptions) (*CloudManager, error) {
 	}
 	if options.SSHUser == "" {
 		options.SSHUser = defaultCloudSSHUser
+	}
+	options.SSHUser = strings.TrimSpace(options.SSHUser)
+	if err := cloudworkflow.ValidateSSHUser(options.SSHUser); err != nil {
+		return nil, err
 	}
 	if options.Timeout <= 0 {
 		options.Timeout = defaultCloudTimeout
@@ -364,7 +366,6 @@ func (m *CloudManager) provision(ctx context.Context, workerID string, request C
 	deployOptions.LocationCode = request.LocationCode
 	deployOptions.Hostname = "nnctl-lab-" + workerID[:8]
 	deployOptions.Description = "nnctl learning lab cloud worker " + workerID
-	deployOptions.BaseURL = m.baseURL
 	result, err := verda.Deploy(ctx, client, deployOptions)
 	if err != nil {
 		m.failWorker(workerID, err)
@@ -407,15 +408,17 @@ func (m *CloudManager) provision(ctx context.Context, workerID string, request C
 		m.cleanupFailedProvision(workerID, client, err)
 		return
 	}
-	host := m.sshUser + "@" + strings.TrimSpace(*instance.IP)
+	host, err := cloudworkflow.SSHDestination(m.sshUser, *instance.IP)
+	if err != nil {
+		m.cleanupFailedProvision(workerID, client, err)
+		return
+	}
 	sshArgs := cloudworkflow.SSHArgs(knownHosts)
 	m.updateWorker(workerID, func(worker *managedCloudWorker) {
 		worker.IP = strings.TrimSpace(*instance.IP)
 		worker.Location = instance.Location
 		worker.PricePerHour = firstCloudPrice(instance.PricePerHour, worker.PricePerHour)
 		worker.Currency = firstCloudString(instance.Currency, worker.Currency)
-		worker.KnownHosts = knownHosts
-		worker.Host = host
 		worker.Message = "Waiting for SSH"
 	})
 	if err := m.persistWorker(); err != nil {
@@ -496,7 +499,7 @@ func (m *CloudManager) cleanupFailedProvision(workerID string, client cloudworkf
 	worker, ok := m.managedWorker(workerID)
 	if ok && worker.InstanceID != "" {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-		cleanupErr := cloudworkflow.Destroy(cleanupCtx, client, worker.InstanceID, worker.CloneVolumeID, worker.SourceVolumeID, worker.BaseURL)
+		cleanupErr := cloudworkflow.Destroy(cleanupCtx, client, worker.InstanceID, worker.CloneVolumeID, worker.SourceVolumeID)
 		cancel()
 		cause = errors.Join(cause, cleanupErr)
 		if cleanupErr == nil {
@@ -655,7 +658,7 @@ func (m *CloudManager) Destroy(ctx context.Context, workerID string) error {
 		var client cloudworkflow.Client
 		client, err = m.newClient(ctx, worker.BaseURL)
 		if err == nil {
-			err = cloudworkflow.Destroy(ctx, client, worker.InstanceID, worker.CloneVolumeID, worker.SourceVolumeID, worker.BaseURL)
+			err = cloudworkflow.Destroy(ctx, client, worker.InstanceID, worker.CloneVolumeID, worker.SourceVolumeID)
 		}
 	}
 	if err != nil {
@@ -666,9 +669,7 @@ func (m *CloudManager) Destroy(ctx context.Context, workerID string) error {
 		current.State = CloudWorkerDestroyed
 		current.Message = "Destroyed"
 	})
-	if worker.KnownHosts != "" {
-		_ = os.Remove(worker.KnownHosts)
-	}
+	_ = os.Remove(filepath.Join(filepath.Dir(m.databasePath), "known-hosts", worker.ID))
 	return m.clearWorker()
 }
 
@@ -719,10 +720,18 @@ func (m *CloudManager) Execute(
 	}
 	remoteDir := "/root/zig-nn-lab-" + repository.Revision[:12]
 	stderrLine("cloud: uploading committed revision " + repository.Revision)
-	sshArgs := cloudworkflow.SSHArgs(worker.KnownHosts)
+	host, err := cloudworkflow.SSHDestination(m.sshUser, worker.IP)
+	if err != nil {
+		return err
+	}
+	knownHosts, err := m.knownHostsPath(worker.ID)
+	if err != nil {
+		return err
+	}
+	sshArgs := cloudworkflow.SSHArgs(knownHosts)
 	if err := cloudworkflow.UploadSnapshot(ctx, cloudworkflow.UploadOptions{
 		RepoRoot: m.repoRoot,
-		Target:   worker.Host + ":" + remoteDir,
+		Target:   host + ":" + remoteDir,
 		Ref:      repository.Revision,
 		SSH:      cloudworkflow.CommandString(m.ssh, sshArgs),
 		Git:      m.git,
@@ -756,7 +765,7 @@ func (m *CloudManager) Execute(
 		"cd " + cloudworkflow.ShellQuote(remoteDir),
 		"exec " + cloudworkflow.CommandString("zig", args),
 	}, "; ")
-	return cloudworkflow.StreamSSH(ctx, m.ssh, sshArgs, worker.Host, command, stdoutLine, stderrLine)
+	return cloudworkflow.StreamSSH(ctx, m.ssh, sshArgs, host, command, stdoutLine, stderrLine)
 }
 
 type RoutingExecutor struct {
@@ -873,19 +882,17 @@ func (m *CloudManager) reconnectWorker(ctx context.Context, workerID string) err
 		}
 		instance = &ready
 	}
-	knownHosts := worker.KnownHosts
-	if strings.TrimSpace(knownHosts) == "" {
-		knownHosts, err = m.knownHostsPath(workerID)
-		if err != nil {
-			return err
-		}
+	knownHosts, err := m.knownHostsPath(workerID)
+	if err != nil {
+		return err
 	}
 	ip := strings.TrimSpace(*instance.IP)
-	host := m.sshUser + "@" + ip
+	host, err := cloudworkflow.SSHDestination(m.sshUser, ip)
+	if err != nil {
+		return err
+	}
 	m.updateWorker(workerID, func(current *managedCloudWorker) {
 		current.IP = ip
-		current.Host = host
-		current.KnownHosts = knownHosts
 		current.Hostname = firstCloudString(instance.Hostname, current.Hostname)
 		current.Location = firstCloudString(instance.Location, current.Location)
 		current.PricePerHour = firstCloudPrice(instance.PricePerHour, current.PricePerHour)

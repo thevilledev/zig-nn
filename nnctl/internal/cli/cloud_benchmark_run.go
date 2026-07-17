@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"nnctl/internal/cloud/verda"
+	cloudworkflow "nnctl/internal/cloud/workflow"
 )
 
 type cloudBenchmarkOperations struct {
@@ -25,7 +26,7 @@ type cloudBenchmarkOperations struct {
 	upload               func(context.Context, deployOptions) error
 	runSSH               func(context.Context, string, []string, string, string, io.Writer) error
 	captureSSH           func(context.Context, string, []string, string, string) ([]byte, error)
-	cleanup              func(context.Context, cloudBenchmarkClient, string, string, string, string) error
+	cleanup              func(context.Context, cloudBenchmarkClient, string, string, string) error
 }
 
 func newCloudBenchmarkOperations(a *app) cloudBenchmarkOperations {
@@ -164,7 +165,7 @@ func (r *cloudBenchmarkRun) resolveSourceVolume() (runErr error) {
 		return err
 	}
 
-	r.client, r.credentials, err = r.ops.newClient(r.ctx, r.opts.BaseURL)
+	r.client, r.credentials, err = r.ops.newClient(r.ctx, r.opts.baseURL)
 	if err != nil {
 		return err
 	}
@@ -243,7 +244,10 @@ func (r *cloudBenchmarkRun) waitForWorker() error {
 		return err
 	}
 	r.instance = instance
-	r.host = r.opts.sshUser + "@" + strings.TrimSpace(*instance.IP)
+	r.host, err = cloudworkflow.SSHDestination(r.opts.sshUser, *instance.IP)
+	if err != nil {
+		return err
+	}
 	r.sshArgs = cloudBenchmarkSSHArgs(filepath.Join(r.workflowDir, "known_hosts"))
 	if err := r.ops.waitSSH(r.ctx, r.opts.ssh, r.sshArgs, r.host, r.opts.timeout, r.opts.pollInterval); err != nil {
 		return err
@@ -412,7 +416,7 @@ func (r *cloudBenchmarkRun) cleanupResources() error {
 	progressErr = errors.Join(progressErr, r.progress.Err())
 	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(r.ctx), 5*time.Minute)
 	defer cancel()
-	err := r.ops.cleanup(cleanupCtx, r.client, r.opts.BaseURL, r.instanceID, r.cloneID, r.sourceVolume.ID)
+	err := r.ops.cleanup(cleanupCtx, r.client, r.instanceID, r.cloneID, r.sourceVolume.ID)
 	if err != nil {
 		r.progress.detail("Cleanup failed: %v", err)
 		return errors.Join(progressErr, err, r.progress.Err())

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"nnctl/internal/cloud/verda"
+	cloudworkflow "nnctl/internal/cloud/workflow"
 )
 
 const (
@@ -37,6 +38,7 @@ const (
 
 type cloudBenchmarkDeployOptions struct {
 	verda.DeployOptions
+	baseURL               string
 	packerDir             string
 	packer                string
 	packerInstanceType    string
@@ -146,6 +148,7 @@ func normalizeCloudBenchmarkDeployOptions(opts *cloudBenchmarkDeployOptions) err
 }
 
 func normalizeCloudBenchmarkStrings(opts *cloudBenchmarkDeployOptions) {
+	opts.baseURL = strings.TrimSpace(opts.baseURL)
 	opts.InstanceType = strings.TrimSpace(opts.InstanceType)
 	opts.SourceOSVolumeID = strings.TrimSpace(opts.SourceOSVolumeID)
 	opts.SourceOSVolumeName = strings.TrimSpace(opts.SourceOSVolumeName)
@@ -203,6 +206,9 @@ func validateCloudBenchmarkTools(opts cloudBenchmarkDeployOptions) error {
 	}
 	if !allConfigured(opts.sshUser, opts.ssh, opts.rsync, opts.git, opts.tar) {
 		return fmt.Errorf("SSH user, ssh, rsync, git, and tar must be configured")
+	}
+	if err := cloudworkflow.ValidateSSHUser(opts.sshUser); err != nil {
+		return err
 	}
 	if opts.timeout <= 0 || opts.pollInterval <= 0 {
 		return fmt.Errorf("timeout and poll interval must be positive")

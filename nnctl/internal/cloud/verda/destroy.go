@@ -11,7 +11,6 @@ type DestroyOptions struct {
 	VolumeIDs         []string
 	SourceOSVolumeID  string
 	DeletePermanently bool
-	BaseURL           string
 	DryRun            bool
 }
 
@@ -86,8 +85,6 @@ func (o DestroyOptions) normalized() (DestroyOptions, error) {
 	o.InstanceIDs = compactStrings(o.InstanceIDs)
 	o.VolumeIDs = compactStrings(o.VolumeIDs)
 	o.SourceOSVolumeID = strings.TrimSpace(o.SourceOSVolumeID)
-	o.BaseURL = strings.TrimSpace(o.BaseURL)
-
 	if len(o.InstanceIDs) == 0 {
 		return DestroyOptions{}, fmt.Errorf("at least one instance ID is required")
 	}

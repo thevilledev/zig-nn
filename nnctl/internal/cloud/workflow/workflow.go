@@ -8,9 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -29,6 +31,29 @@ type Client interface {
 
 type InstanceLister interface {
 	ListInstances(context.Context, string) ([]verda.Instance, error)
+}
+
+var sshUserPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.-]{0,254}$`)
+
+// ValidateSSHUser rejects values that OpenSSH could parse as destination syntax.
+func ValidateSSHUser(user string) error {
+	if !sshUserPattern.MatchString(strings.TrimSpace(user)) {
+		return fmt.Errorf("SSH user must contain only letters, digits, underscores, dots, or hyphens and start with a letter or underscore")
+	}
+	return nil
+}
+
+// SSHDestination builds an OpenSSH destination from validated provider data.
+func SSHDestination(user, rawIP string) (string, error) {
+	user = strings.TrimSpace(user)
+	if err := ValidateSSHUser(user); err != nil {
+		return "", err
+	}
+	address, err := netip.ParseAddr(strings.TrimSpace(rawIP))
+	if err != nil || address.Zone() != "" || !address.IsGlobalUnicast() {
+		return "", fmt.Errorf("verda instance returned an invalid unicast IP address")
+	}
+	return user + "@" + address.Unmap().String(), nil
 }
 
 // NewVerdaClient reads credentials from the OS keyring. Credentials never
@@ -346,7 +371,7 @@ func CommandString(name string, args []string) string {
 	return strings.Join(parts, " ")
 }
 
-func Destroy(ctx context.Context, client verda.DestroyClient, instanceID, cloneID, sourceID, baseURL string) error {
+func Destroy(ctx context.Context, client verda.DestroyClient, instanceID, cloneID, sourceID string) error {
 	volumes := []string(nil)
 	if strings.TrimSpace(cloneID) != "" {
 		volumes = []string{cloneID}
@@ -356,7 +381,6 @@ func Destroy(ctx context.Context, client verda.DestroyClient, instanceID, cloneI
 		VolumeIDs:         volumes,
 		SourceOSVolumeID:  sourceID,
 		DeletePermanently: true,
-		BaseURL:           baseURL,
 	})
 	return err
 }

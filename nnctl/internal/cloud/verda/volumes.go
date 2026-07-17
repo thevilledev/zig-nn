@@ -14,7 +14,6 @@ type ListVolumesOptions struct {
 type PurgeVolumesOptions struct {
 	VolumeIDs  []string
 	AllDeleted bool
-	BaseURL    string
 	DryRun     bool
 }
 
@@ -112,7 +111,6 @@ func PurgeVolumes(ctx context.Context, client VolumePurgeClient, opts PurgeVolum
 
 func (o PurgeVolumesOptions) normalized() (PurgeVolumesOptions, error) {
 	o.VolumeIDs = compactStrings(o.VolumeIDs)
-	o.BaseURL = strings.TrimSpace(o.BaseURL)
 	if o.AllDeleted && len(o.VolumeIDs) > 0 {
 		return PurgeVolumesOptions{}, fmt.Errorf("volume IDs cannot be combined with purge all")
 	}

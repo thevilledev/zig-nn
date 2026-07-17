@@ -14,6 +14,17 @@ import (
 	cloudworkflow "nnctl/internal/cloud/workflow"
 )
 
+func TestNewCloudManagerRejectsUnsafeSSHUser(t *testing.T) {
+	t.Parallel()
+	_, err := NewCloudManager(CloudManagerOptions{
+		RepoRoot: t.TempDir(),
+		SSHUser:  "-oProxyCommand=evil",
+	})
+	if err == nil || !strings.Contains(err.Error(), "SSH user") {
+		t.Fatalf("NewCloudManager() error = %v", err)
+	}
+}
+
 const cloudTestTimeout = 10 * time.Second
 
 func TestCloudManagerDeployExecuteDestroyAndRecover(t *testing.T) {

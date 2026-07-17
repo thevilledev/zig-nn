@@ -79,7 +79,7 @@ func TestCloudBenchmarkRunCleanupReturnsProviderFailure(t *testing.T) {
 		cloneID:    "volume-1",
 	}
 	run.sourceVolume.ID = "source-1"
-	run.ops.cleanup = func(ctx context.Context, _ cloudBenchmarkClient, _, instanceID, cloneID, sourceID string) error {
+	run.ops.cleanup = func(ctx context.Context, _ cloudBenchmarkClient, instanceID, cloneID, sourceID string) error {
 		if _, ok := ctx.Deadline(); !ok {
 			t.Fatal("cleanup context has no deadline")
 		}
@@ -108,7 +108,7 @@ func TestCloudBenchmarkRunCleanupHonorsKeepInstance(t *testing.T) {
 		instanceID: "instance-1",
 		cloneID:    "volume-1",
 	}
-	run.ops.cleanup = func(context.Context, cloudBenchmarkClient, string, string, string, string) error {
+	run.ops.cleanup = func(context.Context, cloudBenchmarkClient, string, string, string) error {
 		called = true
 		return nil
 	}

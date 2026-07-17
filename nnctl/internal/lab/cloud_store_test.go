@@ -24,11 +24,11 @@ func TestCloudStorePersistsManagedWorker(t *testing.T) {
 			Message:      "Ready for experiments",
 			InstanceID:   "instance-1",
 			InstanceType: "1A100.22V",
+			IP:           "192.0.2.10",
 			Backends:     []string{"cpu", "cuda"},
 		},
 		SourceVolumeID: "source-1",
 		CloneVolumeID:  "clone-1",
-		Host:           "root@192.0.2.10",
 	}
 	if err := store.Save(context.Background(), worker); err != nil {
 		t.Fatal(err)

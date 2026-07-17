@@ -212,7 +212,7 @@ func cloudBenchmarkPackerBuildArgs(templatePath, keysFile string, opts cloudBenc
 	needsConfigurableTemplate := opts.SourceOSVolumeName != defaultCloudBenchmarkSourceName ||
 		(targetLocation != cloudBenchmarkPackerBuildLocation && targetLocation != cloudBenchmarkPackerArtifactLocation) ||
 		opts.Market != verda.PricingMarketSpot ||
-		strings.TrimSpace(opts.BaseURL) != ""
+		strings.TrimSpace(opts.baseURL) != ""
 	if needsConfigurableTemplate {
 		required := []string{`variable "artifact_volume_name"`, `variable "build_location_code"`, `variable "build_market"`, `variable "artifact_volume_location_codes"`, `variable "base_url"`}
 		for _, declaration := range required {
@@ -225,7 +225,7 @@ func cloudBenchmarkPackerBuildArgs(templatePath, keysFile string, opts cloudBenc
 			"-var", "build_location_code="+targetLocation,
 			"-var", "build_market="+opts.Market,
 			"-var", fmt.Sprintf(`artifact_volume_location_codes=[%q]`, targetLocation),
-			"-var", "base_url="+opts.BaseURL,
+			"-var", "base_url="+opts.baseURL,
 		)
 	}
 	return append(args, "."), nil

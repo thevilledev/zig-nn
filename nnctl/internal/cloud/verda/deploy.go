@@ -41,7 +41,6 @@ type DeployOptions struct {
 	LocationCode                string
 	StartupScriptName           string
 	UserDataScript              string
-	BaseURL                     string
 	DryRun                      bool
 	SkipAvailabilityCheck       bool
 	KeepClonedOSVolumeOnFailure bool
@@ -409,8 +408,6 @@ func (o DeployOptions) normalized(now time.Time) (DeployOptions, error) {
 	o.StartupScriptName = strings.TrimSpace(o.StartupScriptName)
 	o.UserDataScript = strings.TrimSpace(o.UserDataScript)
 	o.LocationCode = strings.ToUpper(strings.TrimSpace(o.LocationCode))
-	o.BaseURL = strings.TrimSpace(o.BaseURL)
-
 	if o.InstanceType == "" {
 		return DeployOptions{}, fmt.Errorf("instance type is required")
 	}

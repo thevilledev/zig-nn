@@ -44,6 +44,18 @@ func TestNormalizeCloudBenchmarkDeployOptionsAllowsSourceID(t *testing.T) {
 	}
 }
 
+func TestNormalizeCloudBenchmarkDeployOptionsRejectsUnsafeSSHUser(t *testing.T) {
+	t.Parallel()
+	opts := defaultCloudBenchmarkDeployOptions()
+	opts.InstanceType = "1A100.22V"
+	opts.sshUser = "-oProxyCommand=evil"
+
+	err := normalizeCloudBenchmarkDeployOptions(&opts)
+	if err == nil || !strings.Contains(err.Error(), "SSH user") {
+		t.Fatalf("normalizeCloudBenchmarkDeployOptions() error = %v", err)
+	}
+}
+
 func TestCloudBenchmarkProgressReportsNumberedPhases(t *testing.T) {
 	var output strings.Builder
 	progress := newCloudBenchmarkProgress(&output)

@@ -2,8 +2,76 @@ package verda
 
 import (
 	"encoding/json"
+	"errors"
+	"net/http"
+	"strings"
 	"testing"
+	"time"
 )
+
+func TestNewSDKClientRejectsUnsafeBaseURLs(t *testing.T) {
+	t.Parallel()
+	credentials := Credentials{ClientID: "client", ClientSecret: "secret"}
+	for _, baseURL := range []string{
+		"api.verda.example/v1",
+		"http://api.verda.example/v1",
+		"http://localhost:8080/v1",
+		"https://user:password@api.verda.example/v1",
+		"https://api.verda.example/v1?target=other",
+		"file:///tmp/verda",
+	} {
+		t.Run(baseURL, func(t *testing.T) {
+			if _, err := NewSDKClient(credentials, ClientOptions{BaseURL: baseURL}); err == nil {
+				t.Fatalf("NewSDKClient() accepted unsafe base URL %q", baseURL)
+			}
+		})
+	}
+}
+
+func TestNewSDKClientHardensHTTPTransport(t *testing.T) {
+	t.Parallel()
+	original := &http.Client{Timeout: 12 * time.Second}
+	client, err := NewSDKClient(
+		Credentials{ClientID: "client", ClientSecret: "secret"},
+		ClientOptions{BaseURL: " http://127.0.0.1:8080/v1/ ", HTTPClient: original},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client.client.BaseURL != "http://127.0.0.1:8080/v1" {
+		t.Fatalf("base URL = %q", client.client.BaseURL)
+	}
+	if client.client.HTTPClient == original {
+		t.Fatal("NewSDKClient() mutated the caller's HTTP client")
+	}
+	if client.client.HTTPClient.Timeout != 12*time.Second {
+		t.Fatalf("timeout = %s, want 12s", client.client.HTTPClient.Timeout)
+	}
+	redirect := &http.Request{}
+	if err := client.client.HTTPClient.CheckRedirect(redirect, nil); !errors.Is(err, http.ErrUseLastResponse) {
+		t.Fatalf("redirect error = %v, want %v", err, http.ErrUseLastResponse)
+	}
+	if original.CheckRedirect != nil {
+		t.Fatal("caller's redirect policy was modified")
+	}
+}
+
+func TestNewSDKClientAppliesDefaultHTTPTimeout(t *testing.T) {
+	t.Parallel()
+	client, err := NewSDKClient(
+		Credentials{ClientID: "client", ClientSecret: "secret"},
+		ClientOptions{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client.client.HTTPClient.Timeout != DefaultHTTPTimeout {
+		t.Fatalf("timeout = %s, want %s", client.client.HTTPClient.Timeout, DefaultHTTPTimeout)
+	}
+	if !strings.HasPrefix(client.client.BaseURL, "https://") {
+		t.Fatalf("default base URL = %q, want HTTPS", client.client.BaseURL)
+	}
+}
 
 func TestCloneVolumeActionRequestUsesLocationCode(t *testing.T) {
 	actionReq := cloneVolumeActionRequest(CloneVolumeRequest{

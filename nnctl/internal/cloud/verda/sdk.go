@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"sort"
@@ -15,21 +16,29 @@ import (
 )
 
 type ClientOptions struct {
-	BaseURL   string
-	UserAgent string
+	BaseURL    string
+	UserAgent  string
+	HTTPClient *http.Client
 }
+
+const DefaultHTTPTimeout = 30 * time.Second
 
 type SDKClient struct {
 	client *sdkverda.Client
 }
 
 func NewSDKClient(creds Credentials, opts ClientOptions) (*SDKClient, error) {
+	baseURL, err := normalizeBaseURL(opts.BaseURL)
+	if err != nil {
+		return nil, err
+	}
 	clientOpts := []sdkverda.ClientOption{
 		sdkverda.WithClientID(creds.ClientID),
 		sdkverda.WithClientSecret(creds.ClientSecret),
+		sdkverda.WithHTTPClient(hardenHTTPClient(opts.HTTPClient)),
 	}
-	if opts.BaseURL != "" {
-		clientOpts = append(clientOpts, sdkverda.WithBaseURL(opts.BaseURL))
+	if baseURL != "" {
+		clientOpts = append(clientOpts, sdkverda.WithBaseURL(baseURL))
 	}
 	if opts.UserAgent != "" {
 		clientOpts = append(clientOpts, sdkverda.WithUserAgent(opts.UserAgent))
@@ -40,6 +49,47 @@ func NewSDKClient(creds Credentials, opts ClientOptions) (*SDKClient, error) {
 		return nil, err
 	}
 	return &SDKClient{client: client}, nil
+}
+
+func normalizeBaseURL(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", nil
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || !parsed.IsAbs() || parsed.Host == "" || parsed.Opaque != "" {
+		return "", fmt.Errorf("verda base URL must be an absolute URL")
+	}
+	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", fmt.Errorf("verda base URL must not contain credentials, a query, or a fragment")
+	}
+	parsed.Scheme = strings.ToLower(parsed.Scheme)
+	switch parsed.Scheme {
+	case "https":
+	case "http":
+		ip := net.ParseIP(parsed.Hostname())
+		if ip == nil || !ip.IsLoopback() {
+			return "", fmt.Errorf("verda base URL must use HTTPS; HTTP is allowed only for literal loopback addresses")
+		}
+	default:
+		return "", fmt.Errorf("verda base URL must use HTTPS")
+	}
+	parsed.Path = strings.TrimRight(parsed.Path, "/")
+	return parsed.String(), nil
+}
+
+func hardenHTTPClient(client *http.Client) *http.Client {
+	if client == nil {
+		client = &http.Client{}
+	}
+	hardened := *client
+	if hardened.Timeout <= 0 {
+		hardened.Timeout = DefaultHTTPTimeout
+	}
+	hardened.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	return &hardened
 }
 
 func (c *SDKClient) GetInstanceType(ctx context.Context, instanceType string, spot bool, locationCode string) (InstanceType, error) {

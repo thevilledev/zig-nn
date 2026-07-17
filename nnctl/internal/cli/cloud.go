@@ -16,6 +16,7 @@ import (
 type cloudDeployOptions struct {
 	verda.DeployOptions
 	userDataFile string
+	baseURL      string
 	jsonOutput   bool
 }
 
@@ -28,11 +29,13 @@ type cloudVolumesOptions struct {
 	verda.PurgeVolumesOptions
 	includeDeleted bool
 	purge          bool
+	baseURL        string
 	jsonOutput     bool
 }
 
 type cloudDestroyOptions struct {
 	verda.DestroyOptions
+	baseURL    string
 	jsonOutput bool
 }
 
@@ -90,7 +93,7 @@ func (a *app) runCloudDeploy(ctx context.Context, opts cloudDeployOptions) error
 
 	var client verda.Client
 	if !deployOpts.DryRun {
-		sdkClient, err := a.newVerdaSDKClient(ctx, deployOpts.BaseURL)
+		sdkClient, err := a.newVerdaSDKClient(ctx, opts.baseURL)
 		if err != nil {
 			return err
 		}
@@ -120,7 +123,7 @@ func (a *app) runCloudVolumes(ctx context.Context, opts cloudVolumesOptions) err
 	if opts.purge || opts.AllDeleted {
 		var client verda.VolumePurgeClient
 		if !opts.DryRun {
-			sdkClient, err := a.newVerdaSDKClient(ctx, opts.BaseURL)
+			sdkClient, err := a.newVerdaSDKClient(ctx, opts.baseURL)
 			if err != nil {
 				return err
 			}
@@ -134,7 +137,7 @@ func (a *app) runCloudVolumes(ctx context.Context, opts cloudVolumesOptions) err
 		return a.printCloudPurgeResult(result, opts.jsonOutput)
 	}
 
-	client, err := a.newVerdaSDKClient(ctx, opts.BaseURL)
+	client, err := a.newVerdaSDKClient(ctx, opts.baseURL)
 	if err != nil {
 		return err
 	}
@@ -150,7 +153,7 @@ func (a *app) runCloudVolumes(ctx context.Context, opts cloudVolumesOptions) err
 func (a *app) runCloudDestroy(ctx context.Context, opts cloudDestroyOptions) error {
 	var client verda.DestroyClient
 	if !opts.DryRun {
-		sdkClient, err := a.newVerdaSDKClient(ctx, opts.BaseURL)
+		sdkClient, err := a.newVerdaSDKClient(ctx, opts.baseURL)
 		if err != nil {
 			return err
 		}

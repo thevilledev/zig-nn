@@ -104,8 +104,8 @@ func (a *app) runCloudBenchmarkCommand(ctx context.Context, dir string, env []st
 	return nil
 }
 
-func cleanupCloudBenchmark(ctx context.Context, client cloudBenchmarkClient, baseURL, instanceID, cloneID, sourceID string) error {
-	return cloudworkflow.Destroy(ctx, client, instanceID, cloneID, sourceID, baseURL)
+func cleanupCloudBenchmark(ctx context.Context, client cloudBenchmarkClient, instanceID, cloneID, sourceID string) error {
+	return cloudworkflow.Destroy(ctx, client, instanceID, cloneID, sourceID)
 }
 
 func writeCloudBenchmarkCSV(path string, metadata cloudBenchmarkMetadata, output []byte) error {

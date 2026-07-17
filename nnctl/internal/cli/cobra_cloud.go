@@ -65,7 +65,7 @@ no reusable source OS volume is available.`,
 	cmd.Flags().StringVar(&opts.Hostname, "hostname", opts.Hostname, "benchmark worker hostname")
 	cmd.Flags().StringVar(&opts.Description, "description", opts.Description, "benchmark worker description")
 	cmd.Flags().StringArrayVar(&opts.SSHKeyIDs, "ssh-key-id", opts.SSHKeyIDs, "Verda SSH key ID to attach and bake into a new golden volume (repeatable)")
-	cmd.Flags().StringVar(&opts.BaseURL, "base-url", opts.BaseURL, "Verda API base URL")
+	cmd.Flags().StringVar(&opts.baseURL, "base-url", opts.baseURL, "Verda API base URL")
 	cmd.Flags().StringVar(&opts.packerDir, "packer-dir", opts.packerDir, "directory for the generated Packer template")
 	cmd.Flags().StringVar(&opts.packer, "packer", opts.packer, "Packer executable")
 	cmd.Flags().StringVar(&opts.packerInstanceType, "packer-instance-type", opts.packerInstanceType, "instance type used to build a missing golden volume")
@@ -133,7 +133,7 @@ func (a *app) newCloudVolumeCommand() *cobra.Command {
 			return a.runCloudVolumes(cmd.Context(), opts)
 		},
 	}
-	cmd.Flags().StringVar(&opts.BaseURL, "base-url", opts.BaseURL, "Verda API base URL")
+	cmd.Flags().StringVar(&opts.baseURL, "base-url", opts.baseURL, "Verda API base URL")
 	cmd.Flags().BoolVar(&opts.includeDeleted, "include-deleted", opts.includeDeleted, "include deleted volumes that have not been permanently deleted")
 	cmd.Flags().BoolVar(&opts.purge, "purge", opts.purge, "permanently delete volume IDs instead of listing volumes")
 	cmd.Flags().BoolVar(&opts.AllDeleted, "purge-all", opts.AllDeleted, "permanently delete all deleted volumes instead of listing volumes")
@@ -184,7 +184,7 @@ nnctl/internal/cloud/verda/packer/bootstrap.sh.`,
 	cmd.Flags().StringVar(&opts.LocationCode, "location-code", opts.LocationCode, "Verda location code; defaults to source OS volume location or market placement")
 	cmd.Flags().StringVar(&opts.StartupScriptName, "startup-script-name", opts.StartupScriptName, "Verda startup script name")
 	cmd.Flags().StringVar(&opts.userDataFile, "user-data-file", opts.userDataFile, "read userdata from a file; defaults to the embedded script only without source OS volume flags")
-	cmd.Flags().StringVar(&opts.BaseURL, "base-url", opts.BaseURL, "Verda API base URL")
+	cmd.Flags().StringVar(&opts.baseURL, "base-url", opts.baseURL, "Verda API base URL")
 	cmd.Flags().BoolVar(&opts.SkipAvailabilityCheck, "skip-availability-check", opts.SkipAvailabilityCheck, "skip market availability check before creating the instance")
 	cmd.Flags().BoolVar(&opts.KeepClonedOSVolumeOnFailure, "keep-cloned-os-volume-on-failure", opts.KeepClonedOSVolumeOnFailure, "keep a newly cloned OS volume when instance creation fails")
 	cmd.Flags().BoolVar(&opts.DryRun, "dry-run", opts.DryRun, "print the planned deployment without reading keychain credentials")
@@ -216,7 +216,7 @@ func (a *app) newCloudDestroyCommand() *cobra.Command {
 	cmd.Flags().StringArrayVar(&opts.VolumeIDs, "volume-id", opts.VolumeIDs, "Verda volume ID to delete with the instance (repeatable)")
 	cmd.Flags().StringVar(&opts.SourceOSVolumeID, "source-os-volume-id", opts.SourceOSVolumeID, "protect this golden Packer source OS volume ID from cleanup")
 	cmd.Flags().BoolVar(&opts.DeletePermanently, "permanent", opts.DeletePermanently, "delete permanently instead of using Verda's non-permanent delete")
-	cmd.Flags().StringVar(&opts.BaseURL, "base-url", opts.BaseURL, "Verda API base URL")
+	cmd.Flags().StringVar(&opts.baseURL, "base-url", opts.baseURL, "Verda API base URL")
 	cmd.Flags().BoolVar(&opts.DryRun, "dry-run", opts.DryRun, "print the planned destroy request without reading keychain credentials")
 	cmd.Flags().BoolVar(&opts.jsonOutput, "json", opts.jsonOutput, "print machine-readable JSON")
 	cmd.Flags().SortFlags = false
