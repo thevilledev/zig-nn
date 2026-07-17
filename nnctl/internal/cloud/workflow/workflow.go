@@ -10,13 +10,13 @@ import (
 	"io"
 	"net/netip"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
 
 	"nnctl/internal/cloud/verda"
+	"nnctl/internal/process"
 )
 
 // Client is the subset of the Verda API needed by an interactive worker.
@@ -95,7 +95,7 @@ func InspectRepository(ctx context.Context, root, git string) (RepositoryState, 
 }
 
 func commandOutput(ctx context.Context, dir, name string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, name, args...)
+	cmd := process.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -169,7 +169,7 @@ func WaitSSH(ctx context.Context, ssh string, baseArgs []string, host string, ti
 	var lastErr error
 	for {
 		args := append(append([]string{}, baseArgs...), host, "true")
-		cmd := exec.CommandContext(ctx, ssh, args...)
+		cmd := process.CommandContext(ctx, ssh, args...)
 		cmd.Stdout = io.Discard
 		cmd.Stderr = io.Discard
 		if err := cmd.Run(); err == nil {
@@ -208,7 +208,7 @@ func WaitCommand(ctx context.Context, ssh string, baseArgs []string, host, comma
 
 func RunSSH(ctx context.Context, ssh string, baseArgs []string, host, command string, stdout, stderr io.Writer) error {
 	args := append(append([]string{}, baseArgs...), host, command)
-	cmd := exec.CommandContext(ctx, ssh, args...)
+	cmd := process.CommandContext(ctx, ssh, args...)
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	if err := cmd.Run(); err != nil {
@@ -231,7 +231,7 @@ func StreamSSH(
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	args := append(append([]string{}, baseArgs...), host, command)
-	cmd := exec.CommandContext(runCtx, ssh, args...)
+	cmd := process.CommandContext(runCtx, ssh, args...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return fmt.Errorf("capture remote stdout: %w", err)
@@ -289,7 +289,13 @@ type UploadOptions struct {
 	Git      string
 	Tar      string
 	Rsync    string
+	Delete   bool
+	DryRun   bool
+	Runner   CommandRunner
 }
+
+// CommandRunner executes one snapshot preparation or transfer command.
+type CommandRunner func(context.Context, string, string, ...string) error
 
 // UploadSnapshot transfers only a git archive, never local build products,
 // untracked files, credentials, or .git metadata.
@@ -309,6 +315,10 @@ func UploadSnapshot(ctx context.Context, options UploadOptions) (runErr error) {
 	if options.Rsync == "" {
 		options.Rsync = "rsync"
 	}
+	runner := options.Runner
+	if runner == nil {
+		runner = run
+	}
 	tmpDir, err := os.MkdirTemp("", "nnctl-cloud-upload-*")
 	if err != nil {
 		return fmt.Errorf("create upload work directory: %w", err)
@@ -324,22 +334,28 @@ func UploadSnapshot(ctx context.Context, options UploadOptions) (runErr error) {
 		return fmt.Errorf("create snapshot directory: %w", err)
 	}
 	archive := filepath.Join(tmpDir, "repo.tar")
-	if err := run(ctx, options.RepoRoot, options.Git, "archive", "--format=tar", "--output", archive, options.Ref); err != nil {
+	if err := runner(ctx, options.RepoRoot, options.Git, "archive", "--format=tar", "--output", archive, "--", options.Ref); err != nil {
 		return err
 	}
-	if err := run(ctx, options.RepoRoot, options.Tar, "-xf", archive, "-C", snapshotDir); err != nil {
+	if err := runner(ctx, options.RepoRoot, options.Tar, "-xf", archive, "-C", snapshotDir); err != nil {
 		return err
 	}
-	args := []string{"-az", "--delete"}
+	args := []string{"-az"}
+	if options.Delete {
+		args = append(args, "--delete")
+	}
+	if options.DryRun {
+		args = append(args, "--dry-run", "--itemize-changes")
+	}
 	if options.SSH != "" {
 		args = append(args, "-e", options.SSH)
 	}
-	args = append(args, withTrailingSeparator(snapshotDir), options.Target)
-	return run(ctx, options.RepoRoot, options.Rsync, args...)
+	args = append(args, "--", withTrailingSeparator(snapshotDir), options.Target)
+	return runner(ctx, options.RepoRoot, options.Rsync, args...)
 }
 
 func run(ctx context.Context, dir, name string, args ...string) error {
-	cmd := exec.CommandContext(ctx, name, args...)
+	cmd := process.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
 	output, err := cmd.CombinedOutput()
 	if err == nil {

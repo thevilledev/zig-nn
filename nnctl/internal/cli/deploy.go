@@ -2,12 +2,11 @@ package cli
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
+
+	cloudworkflow "nnctl/internal/cloud/workflow"
+	"nnctl/internal/process"
 )
 
 type deployOptions struct {
@@ -31,7 +30,7 @@ func defaultDeployOptions() deployOptions {
 	}
 }
 
-func (a *app) runDeploy(ctx context.Context, opts deployOptions) (runErr error) {
+func (a *app) runDeploy(ctx context.Context, opts deployOptions) error {
 	if strings.TrimSpace(opts.target) == "" {
 		return fmt.Errorf("deploy target is required")
 	}
@@ -52,29 +51,18 @@ func (a *app) runDeploy(ctx context.Context, opts deployOptions) (runErr error) 
 		}
 	}
 
-	tmpDir, err := os.MkdirTemp("", "nnctl-deploy-*")
-	if err != nil {
-		return fmt.Errorf("create deploy snapshot dir: %w", err)
-	}
-	defer func() {
-		if err := os.RemoveAll(tmpDir); err != nil {
-			runErr = errors.Join(runErr, fmt.Errorf("remove deploy snapshot dir: %w", err))
-		}
-	}()
-
-	snapshotDir := filepath.Join(tmpDir, "snapshot")
-	if err := os.Mkdir(snapshotDir, 0o755); err != nil {
-		return fmt.Errorf("create deploy snapshot: %w", err)
-	}
-
-	archivePath := filepath.Join(tmpDir, "repo.tar")
-	if err := a.run(ctx, a.repoRoot, opts.git, deployArchiveArgs(opts, archivePath)...); err != nil {
-		return err
-	}
-	if err := a.run(ctx, a.repoRoot, opts.tar, "-xf", archivePath, "-C", snapshotDir); err != nil {
-		return err
-	}
-	if err := a.run(ctx, a.repoRoot, opts.rsync, deployRsyncArgs(opts, snapshotDir)...); err != nil {
+	if err := cloudworkflow.UploadSnapshot(ctx, cloudworkflow.UploadOptions{
+		RepoRoot: a.repoRoot,
+		Target:   opts.target,
+		Ref:      opts.ref,
+		SSH:      opts.ssh,
+		Git:      opts.git,
+		Tar:      opts.tar,
+		Rsync:    opts.rsync,
+		Delete:   opts.delete,
+		DryRun:   opts.dryRun,
+		Runner:   a.run,
+	}); err != nil {
 		return err
 	}
 
@@ -91,7 +79,7 @@ func (a *app) runDeploy(ctx context.Context, opts deployOptions) (runErr error) 
 }
 
 func (a *app) gitStatusPorcelain(ctx context.Context, git string) (string, error) {
-	cmd := exec.CommandContext(ctx, git, "status", "--porcelain", "--untracked-files=all")
+	cmd := process.CommandContext(ctx, git, "status", "--porcelain", "--untracked-files=all")
 	cmd.Dir = a.repoRoot
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -102,30 +90,4 @@ func (a *app) gitStatusPorcelain(ctx context.Context, git string) (string, error
 		return "", fmt.Errorf("git status failed: %s: %w", text, err)
 	}
 	return strings.TrimSpace(string(output)), nil
-}
-
-func deployArchiveArgs(opts deployOptions, archivePath string) []string {
-	return []string{"archive", "--format=tar", "--output", archivePath, opts.ref}
-}
-
-func deployRsyncArgs(opts deployOptions, snapshotDir string) []string {
-	args := []string{"-az"}
-	if opts.delete {
-		args = append(args, "--delete")
-	}
-	if opts.dryRun {
-		args = append(args, "--dry-run", "--itemize-changes")
-	}
-	if opts.ssh != "" {
-		args = append(args, "-e", opts.ssh)
-	}
-	return append(args, withTrailingPathSeparator(snapshotDir), opts.target)
-}
-
-func withTrailingPathSeparator(path string) string {
-	separator := string(os.PathSeparator)
-	if strings.HasSuffix(path, separator) {
-		return path
-	}
-	return path + separator
 }

@@ -9,11 +9,11 @@ import (
 	"io"
 	"math"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 	"text/tabwriter"
 
+	"nnctl/internal/process"
 	"nnctl/internal/zig"
 )
 
@@ -70,7 +70,7 @@ func (a *app) runBenchmark(ctx context.Context, opts benchmarkOptions) error {
 		return fmt.Errorf("write benchmark command: %w", err)
 	}
 
-	cmd := exec.CommandContext(ctx, a.zig, args...)
+	cmd := process.CommandContext(ctx, a.zig, args...)
 	cmd.Dir = a.repoRoot
 	cmd.Stdin = a.stdin()
 	output, err := cmd.CombinedOutput()

@@ -9,10 +9,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os/exec"
 	"strings"
 	"sync"
 
+	"nnctl/internal/process"
 	"nnctl/internal/zig"
 )
 
@@ -76,7 +76,7 @@ func (e CommandExecutor) Execute(ctx context.Context, spec ExperimentSpec, optio
 		gpu = options.Backend
 	}
 	args := zig.RunArgs(spec.Step, zig.Options{Optimize: mode, GPU: gpu}, options.Arguments)
-	cmd := exec.CommandContext(ctx, e.Zig, args...)
+	cmd := process.CommandContext(ctx, e.Zig, args...)
 	cmd.Dir = e.RepoRoot
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

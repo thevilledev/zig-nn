@@ -737,6 +737,7 @@ func (m *CloudManager) Execute(
 		Git:      m.git,
 		Tar:      m.tar,
 		Rsync:    m.rsync,
+		Delete:   true,
 	}); err != nil {
 		return err
 	}

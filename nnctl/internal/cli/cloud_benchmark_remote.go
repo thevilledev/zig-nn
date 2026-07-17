@@ -8,13 +8,13 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"nnctl/internal/cloud/verda"
 	cloudworkflow "nnctl/internal/cloud/workflow"
+	"nnctl/internal/process"
 	"nnctl/internal/zig"
 )
 
@@ -58,7 +58,7 @@ func (a *app) runCloudBenchmarkSSH(ctx context.Context, ssh string, baseArgs []s
 	if _, err := fmt.Fprintf(a.stderr(), "==> %s\n", zig.CommandString(ssh, args)); err != nil {
 		return fmt.Errorf("write SSH command: %w", err)
 	}
-	cmd := exec.CommandContext(ctx, ssh, args...)
+	cmd := process.CommandContext(ctx, ssh, args...)
 	cmd.Stdin = a.stdin()
 	cmd.Stdout = stdout
 	cmd.Stderr = a.stderr()
@@ -73,7 +73,7 @@ func (a *app) captureCloudBenchmarkSSH(ctx context.Context, ssh string, baseArgs
 	if _, err := fmt.Fprintf(a.stderr(), "==> %s\n", zig.CommandString(ssh, args)); err != nil {
 		return nil, fmt.Errorf("write SSH command: %w", err)
 	}
-	cmd := exec.CommandContext(ctx, ssh, args...)
+	cmd := process.CommandContext(ctx, ssh, args...)
 	cmd.Stdin = a.stdin()
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -92,7 +92,7 @@ func (a *app) runCloudBenchmarkCommand(ctx context.Context, dir string, env []st
 	if _, err := fmt.Fprintf(a.stderr(), "==> %s\n", zig.CommandString(name, args)); err != nil {
 		return fmt.Errorf("write benchmark command: %w", err)
 	}
-	cmd := exec.CommandContext(ctx, name, args...)
+	cmd := process.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
 	cmd.Env = env
 	cmd.Stdin = a.stdin()
@@ -250,7 +250,7 @@ func defaultCloudBenchmarkOutputPath(repoRoot string, metadata cloudBenchmarkMet
 }
 
 func gitRevision(ctx context.Context, repoRoot, git, ref string) (string, error) {
-	cmd := exec.CommandContext(ctx, git, "rev-parse", "--short=12", ref)
+	cmd := process.CommandContext(ctx, git, "rev-parse", "--short=12", "--", ref)
 	cmd.Dir = repoRoot
 	output, err := cmd.CombinedOutput()
 	if err != nil {

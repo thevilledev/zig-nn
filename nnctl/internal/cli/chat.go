@@ -11,12 +11,12 @@ import (
 	"mime"
 	"net"
 	"net/http"
-	"os/exec"
 	"strconv"
 	"strings"
 	"time"
 
 	"nnctl/internal/localhttp"
+	"nnctl/internal/process"
 	"nnctl/internal/zig"
 )
 
@@ -83,7 +83,9 @@ func (a *app) runChat(ctx context.Context, opts chatOptions) error {
 	if _, err := fmt.Fprintf(a.stderr(), "==> %s\n", zig.CommandString(a.zig, runArgs)); err != nil {
 		return fmt.Errorf("write inference command: %w", err)
 	}
-	serverCmd := exec.CommandContext(ctx, a.zig, runArgs...)
+	processCtx, stopProcess := context.WithCancel(ctx)
+	defer stopProcess()
+	serverCmd := process.CommandContext(processCtx, a.zig, runArgs...)
 	serverCmd.Dir = a.repoRoot
 	serverCmd.Stdin = a.stdin()
 	serverCmd.Stdout = a.stderr()
@@ -100,7 +102,7 @@ func (a *app) runChat(ctx context.Context, opts chatOptions) error {
 	childConsumed, err := waitForInference(ctx, apiBaseURL+"/v1/models", readyTimeout, childDone)
 	if err != nil {
 		if !childConsumed {
-			_ = serverCmd.Process.Kill()
+			stopProcess()
 			<-childDone
 		}
 		return err
@@ -124,7 +126,7 @@ func (a *app) runChat(ctx context.Context, opts chatOptions) error {
 	output.printf("chat app: http://%s\n", chatAddr)
 	output.printf("inference: %s\n", apiBaseURL)
 	if err := output.Err(); err != nil {
-		_ = serverCmd.Process.Kill()
+		stopProcess()
 		<-childDone
 		return fmt.Errorf("write chat endpoints: %w", err)
 	}
@@ -140,7 +142,7 @@ func (a *app) runChat(ctx context.Context, opts chatOptions) error {
 		}
 		return fmt.Errorf("inference server exited")
 	case err := <-httpDone:
-		_ = serverCmd.Process.Kill()
+		stopProcess()
 		<-childDone
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
@@ -148,7 +150,7 @@ func (a *app) runChat(ctx context.Context, opts chatOptions) error {
 		return fmt.Errorf("chat app server failed: %w", err)
 	case <-ctx.Done():
 		_ = shutdownHTTPServer(ctx, chatServer)
-		_ = serverCmd.Process.Kill()
+		stopProcess()
 		<-childDone
 		return ctx.Err()
 	}

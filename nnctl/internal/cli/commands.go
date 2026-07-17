@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"nnctl/internal/catalog"
+	"nnctl/internal/process"
 	"nnctl/internal/zig"
 )
 
@@ -210,7 +211,7 @@ func (a *app) printToolVersion(ctx context.Context, name string, args ...string)
 		}
 		return nil
 	}
-	cmd := exec.CommandContext(ctx, path, args...)
+	cmd := process.CommandContext(ctx, path, args...)
 	cmd.Dir = a.repoRoot
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -234,7 +235,7 @@ func (a *app) run(ctx context.Context, dir, name string, args ...string) error {
 	if _, err := fmt.Fprintf(a.stderr(), "==> %s\n", zig.CommandString(name, args)); err != nil {
 		return fmt.Errorf("write command: %w", err)
 	}
-	cmd := exec.CommandContext(ctx, name, args...)
+	cmd := process.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
 	cmd.Stdin = a.stdin()
 	cmd.Stdout = a.stdout()
