@@ -5,6 +5,7 @@
   import OptimizerComparison from './OptimizerComparison.svelte';
   import RegressionVisualization from './RegressionVisualization.svelte';
   import SemanticSimilarity from './SemanticSimilarity.svelte';
+  import SpectralLearning from './SpectralLearning.svelte';
   import XorVisualization from './XorVisualization.svelte';
   import type { RunStartedData, SnapshotKind, SnapshotPoint } from './types';
 
@@ -18,7 +19,8 @@
     decision_boundary: DecisionBoundary,
     optimizer_comparison: OptimizerComparison,
     backend_benchmark: BackendBenchmark,
-    semantic_similarity: SemanticSimilarity
+    semantic_similarity: SemanticSimilarity,
+    spectral_learning: SpectralLearning
   } satisfies Record<SnapshotKind, Component<VisualizationProps>>;
 
   let Visual = $derived(registry[kind]);

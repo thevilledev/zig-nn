@@ -1,4 +1,5 @@
 const std = @import("std");
+const spectral = @import("spectral.zig");
 
 pub const target_sample_rate: u32 = 16_000;
 pub const target_sample_count: usize = 16_000;
@@ -246,7 +247,7 @@ pub const LogMelFrontend = struct {
             for (0..self.config.frame_length) |index| {
                 real[index] = samples[start + index] * self.window[index];
             }
-            fftInPlace(real, imaginary);
+            try spectral.fftInPlace(f32, real, imaginary);
 
             const time_bin = @min(frame * self.config.time_bins / frame_count, self.config.time_bins - 1);
             time_counts[time_bin] += 1;
@@ -303,45 +304,6 @@ fn hzToMel(hz: f32) f32 {
 
 fn melToHz(mel: f32) f32 {
     return 700.0 * (@exp(mel / 1127.0) - 1.0);
-}
-
-fn fftInPlace(real: []f32, imaginary: []f32) void {
-    std.debug.assert(real.len == imaginary.len and real.len > 0 and real.len & (real.len - 1) == 0);
-    var j: usize = 0;
-    for (1..real.len) |index| {
-        var bit = real.len >> 1;
-        while (j & bit != 0) : (bit >>= 1) j ^= bit;
-        j ^= bit;
-        if (index < j) {
-            std.mem.swap(f32, &real[index], &real[j]);
-            std.mem.swap(f32, &imaginary[index], &imaginary[j]);
-        }
-    }
-
-    var length: usize = 2;
-    while (length <= real.len) : (length *= 2) {
-        const angle = -2.0 * std.math.pi / @as(f64, @floatFromInt(length));
-        const step_real: f32 = @floatCast(@cos(angle));
-        const step_imaginary: f32 = @floatCast(@sin(angle));
-        var start: usize = 0;
-        while (start < real.len) : (start += length) {
-            var twiddle_real: f32 = 1;
-            var twiddle_imaginary: f32 = 0;
-            for (0..length / 2) |offset| {
-                const even = start + offset;
-                const odd = even + length / 2;
-                const odd_real = real[odd] * twiddle_real - imaginary[odd] * twiddle_imaginary;
-                const odd_imaginary = real[odd] * twiddle_imaginary + imaginary[odd] * twiddle_real;
-                real[odd] = real[even] - odd_real;
-                imaginary[odd] = imaginary[even] - odd_imaginary;
-                real[even] += odd_real;
-                imaginary[even] += odd_imaginary;
-                const next_real = twiddle_real * step_real - twiddle_imaginary * step_imaginary;
-                twiddle_imaginary = twiddle_real * step_imaginary + twiddle_imaginary * step_real;
-                twiddle_real = next_real;
-            }
-        }
-    }
 }
 
 fn readU16(bytes: []const u8, offset: usize) u16 {
@@ -466,7 +428,7 @@ test "FFT localizes a sinusoid" {
         value.* = @floatCast(@sin(2.0 * std.math.pi * @as(f64, @floatFromInt(expected_bin * index)) /
             @as(f64, @floatFromInt(default_fft_size))));
     }
-    fftInPlace(&real, &imaginary);
+    try spectral.fftInPlace(f32, &real, &imaginary);
     var peak: usize = 0;
     var peak_power: f32 = 0;
     for (real[0 .. default_fft_size / 2], imaginary[0 .. default_fft_size / 2], 0..) |re, im, index| {

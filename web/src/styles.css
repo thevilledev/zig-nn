@@ -149,7 +149,19 @@ h1 { margin: 0; font-size: clamp(2rem, 5vw, 3.45rem); line-height: 1.02; letter-
 .execution-summary dd, .telemetry-grid dd { margin: 0.2rem 0 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85rem; overflow-wrap: anywhere; }
 .telemetry-note { margin: 0.9rem 0 0; color: var(--muted); font-size: 0.78rem; }
 
-.optimizer-visual, .benchmark-visual, .semantic-visual { min-width: 0; }
+.optimizer-visual, .benchmark-visual, .semantic-visual, .spectral-visual { min-width: 0; }
+.spectral-model-summary { margin: 0.35rem 0 0; color: var(--muted); font-size: 0.78rem; }
+.spectral-curve-chart { margin-top: 0.55rem; }
+.spectral-spectrum-chart { margin-top: 0.35rem; border-top: 1px solid var(--border); }
+.spectral-line { fill: none; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; transition: d 160ms ease; }
+.spectral-target { stroke: var(--series-2); stroke-dasharray: 7 5; }
+.spectral-raw { stroke: var(--series-3); stroke-dasharray: 2 5; }
+.spectral-fourier { stroke: var(--series-1); }
+.spectral-marker { stroke-width: 1.5; }
+.spectral-target-marker { fill: var(--surface); stroke: var(--series-2); }
+.spectral-raw-marker { fill: var(--surface); stroke: var(--series-3); }
+.spectral-fourier-marker { fill: var(--series-1); stroke: var(--surface); }
+.spectral-legend .spectral-line { stroke-width: 2.5; }
 .optimizer-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.8rem; margin-top: 0.7rem; }
 .optimizer-grid figure { min-width: 0; margin: 0; padding: 0.45rem; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
 .optimizer-grid svg { display: block; width: 100%; height: auto; }
@@ -213,4 +225,5 @@ footer { max-width: 1240px; margin: 0 auto; padding: 1.2rem 1.5rem 2rem; color: 
 
 @media (prefers-reduced-motion: reduce) {
   .progress-track span { transition: none; }
+  .spectral-line { transition: none; }
 }

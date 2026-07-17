@@ -34,6 +34,8 @@ The live labs are grouped into a learning route:
   network's evolving prediction;
 - **Drawing a Decision Boundary:** labelled points, target circle, and learned
   probability field;
+- **Learning in Frequency Space:** raw-coordinate and Fourier-feature curves,
+  amplitude spectra, pointwise loss, and low/high harmonic error;
 - **Comparing Optimizers:** synchronized SGD, momentum, and AdamW loss,
   accuracy, decision boundaries, and runtime telemetry;
 - **When a GPU Wins:** synchronized CPU/GPU matrix timings, speedup,
@@ -189,9 +191,10 @@ Supported experiment event types remain:
 - `run_completed` for final evidence and summary metrics.
 
 Metric payloads may include a `series` name for comparisons such as three
-optimizers. `run_started.data.execution` reports the requested backend, the
-selected backend, and Zig optimization mode. Tensor and accelerator snapshots
-may include cumulative or interval telemetry for tensor operations and native
+optimizers or the raw/Fourier spectral models.
+`run_started.data.execution` reports the requested backend, the selected
+backend, and Zig optimization mode. Tensor and accelerator snapshots may
+include cumulative or interval telemetry for tensor operations and native
 backend work.
 
 `nnctl` adds `run_id` and monotonically increasing `seq` fields, and may add

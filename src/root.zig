@@ -36,6 +36,7 @@ const graph_mod = @import("graph.zig");
 const decoding_mod = @import("decoding.zig");
 const retrieval_mod = @import("retrieval.zig");
 const audio_mod = @import("audio.zig");
+const spectral_mod = @import("spectral.zig");
 
 /// Library usage example:
 ///
@@ -104,6 +105,7 @@ pub const Graph = graph_mod;
 pub const Decoding = decoding_mod;
 pub const Retrieval = retrieval_mod;
 pub const Audio = audio_mod;
+pub const Spectral = spectral_mod;
 
 // Export backend interface types
 pub const BackendMatrix = backend_mod.Matrix;

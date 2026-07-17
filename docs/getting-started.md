@@ -114,6 +114,7 @@ zig build test-structured
 zig build test-decoding
 zig build test-retrieval
 zig build test-audio
+zig build test-spectral
 zig build test-modules
 zig build test-training
 zig build test-spatial

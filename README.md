@@ -42,10 +42,11 @@ mise run lab
 ```
 
 The local learning lab covers XOR training, nonlinear regression, binary
-classification, optimizer comparison, CPU-versus-Metal evidence, and semantic
-search. It streams native Zig metrics, snapshots, and device telemetry through
-`nnctl`; see the [learning lab guide](docs/learning-lab.md) for the interface,
-development workflow, backend contract, and event protocol.
+classification, spectral learning, optimizer comparison, CPU-versus-Metal
+evidence, and semantic search. It streams native Zig metrics, snapshots, and
+device telemetry through `nnctl`; see the
+[learning lab guide](docs/learning-lab.md) for the interface, development
+workflow, backend contract, and event protocol.
 
 ## Documentation
 
@@ -57,6 +58,8 @@ development workflow, backend contract, and event protocol.
   runtime, backends, and model-specific components fit together
 - [Research Resources](docs/research.md) — papers, datasets, official docs, and
   links back to their implementations
+- [Spectral Methods](experiments/README.md#spectral-methods) — Fourier analysis,
+  coordinate features, and frequency-resolved learning evidence
 - [GPU and Backend Notes](docs/gpu.md) — backend boundaries and Metal, CUDA,
   and ROCm verification
 - [Language, Retrieval, and Sequence Models](experiments/README.md#language-retrieval-and-sequence-models) —

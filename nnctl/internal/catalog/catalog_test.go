@@ -37,6 +37,16 @@ func TestResolveOptimizerLabExperiment(t *testing.T) {
 	}
 }
 
+func TestResolveSpectralLearningExperiment(t *testing.T) {
+	experiment, ok := ResolveExperiment("spectral_learning")
+	if !ok {
+		t.Fatal("expected spectral_learning to resolve")
+	}
+	if experiment.Step != "run_spectral_learning" || experiment.DefaultGPU != "" {
+		t.Fatalf("unexpected spectral learning experiment: %+v", experiment)
+	}
+}
+
 func TestResolveTokenizerLabExperiment(t *testing.T) {
 	experiment, ok := ResolveExperiment("tokenizer_lab")
 	if !ok {

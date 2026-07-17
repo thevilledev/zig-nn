@@ -6,6 +6,7 @@ import ExecutionPanel from './ExecutionPanel.svelte';
 import OptimizerComparison from './OptimizerComparison.svelte';
 import RegressionVisualization from './RegressionVisualization.svelte';
 import SemanticSimilarity from './SemanticSimilarity.svelte';
+import SpectralLearning from './SpectralLearning.svelte';
 import XorVisualization from './XorVisualization.svelte';
 import type { RunStartedData } from './types';
 
@@ -109,5 +110,36 @@ describe('learning visualizations', () => {
     expect(screen.getByRole('img', { name: /Cosine similarity heatmap/ })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'cat query' })).toBeTruthy();
     expect(screen.getAllByText('cat doc')).toHaveLength(2);
+  });
+
+  it('renders spectral curves and frequency amplitudes with model context', () => {
+    render(SpectralLearning, {
+      started: {
+        config: { steps: 1000, learning_rate: 0.01, fourier_bands: 9, seed: 42 },
+        topology: [1, 32, 32, 1],
+        activations: ['relu', 'relu', 'linear'],
+        target_curve: [{ x: 0, y: 0 }, { x: 0.5, y: 0 }],
+        target_spectrum: [0, 1 / 3, 0, 1 / 3, 0, 0, 0, 0, 0, 1 / 3],
+        spectrum_limit: 9,
+        models: [
+          { name: 'raw', input_representation: 'coordinate', topology: [1, 32, 32, 1], parameter_count: 1153 },
+          { name: 'fourier', input_representation: 'coordinate plus harmonic pairs', topology: [19, 32, 32, 1], parameter_count: 1729 }
+        ]
+      },
+      snapshot: {
+        step: 200,
+        total: 1000,
+        data: {
+          kind: 'spectral_learning',
+          series: [
+            { name: 'raw', curve: [{ x: 0, y: 0.1 }], amplitudes: [0, 0.3, 0, 0.1, 0, 0, 0, 0, 0, 0.02] },
+            { name: 'fourier', curve: [{ x: 0, y: 0.02 }], amplitudes: [0, 0.33, 0, 0.32, 0, 0, 0, 0, 0, 0.3] }
+          ]
+        }
+      }
+    });
+    expect(screen.getByRole('img', { name: /Target and learned multi-frequency functions/ })).toBeTruthy();
+    expect(screen.getByRole('img', { name: /Target and learned amplitude spectra/ })).toBeTruthy();
+    expect(screen.getByText(/raw 1,153 parameters/)).toBeTruthy();
   });
 });

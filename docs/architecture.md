@@ -49,6 +49,16 @@ and the gated path in [Gated Network](../experiments/gated_network/gated_network
 Try it in [Regression](../experiments/regression/regression.zig) or
 [MNIST](../experiments/mnist/mnist.zig).
 
+### [Spectral Methods](../src/spectral.zig)
+
+- In-place radix-2 FFT for `f32` and `f64` real/imaginary buffers
+- Normalized single-sided amplitude spectra for real signals
+- Scalar coordinate encoding with ordered sine/cosine harmonic pairs
+- Shared FFT mechanics used by the audio log-mel frontend
+
+Try them in [Spectral Learning](../experiments/spectral_learning/spectral_learning.zig),
+where the CPU `Network` compares raw coordinates with Fourier-feature inputs.
+
 ### [Tensor Runtime](../src/tensor.zig), [Modules](../src/modules.zig), And [Training](../src/training.zig)
 
 - Rank-aware f32 tensors backed by the selected CPU, Metal, CUDA, or ROCm
@@ -118,7 +128,7 @@ Try them in [CNN](../experiments/cnn/cnn.zig).
 ### [Audio Features](../src/audio.zig)
 
 - PCM16 WAV decoding and mono conversion
-- Linear resampling, FFT power spectra, mel filterbanks, and pooled log-mel
+- Linear resampling, shared FFT power spectra, mel filterbanks, and pooled log-mel
   features
 - Host-side preprocessing with explicit normalization before tensor upload
 

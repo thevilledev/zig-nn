@@ -120,6 +120,36 @@ var learningSpecs = []ExperimentSpec{
 		DefaultBackend: "cpu",
 	},
 	{
+		ID:          "spectral-learning",
+		Category:    "Spectral methods",
+		Title:       "Learning in Frequency Space",
+		Description: "Compare a coordinate MLP with the same hidden network fed explicit Fourier features while both learn a signal with low, middle, and high frequencies.",
+		Question:    "Why does a coordinate network learn smooth structure before fine detail, and how do Fourier features change that behavior?",
+		Observe: []string{
+			"Whether the raw model's low-frequency error falls before its high-frequency error",
+			"How explicit harmonic inputs change the learned curve and amplitude spectrum",
+			"Whether falling pointwise loss also recovers the intended frequency components",
+		},
+		Interpretation: []string{
+			"The spectrum separates the learned function into frequency bins, making progress on broad shape and fine oscillation visible independently.",
+			"The models share their hidden widths, optimizer, samples, and update count, but Fourier encoding widens the first layer; this is a representation comparison rather than a parameter-matched benchmark.",
+		},
+		Visualization: "spectral_learning",
+		Sources:       []string{"experiments/spectral_learning/spectral_learning.zig", "src/spectral.zig", "src/network.zig"},
+		Parameters: []ParameterSpec{
+			integerParameter("steps", "Steps", "Full-batch updates applied to both models.", 1_000, 100, 3_000, 100, "--steps"),
+			numberParameter("learning_rate", "Learning rate", "Shared SGD step size for both models.", 0.01, 0.0001, 0.1, 0.0001, "--learning-rate"),
+			integerParameter("fourier_bands", "Fourier bands", "Sine/cosine input pairs supplied to the encoded model.", 9, 1, 16, 1, "--fourier-bands"),
+			integerParameter("seed", "Seed", "Reproduces both model initializations.", 42, 0, math.MaxUint32, 1, "--seed"),
+		},
+		Metrics: []MetricSpec{
+			{Name: "loss", Label: "Training loss"},
+			{Name: "harmonic_error", Label: "Target harmonic amplitude error"},
+		},
+		Backends:       []string{"cpu"},
+		DefaultBackend: "cpu",
+	},
+	{
 		ID:          "optimizer-lab",
 		Category:    "Training",
 		Title:       "Comparing Optimizers",

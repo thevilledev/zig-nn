@@ -34,9 +34,9 @@ Every individual command maps to a stable Zig step. For example,
 See [Getting Started](../docs/getting-started.md) for direct Zig commands and
 [GPU and Backend Notes](../docs/gpu.md) for backend requirements.
 
-XOR Training, Regression, Binary Classification, Optimizer Lab, GPU Benchmark,
-and Semantic Search also expose structured live evidence in the local browser
-lab:
+XOR Training, Regression, Binary Classification, Spectral Learning, Optimizer
+Lab, GPU Benchmark, and Semantic Search also expose structured live evidence in
+the local browser lab:
 
 ```bash
 mise run lab
@@ -51,6 +51,9 @@ event contract and extension steps.
 - **Foundations:** Simple XOR → XOR Training → Binary Classification →
   Regression → Gated Network. Read each program beside `matrix.zig`,
   `layer.zig`, and `network.zig`.
+- **Spectral methods:** Regression → Spectral Learning, then extend the route
+  with periodic activations and two-dimensional coordinate fields. Compare
+  pointwise error with the frequency components recovered by each model.
 - **Training and runtime:** Backend Demo → Backend Training → Optimizer Lab →
   Padding Masks → GPU Demo. This route exposes storage, transfer, optimizer,
   and device-residency decisions.
@@ -75,6 +78,17 @@ event contract and extension steps.
 | **Regression** — `nnctl run regression` | Can the same primitives approximate a nonlinear function? Compare targets with predictions. | [entrypoint](regression/regression.zig), [network](../src/network.zig) | [Neural-network foundations](../docs/research.md#neural-network-foundations) |
 | **Gated Network** — `nnctl run gated-network` | How do GLU and SwiGLU paths change a layer’s forward computation? Inspect the gated outputs. | [entrypoint](gated_network/gated_network.zig), [layer](../src/layer.zig), [activation](../src/activation.zig) | [Activations and gating](../docs/research.md#activations-and-gating) |
 | **Network Visualisation** — `nnctl run network-visualisation` | How do several network shapes look before training? Inspect the terminal topology diagrams. | [entrypoint](network_visualisation/network_visualisation.zig), [visualiser](../src/visualiser.zig) | [Architecture](../docs/architecture.md) |
+
+## Spectral Methods
+
+| Experiment and run command | Question and evidence | Code to read | Background |
+| --- | --- | --- | --- |
+| **Spectral Learning** — `nnctl run spectral-learning` | Why does a coordinate MLP learn broad structure before fine oscillation, and how do Fourier features change that order? Compare raw and encoded prediction curves, amplitude spectra, pointwise loss, and target-harmonic error. | [entrypoint](spectral_learning/spectral_learning.zig), [spectral tools](../src/spectral.zig), [network](../src/network.zig) | [Spectral learning](../docs/research.md#spectral-learning) |
+
+This first experiment establishes reusable Fourier transform, real-signal
+amplitude, and coordinate-feature primitives. Natural follow-ons are a SIREN
+experiment that adds periodic activations and initialization, followed by a 2D
+implicit-image experiment that visualizes spatial frequency recovery.
 
 ## Training and Runtime
 

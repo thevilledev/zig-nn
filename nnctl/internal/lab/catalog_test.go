@@ -52,6 +52,21 @@ func TestBuildRunOptionsDefaultsAndValidation(t *testing.T) {
 		t.Fatal("expected unsupported backend error")
 	}
 
+	spectral, _ := ResolveExperiment("spectral-learning")
+	spectralOptions, err := BuildRunOptions(spectral, "cpu", map[string]json.Number{"fourier_bands": json.Number("12")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	spectralArgs := strings.Join(spectralOptions.Arguments, " ")
+	for _, want := range []string{"--steps 1000", "--learning-rate 0.01", "--fourier-bands 12", "--seed 42"} {
+		if !strings.Contains(spectralArgs, want) {
+			t.Fatalf("arguments %q missing %q", spectralArgs, want)
+		}
+	}
+	if _, err := BuildRunOptions(spectral, "cpu", map[string]json.Number{"fourier_bands": json.Number("17")}); err == nil {
+		t.Fatal("expected Fourier-band upper-bound error")
+	}
+
 	optimizer, _ := ResolveExperiment("optimizer-lab")
 	metal, err := BuildRunOptions(optimizer, "metal", nil)
 	if err != nil || !strings.Contains(strings.Join(metal.Arguments, " "), "--backend metal") {

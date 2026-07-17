@@ -29,7 +29,7 @@ func TestServerCatalogRunAndSSEReplay(t *testing.T) {
 	if err := json.NewDecoder(catalogResponse.Body).Decode(&specs); err != nil {
 		t.Fatal(err)
 	}
-	if len(specs) != 6 || specs[0].Step != "" {
+	if len(specs) != 7 || specs[0].Step != "" {
 		t.Fatalf("catalog response = %#v", specs)
 	}
 	capabilitiesResponse := httptest.NewRecorder()

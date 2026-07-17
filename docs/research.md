@@ -50,6 +50,19 @@ the broader papers, datasets, and technical references.
 - [On the importance of initialization and momentum in deep learning](https://proceedings.mlr.press/v28/sutskever13.html)
   - Momentum behavior and optimization conditioning.
 
+## Spectral Learning
+
+**See it in the repo:** [spectral transforms and features](../src/spectral.zig),
+[network fundamentals](../src/network.zig), and
+[Spectral Learning](../experiments/spectral_learning/spectral_learning.zig).
+
+- [On the Spectral Bias of Neural Networks](https://proceedings.mlr.press/v97/rahaman19a.html)
+  - Frequency-dependent learning speed and the tendency of deep networks to
+    learn low-frequency structure first.
+- [Fourier Features Let Networks Learn High Frequency Functions in Low Dimensional Domains](https://proceedings.neurips.cc/paper/2020/hash/55053683268957697aa39fba6f231c68-Abstract.html)
+  - Coordinate feature mappings that expose tunable harmonic structure to an
+    MLP.
+
 ## Activations And Gating
 
 **See it in the repo:** [activation functions](../src/activation.zig),

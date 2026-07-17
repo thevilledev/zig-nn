@@ -138,6 +138,16 @@ export interface RunStartedData {
   grid_size?: number;
   queries?: string[];
   documents?: string[];
+  models?: ModelMetadata[];
+  target_spectrum?: number[];
+  spectrum_limit?: number;
+}
+
+export interface ModelMetadata {
+  name: string;
+  input_representation: string;
+  topology: number[];
+  parameter_count: number;
 }
 
 export interface MetricData {
@@ -183,7 +193,14 @@ export type SnapshotKind =
   | 'decision_boundary'
   | 'optimizer_comparison'
   | 'backend_benchmark'
-  | 'semantic_similarity';
+  | 'semantic_similarity'
+  | 'spectral_learning';
+
+export interface SpectralSeries {
+  name: string;
+  curve: Point[];
+  amplitudes: number[];
+}
 
 export interface OptimizerBoundary {
   name: string;
@@ -206,7 +223,8 @@ export type SnapshotData =
   | { kind: 'decision_boundary'; probabilities: Probability[] }
   | { kind: 'optimizer_comparison'; optimizers: OptimizerBoundary[]; telemetry: RuntimeTelemetry }
   | { kind: 'backend_benchmark'; cases: BenchmarkCaseResult[]; telemetry: RuntimeTelemetry }
-  | { kind: 'semantic_similarity'; similarities: number[]; rows: number; columns: number; telemetry: RuntimeTelemetry };
+  | { kind: 'semantic_similarity'; similarities: number[]; rows: number; columns: number; telemetry: RuntimeTelemetry }
+  | { kind: 'spectral_learning'; series: SpectralSeries[] };
 
 export interface RunFailureData {
   message: string;
