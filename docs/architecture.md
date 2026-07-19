@@ -78,7 +78,9 @@ Try them in [Optimizer Lab](../experiments/optimizer_lab/optimizer_lab.zig),
 
 Implementations: [abstraction](../src/backend.zig), [CPU](../src/cpu_backend.zig),
 [Metal](../src/metal_backend.zig), [CUDA](../src/cuda_backend.zig), and
-[ROCm](../src/rocm_backend.zig).
+[ROCm](../src/rocm_backend.zig). CUDA and ROCm use a shared
+[compiled GPU implementation](../src/compiled_gpu_backend.zig) behind their
+vendor-specific ABI adapters.
 
 - `BackendMatrix` provides a separate backend-aware matrix API
 - CPU backend implements all backend matrix operations

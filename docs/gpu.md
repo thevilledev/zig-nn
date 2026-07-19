@@ -11,7 +11,9 @@ operations backend-neutral; it does not by itself prove that a GPU was selected.
   and default inference helpers.
 - `src/backend.zig`, `src/cpu_backend.zig`, `src/metal_backend.zig`,
   `src/cuda_backend.zig`, and `src/rocm_backend.zig` power the backend-aware
-  `BackendMatrix` API.
+  `BackendMatrix` API. CUDA and ROCm share their buffer, batching, fallback,
+  and operation orchestration in `src/compiled_gpu_backend.zig`; their public
+  modules retain the vendor ABI adapters and error identities.
 - Metal support is available for backend matrix operations on macOS.
 - CUDA support is available for backend matrix operations on Linux with the
   NVIDIA driver, CUDA toolkit headers, and NVRTC libraries available.
