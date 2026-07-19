@@ -158,10 +158,11 @@ type DestroyRequest struct {
 }
 
 type DestroyResult struct {
-	Provider string            `json:"provider"`
-	DryRun   bool              `json:"dry_run"`
-	Request  DestroyRequest    `json:"request"`
-	Errors   map[string]string `json:"errors,omitempty"`
+	Provider       string            `json:"provider"`
+	DryRun         bool              `json:"dry_run"`
+	Request        DestroyRequest    `json:"request"`
+	Errors         map[string]string `json:"errors,omitempty"`
+	ProviderDetail json.RawMessage   `json:"provider_details,omitempty"`
 }
 
 // Provider is the common SSH-addressable compute lifecycle. Optional cloud
@@ -204,6 +205,50 @@ type PreparedImage struct {
 
 type ImagePreparer interface {
 	PrepareImage(context.Context, ImageRequest) (PreparedImage, error)
+}
+
+type Volume struct {
+	Provider       string          `json:"provider"`
+	ID             string          `json:"id"`
+	Name           string          `json:"name,omitempty"`
+	State          string          `json:"state,omitempty"`
+	Location       string          `json:"location,omitempty"`
+	SizeGiB        int             `json:"size_gib,omitempty"`
+	Bootable       bool            `json:"bootable,omitempty"`
+	Deleted        bool            `json:"deleted,omitempty"`
+	ProviderDetail json.RawMessage `json:"provider_details,omitempty"`
+}
+
+type VolumeListOptions struct {
+	IncludeDeleted bool
+}
+
+type VolumePurgeRequest struct {
+	IDs        []string `json:"ids,omitempty"`
+	AllDeleted bool     `json:"all_deleted,omitempty"`
+	DryRun     bool     `json:"dry_run,omitempty"`
+}
+
+type VolumePurgeResult struct {
+	Provider       string             `json:"provider"`
+	DryRun         bool               `json:"dry_run"`
+	Request        VolumePurgeRequest `json:"request"`
+	PurgedIDs      []string           `json:"purged_ids,omitempty"`
+	ProviderDetail json.RawMessage    `json:"provider_details,omitempty"`
+}
+
+type VolumeProvider interface {
+	Volumes(context.Context, VolumeListOptions) ([]Volume, error)
+	PurgeVolumes(context.Context, VolumePurgeRequest) (*VolumePurgeResult, error)
+}
+
+type TemplateFile struct {
+	Path    string
+	Content string
+}
+
+type ImageTemplateProvider interface {
+	ImageTemplateFiles() []TemplateFile
 }
 
 type Registry struct {
