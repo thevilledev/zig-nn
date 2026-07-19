@@ -51,6 +51,9 @@ func (f ProviderFactory) Status(ctx context.Context, _ cloudcore.Configuration) 
 }
 
 func (f ProviderFactory) New(ctx context.Context, config cloudcore.Configuration) (cloudcore.Provider, error) {
+	if config.Unauthenticated {
+		return NewCloudProvider(nil), nil
+	}
 	credentials, err := f.credentialStore().Credentials(ctx)
 	if err != nil {
 		return nil, err
@@ -120,6 +123,7 @@ func (p *CloudProvider) Offerings(ctx context.Context, filters cloudcore.Offerin
 		Model:         filters.Model,
 		GPUCounts:     filters.GPUCounts,
 		AvailableOnly: filters.AvailableOnly,
+		Currency:      filters.Currency,
 		Market:        PricingMarketAll,
 	}
 	if len(filters.Markets) == 1 {
@@ -242,7 +246,14 @@ func (p *CloudProvider) SSHKeys(ctx context.Context) ([]cloudcore.SSHKey, error)
 	}
 	result := make([]cloudcore.SSHKey, 0, len(keys))
 	for _, key := range keys {
-		result = append(result, cloudcore.SSHKey{ID: key.ID, Name: key.Name, Fingerprint: key.Fingerprint})
+		detail, marshalErr := json.Marshal(key)
+		if marshalErr != nil {
+			return nil, fmt.Errorf("encode Verda SSH key: %w", marshalErr)
+		}
+		result = append(result, cloudcore.SSHKey{
+			Provider: ProviderName, ID: key.ID, Name: key.Name,
+			Fingerprint: key.Fingerprint, ProviderDetail: detail,
+		})
 	}
 	return result, nil
 }
@@ -300,6 +311,14 @@ func (p *CloudProvider) PurgeVolumes(ctx context.Context, request cloudcore.Volu
 }
 
 func (*CloudProvider) ImageTemplateFiles() []cloudcore.TemplateFile {
+	return verdaTemplateFiles()
+}
+
+func (ProviderFactory) ImageTemplateFiles() []cloudcore.TemplateFile {
+	return verdaTemplateFiles()
+}
+
+func verdaTemplateFiles() []cloudcore.TemplateFile {
 	files := PackerTemplateFiles()
 	result := make([]cloudcore.TemplateFile, 0, len(files))
 	for _, file := range files {
@@ -531,4 +550,5 @@ var (
 	_ cloudcore.SSHKeyProvider        = (*CloudProvider)(nil)
 	_ cloudcore.VolumeProvider        = (*CloudProvider)(nil)
 	_ cloudcore.ImageTemplateProvider = (*CloudProvider)(nil)
+	_ cloudcore.ImageTemplateFactory  = ProviderFactory{}
 )

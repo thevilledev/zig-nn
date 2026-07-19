@@ -7,9 +7,11 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 
+	cloudcore "nnctl/internal/cloud"
 	"nnctl/internal/cloud/verda"
 )
 
@@ -18,11 +20,13 @@ type cloudDeployOptions struct {
 	userDataFile string
 	baseURL      string
 	jsonOutput   bool
+	provider     string
 }
 
 type cloudSSHKeysOptions struct {
 	baseURL    string
 	jsonOutput bool
+	provider   string
 }
 
 type cloudVolumesOptions struct {
@@ -31,16 +35,19 @@ type cloudVolumesOptions struct {
 	purge          bool
 	baseURL        string
 	jsonOutput     bool
+	provider       string
 }
 
 type cloudDestroyOptions struct {
 	verda.DestroyOptions
 	baseURL    string
 	jsonOutput bool
+	provider   string
 }
 
 type cloudPackerTemplateOptions struct {
-	force bool
+	force    bool
+	provider string
 }
 
 type cloudListOptions struct {
@@ -48,6 +55,7 @@ type cloudListOptions struct {
 	status     string
 	all        bool
 	jsonOutput bool
+	provider   string
 }
 
 type cloudPricingOptions struct {
@@ -59,11 +67,7 @@ type cloudPricingOptions struct {
 	baseURL    string
 	sortBy     string
 	jsonOutput bool
-}
-
-func (a *app) newVerdaSDKClient(ctx context.Context, baseURL string) (*verda.SDKClient, error) {
-	client, _, err := a.newVerdaSDKClientWithCredentials(ctx, baseURL)
-	return client, err
+	provider   string
 }
 
 func (a *app) newVerdaSDKClientWithCredentials(ctx context.Context, baseURL string) (*verda.SDKClient, verda.Credentials, error) {
@@ -82,93 +86,120 @@ func (a *app) newVerdaSDKClientWithCredentials(ctx context.Context, baseURL stri
 }
 
 func (a *app) runCloudDeploy(ctx context.Context, opts cloudDeployOptions) error {
-	deployOpts := opts.DeployOptions
+	userData := opts.UserDataScript
 	if opts.userDataFile != "" {
 		script, err := os.ReadFile(opts.userDataFile)
 		if err != nil {
 			return fmt.Errorf("read userdata file: %w", err)
 		}
-		deployOpts.UserDataScript = string(script)
+		userData = string(script)
 	}
-
-	var client verda.Client
-	if !deployOpts.DryRun {
-		sdkClient, err := a.newVerdaSDKClient(ctx, opts.baseURL)
-		if err != nil {
-			return err
-		}
-		client = sdkClient
-	}
-
-	result, err := verda.Deploy(ctx, client, deployOpts)
+	provider, err := a.cloudProvider(ctx, opts.provider, opts.baseURL, "nnctl", opts.DryRun)
 	if err != nil {
 		return err
 	}
-	return a.printCloudDeployResult(result, opts.jsonOutput)
+	deployment, err := provider.Deploy(ctx, cloudcore.DeployRequest{
+		OfferingID:  opts.InstanceType,
+		Location:    opts.LocationCode,
+		Market:      opts.Market,
+		Image:       opts.Image,
+		Name:        opts.Hostname,
+		Description: opts.Description,
+		SSHKeyIDs:   opts.SSHKeyIDs,
+		UserData:    userData,
+		DryRun:      opts.DryRun,
+		Options: map[string]string{
+			verda.OptionSourceOSVolumeID:          opts.SourceOSVolumeID,
+			verda.OptionSourceOSVolumeName:        opts.SourceOSVolumeName,
+			verda.OptionClonedOSVolumeID:          opts.ClonedOSVolumeID,
+			verda.OptionStartupScriptName:         opts.StartupScriptName,
+			verda.OptionSkipAvailabilityCheck:     strconv.FormatBool(opts.SkipAvailabilityCheck),
+			verda.OptionKeepClonedVolumeOnFailure: strconv.FormatBool(opts.KeepClonedOSVolumeOnFailure),
+		},
+	})
+	if err != nil {
+		return err
+	}
+	return a.printProviderDeployResult(deployment, opts.jsonOutput)
 }
 
 func (a *app) runCloudSSHKeys(ctx context.Context, opts cloudSSHKeysOptions) error {
-	client, err := a.newVerdaSDKClient(ctx, opts.baseURL)
+	provider, err := a.cloudProvider(ctx, opts.provider, opts.baseURL, "nnctl", false)
 	if err != nil {
 		return err
 	}
-	keys, err := client.ListSSHKeys(ctx)
-	if err != nil {
-		return fmt.Errorf("list Verda SSH keys: %w", err)
+	keyProvider, ok := provider.(cloudcore.SSHKeyProvider)
+	if !ok {
+		return unsupportedCloudCapability(provider.Descriptor(), cloudcore.CapabilitySSHKeys)
 	}
-	return a.printCloudSSHKeys(keys, opts.jsonOutput)
+	keys, err := keyProvider.SSHKeys(ctx)
+	if err != nil {
+		return err
+	}
+	return a.printProviderSSHKeys(provider.Descriptor(), keys, opts.jsonOutput)
 }
 
 func (a *app) runCloudVolumes(ctx context.Context, opts cloudVolumesOptions) error {
-	if opts.purge || opts.AllDeleted {
-		var client verda.VolumePurgeClient
-		if !opts.DryRun {
-			sdkClient, err := a.newVerdaSDKClient(ctx, opts.baseURL)
-			if err != nil {
-				return err
-			}
-			client = sdkClient
-		}
-
-		result, err := verda.PurgeVolumes(ctx, client, opts.PurgeVolumesOptions)
-		if err != nil {
-			return err
-		}
-		return a.printCloudPurgeResult(result, opts.jsonOutput)
-	}
-
-	client, err := a.newVerdaSDKClient(ctx, opts.baseURL)
+	provider, err := a.cloudProvider(ctx, opts.provider, opts.baseURL, "nnctl", opts.DryRun)
 	if err != nil {
 		return err
 	}
-	volumes, err := verda.ListVolumes(ctx, client, verda.ListVolumesOptions{
+	volumeProvider, ok := provider.(cloudcore.VolumeProvider)
+	if !ok {
+		return unsupportedCloudCapability(provider.Descriptor(), cloudcore.CapabilityVolumes)
+	}
+	if opts.purge || opts.AllDeleted {
+		result, err := volumeProvider.PurgeVolumes(ctx, cloudcore.VolumePurgeRequest{
+			IDs: opts.VolumeIDs, AllDeleted: opts.AllDeleted, DryRun: opts.DryRun,
+		})
+		if err != nil {
+			return err
+		}
+		return a.printProviderPurgeResult(result, opts.jsonOutput)
+	}
+	volumes, err := volumeProvider.Volumes(ctx, cloudcore.VolumeListOptions{
 		IncludeDeleted: opts.includeDeleted,
 	})
 	if err != nil {
 		return err
 	}
-	return a.printCloudVolumes(volumes, opts.jsonOutput)
+	return a.printProviderVolumes(provider.Descriptor(), volumes, opts.jsonOutput)
 }
 
 func (a *app) runCloudDestroy(ctx context.Context, opts cloudDestroyOptions) error {
-	var client verda.DestroyClient
-	if !opts.DryRun {
-		sdkClient, err := a.newVerdaSDKClient(ctx, opts.baseURL)
-		if err != nil {
-			return err
-		}
-		client = sdkClient
-	}
-
-	result, err := verda.Destroy(ctx, client, opts.DestroyOptions)
+	provider, err := a.cloudProvider(ctx, opts.provider, opts.baseURL, "nnctl", opts.DryRun)
 	if err != nil {
 		return err
 	}
-	return a.printCloudDestroyResult(result, opts.jsonOutput)
+	resources := make([]cloudcore.ResourceRef, 0, len(opts.VolumeIDs)+1)
+	if opts.SourceOSVolumeID != "" {
+		resources = append(resources, cloudcore.ResourceRef{Kind: verda.ResourceOSVolume, ID: opts.SourceOSVolumeID, Preserve: true})
+	}
+	for _, id := range opts.VolumeIDs {
+		resources = append(resources, cloudcore.ResourceRef{Kind: verda.ResourceOSVolume, ID: id})
+	}
+	result, err := provider.Destroy(ctx, cloudcore.DestroyRequest{
+		InstanceIDs: opts.InstanceIDs,
+		Resources:   resources,
+		Permanent:   opts.DeletePermanently,
+		DryRun:      opts.DryRun,
+	})
+	if err != nil {
+		return err
+	}
+	return a.printProviderDestroyResult(result, opts.jsonOutput)
 }
 
 func (a *app) runCloudPackerTemplate(outputDir string, opts cloudPackerTemplateOptions) error {
-	written, err := writeCloudPackerTemplate(outputDir, opts.force)
+	factory, err := a.cloudProviderFactory(opts.provider)
+	if err != nil {
+		return err
+	}
+	templates, ok := factory.(cloudcore.ImageTemplateFactory)
+	if !ok {
+		return unsupportedCloudCapability(factory.Descriptor(), cloudcore.CapabilityImageTemplate)
+	}
+	written, err := writeCloudTemplateFiles(outputDir, opts.force, templates.ImageTemplateFiles())
 	if err != nil {
 		return err
 	}
@@ -183,21 +214,18 @@ func (a *app) runCloudPackerTemplate(outputDir string, opts cloudPackerTemplateO
 }
 
 func (a *app) runCloudList(ctx context.Context, opts cloudListOptions) error {
-	client, err := a.newVerdaSDKClient(ctx, opts.baseURL)
+	provider, err := a.cloudProvider(ctx, opts.provider, opts.baseURL, "nnctl", false)
 	if err != nil {
 		return err
 	}
-	instances, err := client.ListInstances(ctx, opts.status)
+	instances, err := provider.Instances(ctx, cloudcore.ListOptions{Status: opts.status, All: opts.all})
 	if err != nil {
-		return fmt.Errorf("list Verda instances: %w", err)
+		return err
 	}
-	if opts.status == "" && !opts.all {
-		instances = activeCloudInstances(instances)
-	}
-	return a.printCloudInstances(instances, opts.jsonOutput)
+	return a.printProviderInstances(provider.Descriptor(), instances, opts.jsonOutput)
 }
 
-func writeCloudPackerTemplate(outputDir string, force bool) ([]string, error) {
+func writeCloudTemplateFiles(outputDir string, force bool, files []cloudcore.TemplateFile) ([]string, error) {
 	outputDir = strings.TrimSpace(outputDir)
 	if outputDir == "" {
 		return nil, fmt.Errorf("output directory is required")
@@ -207,7 +235,7 @@ func writeCloudPackerTemplate(outputDir string, force bool) ([]string, error) {
 	}
 
 	var written []string
-	for _, file := range verda.PackerTemplateFiles() {
+	for _, file := range files {
 		path := filepath.Join(outputDir, file.Path)
 		flag := os.O_WRONLY | os.O_CREATE
 		if force {
@@ -240,16 +268,28 @@ func (a *app) runCloudPricing(ctx context.Context, opts cloudPricingOptions) err
 		return err
 	}
 
-	client, err := a.newVerdaSDKClient(ctx, opts.baseURL)
+	provider, err := a.cloudProvider(ctx, opts.provider, opts.baseURL, "nnctl", false)
 	if err != nil {
 		return err
 	}
-	prices, err := client.ListInstancePrices(ctx, opts.filters)
-	if err != nil {
-		return fmt.Errorf("list Verda prices: %w", err)
+	markets := []string{opts.filters.Market}
+	if opts.filters.Market == verda.PricingMarketAll {
+		markets = nil
 	}
-	verda.SortInstancePrices(prices, opts.sortBy)
-	return a.printCloudPricing(prices, opts.jsonOutput)
+	offerings, err := provider.Offerings(ctx, cloudcore.OfferingFilters{
+		IDs:           opts.filters.InstanceTypes,
+		Locations:     opts.filters.LocationCodes,
+		Markets:       markets,
+		Model:         opts.filters.Model,
+		Manufacturer:  opts.filters.Manufacturer,
+		GPUCounts:     opts.filters.GPUCounts,
+		AvailableOnly: opts.filters.AvailableOnly,
+		Currency:      opts.filters.Currency,
+	})
+	if err != nil {
+		return err
+	}
+	return a.printProviderOfferings(provider.Descriptor(), offerings, opts.sortBy, opts.jsonOutput)
 }
 
 func (a *app) printCloudSSHKeys(keys []verda.SSHKey, jsonOutput bool) error {

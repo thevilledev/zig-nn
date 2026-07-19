@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -64,6 +65,34 @@ func TestCloudDeployDryRunJSON(t *testing.T) {
 	}
 	if result.StartupScript != nil {
 		t.Fatalf("unexpected default startup script: %#v", result.StartupScript)
+	}
+}
+
+func TestCloudDeployExplicitVerdaProviderPreservesOutput(t *testing.T) {
+	var stdout bytes.Buffer
+	app := &app{stdoutWriter: &stdout, stderrWriter: io.Discard}
+	err := app.execute(t.Context(), []string{
+		"cloud", "deploy", "--provider", "verda", "--instance-type", "1V100.6V", "--dry-run", "--json",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result verda.DeployResult
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Provider != verda.ProviderName || !result.DryRun {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestCloudCommandRejectsUnknownProvider(t *testing.T) {
+	app := &app{stdoutWriter: io.Discard, stderrWriter: io.Discard}
+	err := app.execute(t.Context(), []string{
+		"cloud", "deploy", "--provider", "missing", "--instance-type", "1V100.6V", "--dry-run",
+	})
+	if err == nil || !strings.Contains(err.Error(), "unknown cloud provider \"missing\"; available providers: verda") {
+		t.Fatalf("execute() error = %v", err)
 	}
 }
 

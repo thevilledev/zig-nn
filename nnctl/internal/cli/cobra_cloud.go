@@ -10,6 +10,7 @@ import (
 )
 
 func (a *app) newCloudCommand(withRepo repoRunner) *cobra.Command {
+	selection := &cloudProviderSelection{name: defaultCloudProvider}
 	cmd := &cobra.Command{
 		Use:   "cloud <command>",
 		Short: "Deploy cloud benchmark workers",
@@ -18,20 +19,21 @@ func (a *app) newCloudCommand(withRepo repoRunner) *cobra.Command {
 			return cmd.Help()
 		},
 	}
+	cmd.PersistentFlags().StringVar(&selection.name, "provider", selection.name, "cloud provider")
 	cmd.AddCommand(
-		a.newCloudBenchmarkDeployCommand(withRepo),
-		a.newCloudDeployCommand(),
-		a.newCloudVolumeCommand(),
-		a.newCloudDestroyCommand(),
-		a.newCloudPackerTemplateCommand(),
-		a.newCloudListCommand(),
-		a.newCloudPricingCommand(),
-		a.newCloudSSHKeysCommand(),
+		a.newCloudBenchmarkDeployCommand(withRepo, selection),
+		a.newCloudDeployCommand(selection),
+		a.newCloudVolumeCommand(selection),
+		a.newCloudDestroyCommand(selection),
+		a.newCloudPackerTemplateCommand(selection),
+		a.newCloudListCommand(selection),
+		a.newCloudPricingCommand(selection),
+		a.newCloudSSHKeysCommand(selection),
 	)
 	return cmd
 }
 
-func (a *app) newCloudBenchmarkDeployCommand(withRepo repoRunner) *cobra.Command {
+func (a *app) newCloudBenchmarkDeployCommand(withRepo repoRunner, selection *cloudProviderSelection) *cobra.Command {
 	opts := defaultCloudBenchmarkDeployOptions()
 	cmd := &cobra.Command{
 		Use:     "benchmark-deploy",
@@ -52,6 +54,7 @@ no reusable source OS volume is available.`,
   nnctl cloud benchmark --instance-type 1A100.22V --source-os-volume-id volume_id --skip-smoke`,
 		Args: cobra.NoArgs,
 		RunE: withRepo(func(ctx context.Context, cmd *cobra.Command, args []string) error {
+			opts.provider = selection.name
 			return a.runCloudBenchmarkDeploy(ctx, opts)
 		}),
 	}
@@ -94,7 +97,7 @@ no reusable source OS volume is available.`,
 	return cmd
 }
 
-func (a *app) newCloudVolumeCommand() *cobra.Command {
+func (a *app) newCloudVolumeCommand(selection *cloudProviderSelection) *cobra.Command {
 	opts := cloudVolumesOptions{}
 	cmd := &cobra.Command{
 		Use:     "volume [VOLUME_ID...]",
@@ -130,6 +133,7 @@ func (a *app) newCloudVolumeCommand() *cobra.Command {
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.VolumeIDs = args
+			opts.provider = selection.name
 			return a.runCloudVolumes(cmd.Context(), opts)
 		},
 	}
@@ -143,7 +147,7 @@ func (a *app) newCloudVolumeCommand() *cobra.Command {
 	return cmd
 }
 
-func (a *app) newCloudDeployCommand() *cobra.Command {
+func (a *app) newCloudDeployCommand(selection *cloudProviderSelection) *cobra.Command {
 	opts := cloudDeployOptions{
 		DeployOptions: verda.DefaultDeployOptions(""),
 	}
@@ -168,6 +172,7 @@ nnctl/internal/cloud/verda/packer/bootstrap.sh.`,
   nnctl cloud deploy --instance-type 1V100.6V --source-os-volume-id volume_id --user-data-file ./custom-bootstrap.sh`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			opts.provider = selection.name
 			return a.runCloudDeploy(cmd.Context(), opts)
 		},
 	}
@@ -194,7 +199,7 @@ nnctl/internal/cloud/verda/packer/bootstrap.sh.`,
 	return cmd
 }
 
-func (a *app) newCloudDestroyCommand() *cobra.Command {
+func (a *app) newCloudDestroyCommand(selection *cloudProviderSelection) *cobra.Command {
 	opts := cloudDestroyOptions{
 		DestroyOptions: verda.DefaultDestroyOptions(nil),
 	}
@@ -210,6 +215,7 @@ func (a *app) newCloudDestroyCommand() *cobra.Command {
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.InstanceIDs = args
+			opts.provider = selection.name
 			return a.runCloudDestroy(cmd.Context(), opts)
 		},
 	}
@@ -223,7 +229,7 @@ func (a *app) newCloudDestroyCommand() *cobra.Command {
 	return cmd
 }
 
-func (a *app) newCloudPackerTemplateCommand() *cobra.Command {
+func (a *app) newCloudPackerTemplateCommand(selection *cloudProviderSelection) *cobra.Command {
 	opts := cloudPackerTemplateOptions{}
 	cmd := &cobra.Command{
 		Use:   "packer-template DIR",
@@ -233,6 +239,7 @@ func (a *app) newCloudPackerTemplateCommand() *cobra.Command {
   cd ./packer/verda && packer init . && packer build .`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			opts.provider = selection.name
 			return a.runCloudPackerTemplate(args[0], opts)
 		},
 	}
@@ -241,7 +248,7 @@ func (a *app) newCloudPackerTemplateCommand() *cobra.Command {
 	return cmd
 }
 
-func (a *app) newCloudSSHKeysCommand() *cobra.Command {
+func (a *app) newCloudSSHKeysCommand(selection *cloudProviderSelection) *cobra.Command {
 	opts := cloudSSHKeysOptions{}
 	cmd := &cobra.Command{
 		Use:     "ssh-keys",
@@ -253,6 +260,7 @@ func (a *app) newCloudSSHKeysCommand() *cobra.Command {
   nnctl cloud deploy --instance-type 1L40S.20V --ssh-key-id 00000000-0000-0000-0000-000000000000`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			opts.provider = selection.name
 			return a.runCloudSSHKeys(cmd.Context(), opts)
 		},
 	}
@@ -262,7 +270,7 @@ func (a *app) newCloudSSHKeysCommand() *cobra.Command {
 	return cmd
 }
 
-func (a *app) newCloudListCommand() *cobra.Command {
+func (a *app) newCloudListCommand(selection *cloudProviderSelection) *cobra.Command {
 	opts := cloudListOptions{}
 	cmd := &cobra.Command{
 		Use:   "list",
@@ -274,6 +282,7 @@ func (a *app) newCloudListCommand() *cobra.Command {
   nnctl cloud list --json`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			opts.provider = selection.name
 			return a.runCloudList(cmd.Context(), opts)
 		},
 	}
@@ -285,7 +294,7 @@ func (a *app) newCloudListCommand() *cobra.Command {
 	return cmd
 }
 
-func (a *app) newCloudPricingCommand() *cobra.Command {
+func (a *app) newCloudPricingCommand(selection *cloudProviderSelection) *cobra.Command {
 	opts := cloudPricingOptions{
 		sortBy: "price",
 	}
@@ -303,6 +312,7 @@ func (a *app) newCloudPricingCommand() *cobra.Command {
   nnctl cloud pricing --available-only=false --sort location`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			opts.provider = selection.name
 			opts.filters.LocationCodes = append(opts.filters.LocationCodes, opts.zones...)
 			opts.filters.LocationCodes = sortUniqueStrings(opts.filters.LocationCodes)
 			opts.filters.InstanceTypes = sortUniqueStrings(opts.filters.InstanceTypes)

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	cloudcore "nnctl/internal/cloud"
 	"nnctl/internal/cloud/verda"
 	cloudworkflow "nnctl/internal/cloud/workflow"
 )
@@ -88,6 +89,16 @@ func newCloudBenchmarkRun(a *app, ctx context.Context, opts cloudBenchmarkDeploy
 }
 
 func (a *app) runCloudBenchmarkDeploy(ctx context.Context, opts cloudBenchmarkDeployOptions) (runErr error) {
+	factory, err := a.cloudProviderFactory(opts.provider)
+	if err != nil {
+		return err
+	}
+	if !factory.Descriptor().Supports(cloudcore.CapabilityBenchmarkImage) {
+		return unsupportedCloudCapability(factory.Descriptor(), cloudcore.CapabilityBenchmarkImage)
+	}
+	if factory.Descriptor().Name != verda.ProviderName {
+		return fmt.Errorf("cloud provider %q does not implement benchmark deployment", factory.Descriptor().Name)
+	}
 	if err := normalizeCloudBenchmarkDeployOptions(&opts); err != nil {
 		return err
 	}

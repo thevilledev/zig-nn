@@ -38,6 +38,7 @@ const (
 
 type cloudBenchmarkDeployOptions struct {
 	verda.DeployOptions
+	provider              string
 	baseURL               string
 	packerDir             string
 	packer                string

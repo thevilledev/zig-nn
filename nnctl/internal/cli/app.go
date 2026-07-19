@@ -11,6 +11,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	cloudcore "nnctl/internal/cloud"
 )
 
 const (
@@ -19,11 +21,12 @@ const (
 )
 
 type app struct {
-	stdinReader  io.Reader
-	stdoutWriter io.Writer
-	stderrWriter io.Writer
-	httpClient   httpDoer
-	now          func() time.Time
+	stdinReader   io.Reader
+	stdoutWriter  io.Writer
+	stderrWriter  io.Writer
+	httpClient    httpDoer
+	now           func() time.Time
+	cloudRegistry *cloudcore.Registry
 
 	repoRoot string
 	zig      string

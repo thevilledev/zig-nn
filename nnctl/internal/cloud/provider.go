@@ -36,9 +36,10 @@ func (d Descriptor) Supports(capability Capability) bool {
 }
 
 type Configuration struct {
-	BaseURL   string
-	UserAgent string
-	Options   map[string]string
+	BaseURL         string
+	UserAgent       string
+	Unauthenticated bool
+	Options         map[string]string
 }
 
 type ConfigurationStatus struct {
@@ -77,6 +78,7 @@ type OfferingFilters struct {
 	Model         string
 	GPUCounts     []int
 	AvailableOnly bool
+	Currency      string
 }
 
 type InstanceState string
@@ -183,9 +185,11 @@ type Factory interface {
 }
 
 type SSHKey struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Fingerprint string `json:"fingerprint,omitempty"`
+	Provider       string          `json:"provider"`
+	ID             string          `json:"id"`
+	Name           string          `json:"name"`
+	Fingerprint    string          `json:"fingerprint,omitempty"`
+	ProviderDetail json.RawMessage `json:"provider_details,omitempty"`
 }
 
 type SSHKeyProvider interface {
@@ -248,6 +252,10 @@ type TemplateFile struct {
 }
 
 type ImageTemplateProvider interface {
+	ImageTemplateFiles() []TemplateFile
+}
+
+type ImageTemplateFactory interface {
 	ImageTemplateFiles() []TemplateFile
 }
 
