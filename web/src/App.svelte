@@ -303,7 +303,7 @@
               <span>Execution target</span>
               <select value={executionTarget} disabled={running} onchange={(event) => selectExecutionTarget(event.currentTarget.value as ExecutionTarget)}>
                 <option value="local">Local machine</option>
-                <option value="cloud">Verda cloud worker</option>
+                <option value="cloud">Cloud worker</option>
               </select>
               <small>Cloud runs upload committed HEAD; credentials remain in the local OS keyring.</small>
             </label>
