@@ -12,6 +12,7 @@ import (
 	"text/tabwriter"
 
 	cloudcore "nnctl/internal/cloud"
+	"nnctl/internal/cloud/digitalocean"
 	"nnctl/internal/cloud/verda"
 )
 
@@ -21,6 +22,8 @@ type cloudDeployOptions struct {
 	baseURL      string
 	jsonOutput   bool
 	provider     string
+	marketSet    bool
+	imageSet     bool
 }
 
 type cloudSSHKeysOptions struct {
@@ -68,6 +71,7 @@ type cloudPricingOptions struct {
 	sortBy     string
 	jsonOutput bool
 	provider   string
+	marketSet  bool
 }
 
 func (a *app) newVerdaSDKClientWithCredentials(ctx context.Context, baseURL string) (*verda.SDKClient, verda.Credentials, error) {
@@ -86,6 +90,12 @@ func (a *app) newVerdaSDKClientWithCredentials(ctx context.Context, baseURL stri
 }
 
 func (a *app) runCloudDeploy(ctx context.Context, opts cloudDeployOptions) error {
+	if strings.EqualFold(opts.provider, digitalocean.ProviderName) && !opts.marketSet {
+		opts.Market = digitalocean.MarketOnDemand
+	}
+	if strings.EqualFold(opts.provider, digitalocean.ProviderName) && !opts.imageSet {
+		opts.Image = ""
+	}
 	userData := opts.UserDataScript
 	if opts.userDataFile != "" {
 		script, err := os.ReadFile(opts.userDataFile)
@@ -263,6 +273,9 @@ func writeCloudTemplateFiles(outputDir string, force bool, files []cloudcore.Tem
 }
 
 func (a *app) runCloudPricing(ctx context.Context, opts cloudPricingOptions) error {
+	if strings.EqualFold(opts.provider, digitalocean.ProviderName) && !opts.marketSet {
+		opts.filters.Market = digitalocean.MarketOnDemand
+	}
 	opts.filters = verda.NormalizePricingFilters(opts.filters)
 	if err := verda.ValidatePricingFilters(opts.filters); err != nil {
 		return err

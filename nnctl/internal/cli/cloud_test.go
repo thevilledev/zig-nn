@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	cloudcore "nnctl/internal/cloud"
+	"nnctl/internal/cloud/digitalocean"
 	"nnctl/internal/cloud/verda"
 )
 
@@ -86,12 +88,38 @@ func TestCloudDeployExplicitVerdaProviderPreservesOutput(t *testing.T) {
 	}
 }
 
+func TestCloudDeployDigitalOceanDryRunSelectsAMDImage(t *testing.T) {
+	var stdout bytes.Buffer
+	app := &app{stdoutWriter: &stdout, stderrWriter: io.Discard}
+	err := app.execute(t.Context(), []string{
+		"cloud", "deploy", "--provider", "digitalocean",
+		"--instance-type", "gpu-mi300x1-192gb", "--location-code", "tor1",
+		"--dry-run", "--json",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result cloudcore.Deployment
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Provider != digitalocean.ProviderName || !result.DryRun {
+		t.Fatalf("deployment = %#v", result)
+	}
+	if result.Request.Market != digitalocean.MarketOnDemand || result.Request.Image != digitalocean.AMDImage {
+		t.Fatalf("normalized request = %#v", result.Request)
+	}
+	if !strings.Contains(result.Request.UserData, "ZIG_VERSION=\"0.16.0\"") {
+		t.Fatal("DigitalOcean dry run did not include the Zig bootstrap")
+	}
+}
+
 func TestCloudCommandRejectsUnknownProvider(t *testing.T) {
 	app := &app{stdoutWriter: io.Discard, stderrWriter: io.Discard}
 	err := app.execute(t.Context(), []string{
 		"cloud", "deploy", "--provider", "missing", "--instance-type", "1V100.6V", "--dry-run",
 	})
-	if err == nil || !strings.Contains(err.Error(), "unknown cloud provider \"missing\"; available providers: verda") {
+	if err == nil || !strings.Contains(err.Error(), "unknown cloud provider \"missing\"; available providers: digitalocean, verda") {
 		t.Fatalf("execute() error = %v", err)
 	}
 }

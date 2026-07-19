@@ -42,6 +42,15 @@ type Configuration struct {
 	Options         map[string]string
 }
 
+const (
+	// OptionOfferings configures explicit OFFERING@LOCATION entries that a
+	// provider cannot discover from its public catalog, such as contract plans.
+	OptionOfferings = "offerings"
+	// OptionSSHKeyIDs configures server-side SSH keys without exposing their
+	// identifiers to the browser-facing lab API.
+	OptionSSHKeyIDs = "ssh-key-ids"
+)
+
 type ConfigurationStatus struct {
 	Configured bool   `json:"configured"`
 	Error      string `json:"error,omitempty"`

@@ -30,3 +30,34 @@ func TestRunLabRequiresLoopbackHost(t *testing.T) {
 		t.Fatalf("runLab() error = %v", err)
 	}
 }
+
+func TestParseLabCloudOfferings(t *testing.T) {
+	parsed, err := parseLabCloudOfferings(
+		[]string{"digitalocean:gpu-mi325x1-256gb-contracted@nyc3"},
+		[]string{"digitalocean", "verda"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed["digitalocean"]) != 1 || parsed["digitalocean"][0] != "gpu-mi325x1-256gb-contracted@nyc3" {
+		t.Fatalf("parsed offerings = %#v", parsed)
+	}
+	_, err = parseLabCloudOfferings([]string{"missing:size@region"}, []string{"verda"})
+	if err == nil || !strings.Contains(err.Error(), "not enabled") {
+		t.Fatalf("disabled provider error = %v", err)
+	}
+}
+
+func TestParseLabCloudSSHKeys(t *testing.T) {
+	parsed, err := parseLabCloudSSHKeys([]string{"digitalocean:17"}, []string{"digitalocean"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed["digitalocean"]) != 1 || parsed["digitalocean"][0] != "17" {
+		t.Fatalf("parsed SSH keys = %#v", parsed)
+	}
+	_, err = parseLabCloudSSHKeys([]string{"missing:17"}, []string{"verda"})
+	if err == nil || !strings.Contains(err.Error(), "not enabled") {
+		t.Fatalf("disabled provider error = %v", err)
+	}
+}

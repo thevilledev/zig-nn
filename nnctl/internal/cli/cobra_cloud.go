@@ -14,7 +14,7 @@ func (a *app) newCloudCommand(withRepo repoRunner) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "cloud <command>",
 		Short: "Deploy cloud benchmark workers",
-		Long:  "Deploys cloud benchmark workers for nnctl agents. Verda deployments default to spot CPU-only or single-GPU instances.",
+		Long:  "Deploys cloud GPU workers for nnctl agents. Verda is the default provider; select another with --provider.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return cmd.Help()
 		},
@@ -173,6 +173,8 @@ nnctl/internal/cloud/verda/packer/bootstrap.sh.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.provider = selection.name
+			opts.marketSet = cmd.Flags().Changed("market")
+			opts.imageSet = cmd.Flags().Changed("image")
 			return a.runCloudDeploy(cmd.Context(), opts)
 		},
 	}
@@ -313,6 +315,7 @@ func (a *app) newCloudPricingCommand(selection *cloudProviderSelection) *cobra.C
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.provider = selection.name
+			opts.marketSet = cmd.Flags().Changed("market")
 			opts.filters.LocationCodes = append(opts.filters.LocationCodes, opts.zones...)
 			opts.filters.LocationCodes = sortUniqueStrings(opts.filters.LocationCodes)
 			opts.filters.InstanceTypes = sortUniqueStrings(opts.filters.InstanceTypes)

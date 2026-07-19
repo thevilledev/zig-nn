@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	cloudcore "nnctl/internal/cloud"
+	"nnctl/internal/cloud/digitalocean"
 	"nnctl/internal/cloud/verda"
 )
 
@@ -20,7 +21,7 @@ func (a *app) cloudProviders() (*cloudcore.Registry, error) {
 	if a.cloudRegistry != nil {
 		return a.cloudRegistry, nil
 	}
-	return cloudcore.NewRegistry(verda.ProviderFactory{})
+	return cloudcore.NewRegistry(verda.ProviderFactory{}, digitalocean.ProviderFactory{})
 }
 
 func (a *app) cloudProviderFactory(name string) (cloudcore.Factory, error) {
