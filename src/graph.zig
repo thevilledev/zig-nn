@@ -1,4 +1,5 @@
 const std = @import("std");
+const dimensions = @import("dimensions.zig");
 
 pub const Edge = struct {
     source: usize,
@@ -20,18 +21,21 @@ pub const CsrGraph = struct {
         undirected: bool,
     ) !CsrGraph {
         if (node_count == 0) return error.InvalidGraph;
-        const offsets = try allocator.alloc(usize, node_count + 1);
+        const offset_count = try dimensions.add(node_count, 1);
+        const offsets = try allocator.alloc(usize, offset_count);
         errdefer allocator.free(offsets);
         @memset(offsets, 0);
         for (edges) |edge| {
             if (edge.source >= node_count or edge.target >= node_count) {
                 return error.InvalidEdge;
             }
-            offsets[edge.source + 1] += 1;
-            if (undirected and edge.source != edge.target) offsets[edge.target + 1] += 1;
+            offsets[edge.source + 1] = try dimensions.add(offsets[edge.source + 1], 1);
+            if (undirected and edge.source != edge.target) {
+                offsets[edge.target + 1] = try dimensions.add(offsets[edge.target + 1], 1);
+            }
         }
         for (1..offsets.len) |index| {
-            offsets[index] = try std.math.add(usize, offsets[index], offsets[index - 1]);
+            offsets[index] = try dimensions.add(offsets[index], offsets[index - 1]);
         }
         const neighbors = try allocator.alloc(usize, offsets[node_count]);
         errdefer allocator.free(neighbors);
@@ -64,10 +68,11 @@ pub const CsrGraph = struct {
         var total_nodes: usize = 0;
         var total_neighbors: usize = 0;
         for (graphs) |graph| {
-            total_nodes = try std.math.add(usize, total_nodes, graph.node_count);
-            total_neighbors = try std.math.add(usize, total_neighbors, graph.neighbors.len);
+            total_nodes = try dimensions.add(total_nodes, graph.node_count);
+            total_neighbors = try dimensions.add(total_neighbors, graph.neighbors.len);
         }
-        const offsets = try allocator.alloc(usize, total_nodes + 1);
+        const offset_count = try dimensions.add(total_nodes, 1);
+        const offsets = try allocator.alloc(usize, offset_count);
         errdefer allocator.free(offsets);
         const neighbors = try allocator.alloc(usize, total_neighbors);
         errdefer allocator.free(neighbors);
@@ -77,13 +82,14 @@ pub const CsrGraph = struct {
         for (graphs) |graph| {
             for (0..graph.node_count) |node| {
                 const degree = graph.offsets[node + 1] - graph.offsets[node];
-                offsets[node_offset + node + 1] = neighbor_offset + degree;
+                const output_node = try dimensions.add(node_offset, node);
+                offsets[try dimensions.add(output_node, 1)] = try dimensions.add(neighbor_offset, degree);
                 for (graph.neighbors[graph.offsets[node]..graph.offsets[node + 1]], 0..) |neighbor, index| {
-                    neighbors[neighbor_offset + index] = node_offset + neighbor;
+                    neighbors[try dimensions.add(neighbor_offset, index)] = try dimensions.add(node_offset, neighbor);
                 }
-                neighbor_offset += degree;
+                neighbor_offset = try dimensions.add(neighbor_offset, degree);
             }
-            node_offset += graph.node_count;
+            node_offset = try dimensions.add(node_offset, graph.node_count);
         }
         return .{
             .allocator = allocator,
@@ -106,7 +112,9 @@ pub const CsrGraph = struct {
         feature_count: usize,
         include_self: bool,
     ) ![]f32 {
-        if (feature_count == 0 or features.len != self.node_count * feature_count) {
+        if (feature_count == 0) return error.DimensionMismatch;
+        const expected_features = try dimensions.elementCount(self.node_count, feature_count);
+        if (features.len != expected_features) {
             return error.DimensionMismatch;
         }
         const output = try allocator.alloc(f32, features.len);
@@ -119,14 +127,14 @@ pub const CsrGraph = struct {
                     output[node * feature_count + feature] +=
                         features[node * feature_count + feature];
                 }
-                contributors += 1;
+                contributors = try dimensions.add(contributors, 1);
             }
             for (self.neighbors[self.offsets[node]..self.offsets[node + 1]]) |neighbor| {
                 for (0..feature_count) |feature| {
                     output[node * feature_count + feature] +=
                         features[neighbor * feature_count + feature];
                 }
-                contributors += 1;
+                contributors = try dimensions.add(contributors, 1);
             }
             if (contributors == 0) return error.IsolatedNode;
             const scale = 1.0 / @as(f32, @floatFromInt(contributors));
@@ -176,7 +184,8 @@ pub const GraphConvolution = struct {
         random: std.Random,
     ) !GraphConvolution {
         if (input_features == 0 or classes < 2) return error.InvalidConfiguration;
-        const weights = try allocator.alloc(f32, input_features * classes);
+        const weight_count = try dimensions.elementCount(input_features, classes);
+        const weights = try allocator.alloc(f32, weight_count);
         errdefer allocator.free(weights);
         const bias = try allocator.alloc(f32, classes);
         const scale = @sqrt(2.0 / @as(f32, @floatFromInt(input_features)));
@@ -308,8 +317,9 @@ pub const GraphConvolution = struct {
         labels: []const usize,
         mask: []const bool,
     ) !void {
-        if (features.len != graph.node_count * self.input_features or
-            labels.len != graph.node_count or mask.len != graph.node_count)
+        const expected_features = try dimensions.elementCount(graph.node_count, self.input_features);
+        if (features.len != expected_features or labels.len != graph.node_count or
+            mask.len != graph.node_count)
         {
             return error.DimensionMismatch;
         }
@@ -362,4 +372,34 @@ test "mean aggregation combines self and neighbor features" {
     );
     defer std.testing.allocator.free(aggregated);
     try std.testing.expectEqualSlices(f32, &.{ 2, 1, 3, 2, 4, 3 }, aggregated);
+}
+
+test "graph APIs reject overflowing derived dimensions" {
+    const allocator = std.testing.allocator;
+    const maximum = std.math.maxInt(usize);
+    try std.testing.expectError(
+        error.DimensionOverflow,
+        CsrGraph.init(allocator, maximum, &.{}, false),
+    );
+
+    const impossible = CsrGraph{
+        .allocator = allocator,
+        .node_count = maximum,
+        .offsets = &.{},
+        .neighbors = &.{},
+    };
+    try std.testing.expectError(
+        error.DimensionOverflow,
+        CsrGraph.disjointUnion(allocator, &.{impossible}),
+    );
+    try std.testing.expectError(
+        error.DimensionOverflow,
+        impossible.aggregateMean(allocator, &.{}, 2, true),
+    );
+
+    var prng = std.Random.DefaultPrng.init(1);
+    try std.testing.expectError(
+        error.DimensionOverflow,
+        GraphConvolution.init(allocator, maximum, 2, prng.random()),
+    );
 }

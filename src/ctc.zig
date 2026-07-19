@@ -1,4 +1,5 @@
 const std = @import("std");
+const dimensions = @import("dimensions.zig");
 
 pub const Objective = struct {
     allocator: std.mem.Allocator,
@@ -22,8 +23,9 @@ pub fn lossAndGradient(
     labels: []const usize,
     blank: usize,
 ) !Objective {
+    const state_count = try stateCount(labels.len);
     try validate(logits, timesteps, classes, labels, blank);
-    const state_count = 2 * labels.len + 1;
+    const table_size = try dimensions.elementCount(timesteps, state_count);
     const states = try allocator.alloc(usize, state_count);
     defer allocator.free(states);
     @memset(states, blank);
@@ -31,9 +33,9 @@ pub fn lossAndGradient(
     const log_probabilities = try allocator.alloc(f32, logits.len);
     defer allocator.free(log_probabilities);
     logitsToLogProbabilities(logits, timesteps, classes, log_probabilities);
-    const alpha = try allocator.alloc(f32, timesteps * state_count);
+    const alpha = try allocator.alloc(f32, table_size);
     defer allocator.free(alpha);
-    const beta = try allocator.alloc(f32, timesteps * state_count);
+    const beta = try allocator.alloc(f32, table_size);
     defer allocator.free(beta);
     @memset(alpha, -std.math.inf(f32));
     @memset(beta, -std.math.inf(f32));
@@ -86,7 +88,7 @@ pub fn lossAndGradient(
                         log_probabilities[next_timestep * classes + states[state + 1]],
                 );
             }
-            if (state + 2 < state_count and states[state + 2] != blank and
+            if (state_count - state > 2 and states[state + 2] != blank and
                 states[state] != states[state + 2])
             {
                 total = logAdd(
@@ -129,11 +131,7 @@ pub fn greedyDecode(
     classes: usize,
     blank: usize,
 ) ![]usize {
-    if (timesteps == 0 or classes < 2 or blank >= classes or
-        logits.len != timesteps * classes)
-    {
-        return error.DimensionMismatch;
-    }
+    try validateDecodingInput(logits, timesteps, classes, blank);
     var decoded: std.ArrayList(usize) = .empty;
     defer decoded.deinit(allocator);
     var previous: ?usize = null;
@@ -172,11 +170,8 @@ pub fn prefixBeamDecode(
     blank: usize,
     beam_width: usize,
 ) ![]usize {
-    if (timesteps == 0 or classes < 2 or blank >= classes or beam_width == 0 or
-        logits.len != timesteps * classes)
-    {
-        return error.DimensionMismatch;
-    }
+    if (beam_width == 0) return error.DimensionMismatch;
+    try validateDecodingInput(logits, timesteps, classes, blank);
     var beams = initial: {
         const tokens = try allocator.alloc(usize, 0);
         errdefer allocator.free(tokens);
@@ -264,18 +259,34 @@ fn validate(
     labels: []const usize,
     blank: usize,
 ) !void {
-    if (timesteps == 0 or classes < 2 or blank >= classes or
-        logits.len != timesteps * classes)
-    {
-        return error.DimensionMismatch;
-    }
+    try validateDecodingInput(logits, timesteps, classes, blank);
     var required_timesteps = labels.len;
     for (labels, 0..) |label, index| {
         if (label >= classes or label == blank) return error.InvalidLabel;
-        if (index > 0 and labels[index - 1] == label) required_timesteps += 1;
+        if (index > 0 and labels[index - 1] == label) {
+            required_timesteps = try dimensions.add(required_timesteps, 1);
+        }
     }
     if (required_timesteps > timesteps) return error.ImpossibleAlignment;
     for (logits) |logit| if (!std.math.isFinite(logit)) return error.InvalidLogit;
+}
+
+fn validateDecodingInput(
+    logits: []const f32,
+    timesteps: usize,
+    classes: usize,
+    blank: usize,
+) !void {
+    if (timesteps == 0 or classes < 2 or blank >= classes) {
+        return error.DimensionMismatch;
+    }
+    const expected_logits = try dimensions.elementCount(timesteps, classes);
+    if (logits.len != expected_logits) return error.DimensionMismatch;
+}
+
+fn stateCount(label_count: usize) !usize {
+    const label_states = try dimensions.elementCount(2, label_count);
+    return dimensions.add(label_states, 1);
 }
 
 fn logitsToLogProbabilities(
@@ -316,7 +327,7 @@ fn logAdd(left: f32, right: f32) f32 {
 }
 
 fn appendToken(allocator: std.mem.Allocator, prefix: []const usize, token: usize) ![]usize {
-    const result = try allocator.alloc(usize, prefix.len + 1);
+    const result = try allocator.alloc(usize, try dimensions.add(prefix.len, 1));
     @memcpy(result[0..prefix.len], prefix);
     result[prefix.len] = token;
     return result;
@@ -395,4 +406,21 @@ test "CTC greedy and prefix decoding collapse blanks and repeats" {
     defer std.testing.allocator.free(prefix);
     try std.testing.expectEqualSlices(usize, &.{ 1, 2 }, greedy);
     try std.testing.expectEqualSlices(usize, &.{ 1, 2 }, prefix);
+}
+
+test "CTC rejects overflowing sequence dimensions" {
+    const maximum = std.math.maxInt(usize);
+    try std.testing.expectError(
+        error.DimensionOverflow,
+        lossAndGradient(std.testing.allocator, &.{}, maximum, 2, &.{}, 0),
+    );
+    try std.testing.expectError(
+        error.DimensionOverflow,
+        greedyDecode(std.testing.allocator, &.{}, maximum, 2, 0),
+    );
+    try std.testing.expectError(
+        error.DimensionOverflow,
+        prefixBeamDecode(std.testing.allocator, &.{}, maximum, 2, 0, 1),
+    );
+    try std.testing.expectError(error.DimensionOverflow, stateCount(maximum));
 }

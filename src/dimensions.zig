@@ -18,6 +18,11 @@ pub fn elementCount(rows: usize, cols: usize) Error!usize {
     return product(&.{ rows, cols });
 }
 
+/// Adds two dimensions without allowing a derived extent to wrap.
+pub fn add(left: usize, right: usize) Error!usize {
+    return std.math.add(usize, left, right) catch error.DimensionOverflow;
+}
+
 /// Returns false for both a mismatched product and an overflowing one. This is
 /// useful at API validation boundaries where either condition is a dimension
 /// mismatch to the caller.
@@ -38,4 +43,9 @@ test "dimension product reports overflow" {
     try std.testing.expect(!matches(0, &.{ std.math.maxInt(usize), 2 }));
     try std.testing.expectEqual(@as(usize, 0), try product(&.{ 0, std.math.maxInt(usize), 2 }));
     try std.testing.expectEqual(@as(usize, 0), try product(&.{ std.math.maxInt(usize), 2, 0 }));
+}
+
+test "checked dimension addition" {
+    try std.testing.expectEqual(@as(usize, 7), try add(3, 4));
+    try std.testing.expectError(error.DimensionOverflow, add(std.math.maxInt(usize), 1));
 }
