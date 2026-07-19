@@ -54,6 +54,36 @@ nnctl clean
 nnctl help
 ```
 
+## Cloud GPU Workers
+
+Cloud commands default to Verda for compatibility. Use `--provider` to select
+another adapter:
+
+```bash
+nnctl cloud pricing --provider verda --single-gpu
+nnctl cloud pricing --provider digitalocean --single-gpu
+nnctl cloud ssh-keys --provider digitalocean
+nnctl cloud deploy \
+  --provider digitalocean \
+  --instance-type gpu-mi300x1-192gb \
+  --location-code tor1 \
+  --ssh-key-id <digitalocean-ssh-key-id> \
+  --dry-run --json
+```
+
+Remove `--dry-run` to create the GPU Droplet, then use the same provider when
+listing or destroying it. DigitalOcean deployments require an explicit account
+SSH key ID; `nnctl` never attaches every account key implicitly.
+
+```bash
+nnctl cloud list --provider digitalocean
+nnctl cloud destroy --provider digitalocean <droplet-id>
+```
+
+See [Benchmarks](benchmarks.md) for the managed one-command benchmark workflow
+and [Real-Time Learning Lab](learning-lab.md) for keyring setup and
+contract-only GPU offerings.
+
 ## Real-Time Learning Lab
 
 The browser lab builds the Svelte frontend and starts the local `nnctl` server:
@@ -77,11 +107,28 @@ cd web && npm run dev
 Vite proxies `/api` to port 8091. See [Real-Time Learning Lab](learning-lab.md)
 for the supported controls and event format.
 
-To deploy a Verda CUDA worker from the same UI, configure the `nnctl/verda`
-keyring credentials described in the learning-lab guide and start the server
-with `nnctl lab --cloud`. Cloud control remains loopback-only, uploads committed
-`HEAD`, streams the native experiment protocol over SSH, and defaults to a
-reusable worker that requires explicit cleanup.
+To deploy a cloud worker from the same UI, configure the provider keyring
+credentials described in the learning-lab guide. Verda remains the default and
+keeps its compatibility shorthand:
+
+```bash
+nnctl lab --cloud
+```
+
+Enable Verda and DigitalOcean together with explicit provider flags. The
+DigitalOcean lab also requires an account SSH key ID:
+
+```bash
+nnctl lab \
+  --cloud-provider verda \
+  --cloud-provider digitalocean \
+  --cloud-ssh-key digitalocean:<digitalocean-ssh-key-id>
+```
+
+Cloud control remains loopback-only, uploads committed `HEAD`, streams the
+native experiment protocol over SSH, and defaults to a reusable worker that
+requires explicit cleanup. DigitalOcean AMD GPU workers expose ROCm, while
+Verda and DigitalOcean NVIDIA workers expose CUDA.
 
 You can change the optimization mode used by `nnctl`:
 

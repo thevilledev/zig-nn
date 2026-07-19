@@ -14,17 +14,27 @@ mise run lab
 Open the printed `http://127.0.0.1:8091` URL. Only one experiment runs at a
 time. Runs and their event history live in memory until `nnctl lab` exits.
 
-To enable Verda worker deployment and remote CUDA runs, start the same local
-server with cloud control explicitly enabled:
+To enable the existing Verda worker flow, use the compatibility shorthand:
 
 ```bash
 cd nnctl
 go run ./cmd/nnctl lab --cloud
 ```
 
-Cloud control is accepted only on a loopback bind address. The browser never
-receives provider credentials or SSH private keys; the local Go process reads
-Verda credentials from the OS keyring and performs provider, Git, rsync, and
+Select providers explicitly to run a multi-cloud lab. DigitalOcean deployment
+also needs the ID of an account SSH key that can log in to the GPU image:
+
+```bash
+go run ./cmd/nnctl lab \
+  --cloud-provider verda \
+  --cloud-provider digitalocean \
+  --cloud-ssh-key digitalocean:<digitalocean-ssh-key-id>
+```
+
+Repeat `--cloud-provider` and `--cloud-ssh-key` as needed. Cloud control is
+accepted only on a loopback bind address. The browser never receives provider
+credentials, provider SSH key IDs, or SSH private keys; the local Go process
+reads credentials from the OS keyring and performs provider, Git, rsync, and
 SSH operations itself. Mutating API requests are accepted only from the local
 same-origin UI, and request bodies and retained run history are bounded.
 
@@ -78,7 +88,7 @@ mise run web:build
 - `GET /api/experiments` returns the allowlisted learning metadata, metric
   definitions, backend contract, and numeric parameter constraints.
 - `POST /api/runs` accepts
-  `{ "experiment": "...", "backend": "cpu|metal|cuda", "parameters": { ... } }`
+  `{ "experiment": "...", "backend": "cpu|metal|cuda|rocm", "parameters": { ... } }`
   and returns a run ID.
 - `GET /api/runs/{id}/events` streams ordered Server-Sent Events and honors
   `Last-Event-ID` for replay.
@@ -89,17 +99,17 @@ parameters, invalid ranges, and concurrent starts are rejected by the Go
 server. Accelerator selection is exact: an explicit Metal request either
 reports Metal from the native process or fails instead of falling back to CPU.
 
-With `--cloud`, the server also exposes:
+With one or more cloud providers enabled, the server also exposes:
 
-- `GET /api/cloud/status` for keyring configuration and the committed/dirty
-  repository state;
-- `GET /api/cloud/options` for available single-NVIDIA-GPU prices and the
-  fixed golden OS volume name;
+- `GET /api/cloud/status` for per-provider keyring configuration, provider
+  capabilities, and the committed/dirty repository state;
+- `GET /api/cloud/options` for normalized single-GPU offerings across all
+  configured providers and any provider-specific catalog errors;
 - `GET|POST /api/cloud/workers` to inspect or asynchronously create the one
   persisted worker managed by the lab;
 - `GET /api/cloud/workers/{id}/events` for worker lifecycle SSE;
-- `DELETE /api/cloud/workers/{id}` to permanently destroy the instance and its
-  cloned OS volume while protecting the golden source volume.
+- `DELETE /api/cloud/workers/{id}` to destroy the instance and its owned
+  resources while preserving resources marked as provider-managed sources.
 
 A remote run extends the normal request with an allowlisted target:
 
@@ -120,47 +130,89 @@ then carries the same native experiment events as a local run.
 
 ## Cloud Setup And Cleanup
 
-The existing Verda commands and the lab share the `nnctl/verda` keyring service
-with accounts `client_id` and `client_secret`. On macOS, store credentials with:
+### Credentials
+
+The direct cloud commands and the lab use the same OS-keyring entries. On
+macOS, store Verda credentials under service `nnctl/verda`:
 
 ```bash
 security add-generic-password -U -s nnctl/verda -a client_id -w "$VERDA_CLIENT_ID"
 security add-generic-password -U -s nnctl/verda -a client_secret -w "$VERDA_CLIENT_SECRET"
 ```
 
-On Linux, store the same service/account pairs in the desktop Secret Service
-keyring. Verify access with:
+Store a DigitalOcean API token under service `nnctl/digitalocean`, account
+`token`:
 
 ```bash
-nnctl cloud pricing --single-gpu
+security add-generic-password -U -s nnctl/digitalocean -a token -w "$DIGITALOCEAN_TOKEN"
 ```
 
-The lab always clones `packer-verda-zig-nn-volume-root`. Authorized root keys
-and the CUDA/Zig tooling are baked into that golden volume, so deploy requests
-intentionally omit `ssh_key_ids`. The UI does not allow selecting another SSH
-key or OS volume, and only offers GPU capacity in locations with a ready golden
-volume. SSH itself uses the local process's normal identity and agent
-configuration.
+On Linux, store the same service/account pairs in the desktop Secret Service
+keyring. Verify provider access and find an SSH key ID with:
 
-Workers default to spot capacity and manual cleanup so the same VM can run
-multiple experiments. **Destroy worker** permanently deletes the instance and
-its cloned OS volume. Opting into automatic cleanup instead destroys the worker
-after the next run, after 30 minutes idle, or when the lab exits normally.
+```bash
+nnctl cloud pricing --provider verda --single-gpu
+nnctl cloud pricing --provider digitalocean --single-gpu
+nnctl cloud ssh-keys --provider digitalocean
+```
+
+### Provider Behavior
+
+Verda workers clone `packer-verda-zig-nn-volume-root`. Authorized root keys and
+the CUDA/Zig tooling are baked into that golden volume, so lab deploy requests
+do not attach account SSH keys. The catalog includes only GPU capacity in
+locations with a ready golden volume.
+
+DigitalOcean workers use the provider's GPU-ready AI/ML image selected for the
+accelerator: AMD offerings expose ROCm and NVIDIA offerings expose CUDA. A
+DigitalOcean SSH key ID must be supplied server-side with `--cloud-ssh-key`;
+the implementation deliberately does not attach every key in the account.
+`nnctl` installs its pinned Zig toolchain and benchmark prerequisites through
+cloud-init, then verifies SSH, Zig, and the selected accelerator runtime.
+
+The DigitalOcean API catalog supplies self-service GPU Droplet sizes. A
+contract-only size can be added explicitly when it is enabled for the account:
+
+```bash
+nnctl lab \
+  --cloud-provider digitalocean \
+  --cloud-ssh-key digitalocean:<digitalocean-ssh-key-id> \
+  --cloud-offering digitalocean:gpu-mi325x1-256gb-contracted@nyc3
+```
+
+Explicit contract offerings are not treated as API-discovered availability;
+the account contract and region still determine whether deployment succeeds.
+DigitalOcean bare-metal products are outside this provider adapter: its
+lifecycle is intentionally limited to GPU Droplets.
+
+SSH uses the local process's normal identity and agent configuration for every
+provider.
+
+### Worker Lifecycle
+
+Verda workers default to spot capacity; DigitalOcean GPU Droplets are
+on-demand. Both default to manual cleanup so the same VM can run multiple
+experiments. **Destroy worker** deletes the instance and any provider-owned
+resources, including a Verda cloned OS volume. Opting into automatic cleanup
+instead destroys the worker after the next run, after 30 minutes idle, or when
+the lab exits normally.
 
 Managed-worker state is stored in `learning-lab.sqlite` under the OS user-cache
 directory (`~/Library/Caches/nnctl/` on macOS and typically
 `~/.cache/nnctl/` on Linux). The database contains worker and provider resource
-IDs, connection metadata, and lifecycle state, but never credentials. On
-restart, the lab verifies the persisted Verda instance, SSH, Zig, and CUDA
+IDs, connection metadata, backend list, and lifecycle state, but never
+credentials or configured SSH key IDs. On restart, the lab dispatches recovery
+to the recorded provider and verifies the instance, SSH, Zig, and CUDA or ROCm
 before making the worker ready for more experiments. The previous
 `lab-cloud-worker.json` journal is migrated once. The UI deliberately does not
-adopt or destroy unrelated Verda instances. Pass `--state-db PATH` to
-`nnctl lab --cloud` to use a different database location.
+adopt or destroy unrelated provider instances. Pass `--state-db PATH` to
+`nnctl lab` to use a different database location.
 
 The CPU-capable structured experiments can execute on the remote CPU.
-Optimizer Lab and Semantic Search additionally allow explicit CUDA, while the
-GPU benchmark uses CUDA on a cloud worker. CUDA requests fail if the remote
-preflight or native process cannot select CUDA.
+Optimizer Lab and Semantic Search additionally allow explicit CUDA or ROCm,
+while the GPU benchmark uses the accelerator backend on a cloud worker.
+Accelerator requests fail if the remote preflight or native process cannot
+select the requested backend.
 
 ## Experiment Event Protocol
 

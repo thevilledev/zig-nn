@@ -109,7 +109,8 @@ run tied to a reproducible source snapshot, deploy only one worker at a time,
 and destroy the worker plus any cloned OS volume as soon as the benchmark is
 captured.
 
-The one-command Verda workflow is:
+The one-command workflow selects a provider strategy. Verda defaults to spot,
+builds or reuses its golden source volume, and runs CUDA:
 
 ```bash
 ./bin/nnctl cloud benchmark-deploy \
@@ -117,16 +118,31 @@ The one-command Verda workflow is:
   --ssh-key-id <verda-ssh-key-id>
 ```
 
-`benchmark-deploy` writes the embedded Packer template, reuses a matching
-golden OS volume or builds one when missing, clones the golden volume, deploys
-the worker, waits for SSH, transfers a clean `HEAD` snapshot, runs a quick
-smoke followed by the full CUDA benchmark, and saves a metadata-prefixed CSV in
-the repository root. It then permanently deletes the worker and cloned volume;
-the golden source volume is retained. Use `--market on-demand` to opt out of
-the default spot market, `--filter gpu_peak` to capture one suite,
-`--update-docs` to add a generated result section below, or `--keep-instance`
-to retain the worker and clone for debugging. Packer is only invoked when a
-reusable source OS volume is unavailable.
+DigitalOcean defaults to on-demand GPU Droplets and chooses the backend from
+the accelerator manufacturer. For example, this provisions an AMD MI300X and
+runs ROCm:
+
+```bash
+./bin/nnctl cloud benchmark-deploy \
+  --provider digitalocean \
+  --instance-type gpu-mi300x1-192gb \
+  --location-code tor1 \
+  --ssh-key-id <digitalocean-ssh-key-id>
+```
+
+`benchmark-deploy` waits for the instance, SSH, Zig, and CUDA or ROCm;
+transfers a clean `HEAD` snapshot; runs a quick smoke followed by the full
+benchmark; and saves a metadata-prefixed CSV in the repository root. It then
+deletes provider-owned temporary resources even after later workflow failures.
+For Verda that includes the worker and cloned OS volume while preserving the
+golden source volume. For DigitalOcean it deletes the GPU Droplet.
+
+Use `--market on-demand` to opt Verda out of its default spot market,
+`--gpu cuda|rocm` to require a compatible backend, `--filter gpu_peak` to
+capture one suite, `--update-docs` to add a generated result section below, or
+`--keep-instance` to retain temporary resources for debugging. Packer and
+source-volume flags belong to the Verda strategy; DigitalOcean boots its
+GPU-ready provider image and applies the embedded Zig bootstrap.
 
 The detailed steps below remain useful for diagnosing or manually recovering a
 run.
@@ -246,35 +262,51 @@ Current Packer-built CUDA 13.0 source OS volume from 2026-07-14:
    ./bin/nnctl cloud list --all
    ```
 
-### AMD ROCm Hosts
+### AMD ROCm Workers
 
-Run AMD ROCm benchmarks manually on a ROCm-provisioned host. Do not use
-`nnctl cloud deploy` for AMD until the cloud workflow has explicit ROCm image,
-driver, and cleanup support.
+Use the DigitalOcean provider for managed AMD GPU Droplet benchmarks. The
+adapter selects `gpu-amd-base`, bootstraps the pinned Zig toolchain, verifies
+`rocminfo`, and records ROCm metadata before cleanup. Self-service MI300X sizes
+come from the API catalog. Contract-only AMD sizes can be requested explicitly
+when the account and region support them:
 
-1. Provision the host with the expected ROCm stack and verify the GPU:
+```bash
+./bin/nnctl cloud benchmark-deploy \
+  --provider digitalocean \
+  --instance-type gpu-mi325x1-256gb-contracted \
+  --location-code nyc3 \
+  --ssh-key-id <digitalocean-ssh-key-id> \
+  --filter gpu_peak
+```
 
-   ```bash
-   rocm-smi
-   rocminfo | grep -E 'Name:|gfx'
-   zig version
-   ```
+The contract slug is a declared request, not proof that the account has
+capacity. Deployment is authoritative. Verda remains available for its NVIDIA
+CUDA inventory, but is not used for AMD GPU provisioning.
 
-2. Deploy the source snapshot and run quick, then full, ROCm benchmarks:
+For an unsupported provider or an existing ROCm machine, keep using the manual
+host workflow. First verify the provisioned stack:
 
-   ```bash
-   host=<user>@<amd-host>
-   dest=/srv/zig-nn-bench-$(git rev-parse --short HEAD)-rocm
-   ./bin/nnctl deploy "$host:$dest" --ref HEAD --delete
+```bash
+rocm-smi
+rocminfo | grep -E 'Name:|gfx'
+zig version
+```
 
-   ssh "$host" "cd '$dest' && zig build benchmark -Dgpu=rocm -- --quick"
-   ssh "$host" "cd '$dest' && zig build benchmark -Dgpu=rocm" \
-     > /tmp/zig-nn-benchmark-$(git rev-parse --short HEAD)-rocm.csv
-   ```
+Then deploy the source snapshot and run quick, then full, ROCm benchmarks:
 
-3. Record the GPU model, ISA, VRAM, ROCm version, kernel driver version, source
-   commit, and raw CSV path. The committed table below should stay compact and
-   should use backend absolute timings for cross-GPU comparisons.
+```bash
+host=<user>@<amd-host>
+dest=/srv/zig-nn-bench-$(git rev-parse --short HEAD)-rocm
+./bin/nnctl deploy "$host:$dest" --ref HEAD --delete
+
+ssh "$host" "cd '$dest' && zig build benchmark -Dgpu=rocm -- --quick"
+ssh "$host" "cd '$dest' && zig build benchmark -Dgpu=rocm" \
+  > /tmp/zig-nn-benchmark-$(git rev-parse --short HEAD)-rocm.csv
+```
+
+Record the GPU model, ISA, VRAM, ROCm version, kernel driver version, source
+commit, and raw CSV path. The committed table below should stay compact and
+should use backend absolute timings for cross-GPU comparisons.
 
 ## Coverage
 

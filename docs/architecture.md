@@ -186,6 +186,60 @@ Try them in [Decoding Lab](../experiments/decoding_lab/decoding_lab.zig) and
 
 Try it in [DQN](../experiments/dqn/dqn.zig).
 
+## Cloud Orchestration
+
+`nnctl` keeps cloud vocabulary separate from provider APIs. The
+[provider contract](../nnctl/internal/cloud/provider.go) normalizes offerings,
+accelerators, instances, deployment requests, owned resources, and destroy
+results. A registry resolves a provider factory by stable name; Verda remains
+the default for command compatibility, while the lab persists the selected
+provider with each managed worker.
+
+The base `Provider` interface contains only the lifecycle shared by GPU clouds:
+catalog discovery, deploy, get/list instances, and destroy. Less universal
+features use narrow capability interfaces or provider strategies, so a
+neocloud adapter does not need to fake unsupported concepts:
+
+| Capability | Contract | Current use |
+| --- | --- | --- |
+| SSH keys | `SSHKeyProvider` | Resolve attachable account key IDs |
+| Volumes | `VolumeProvider` | Verda golden-volume discovery and cleanup |
+| Image templates | `ImageTemplateFactory` | Verda Packer artifacts |
+| Benchmark image | Capability plus CLI strategy | Provider-specific image preparation |
+
+Normalized records carry `ProviderDetail` for provider-native diagnostics and
+legacy output without leaking those fields into cross-provider decisions.
+`ResourceRef` records ownership and preservation intent so cleanup remains
+provider-controlled. Catalog results distinguish API-discovered offerings from
+explicit contract offerings; this supports reserved and sales-enabled GPU
+inventory without claiming it is publicly discoverable.
+
+The [Verda adapter](../nnctl/internal/cloud/verda/provider.go) maps the existing
+spot, pricing, volume-clone, and startup-script behavior onto the contract. The
+[DigitalOcean adapter](../nnctl/internal/cloud/digitalocean/provider.go) maps
+GPU Droplet sizes, GPU-ready images, account SSH keys, and on-demand lifecycle.
+AMD offerings advertise ROCm and NVIDIA offerings advertise CUDA. The
+[learning-lab manager](../nnctl/internal/lab/cloud.go) consumes only normalized
+offerings and resource references, tolerates one provider catalog failing, and
+dispatches recovery and cleanup to the provider stored with the worker.
+
+When adding a neocloud:
+
+1. Implement `Factory` and the base `Provider`, then register the stable
+   provider name in the CLI registry.
+2. Map native SKUs into accelerator metadata and exact backend compatibility;
+   keep fabric, reservation, quota, and contract quirks in provider details or
+   provider configuration.
+3. Implement only the optional capabilities the provider actually supports.
+4. Add a benchmark provisioning strategy only when image preparation or
+   readiness differs from the existing strategies.
+5. Prove catalog normalization, dry-run behavior, resource ownership, partial
+   failure, recovery, and cleanup with adapter contract tests.
+
+This keeps the common surface small while leaving room for providers with
+reserved clusters, bare metal, bid/spot markets, custom images, or asynchronous
+provisioning semantics.
+
 ## Memory Management
 
 ### Allocation Strategy

@@ -13,8 +13,8 @@ func (a *app) newCloudCommand(withRepo repoRunner) *cobra.Command {
 	selection := &cloudProviderSelection{name: defaultCloudProvider}
 	cmd := &cobra.Command{
 		Use:   "cloud <command>",
-		Short: "Deploy cloud benchmark workers",
-		Long:  "Deploys cloud GPU workers for nnctl agents. Verda is the default provider; select another with --provider.",
+		Short: "Manage cloud GPU workers",
+		Long:  "Lists, deploys, benchmarks, and destroys cloud GPU workers. Verda is the default provider; select another with --provider.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return cmd.Help()
 		},
@@ -92,7 +92,7 @@ source-volume flags apply only to the Verda strategy.`,
 	cmd.Flags().StringVar(&opts.output, "output", opts.output, "local CSV path; defaults to a metadata-based filename in the repository root")
 	cmd.Flags().BoolVar(&opts.updateDocs, "update-docs", opts.updateDocs, "add or update a generated benchmark result in the benchmark docs")
 	cmd.Flags().StringVar(&opts.docsPath, "docs", opts.docsPath, "benchmark Markdown file used by --update-docs")
-	cmd.Flags().BoolVar(&opts.keepInstance, "keep-instance", opts.keepInstance, "keep the worker and cloned OS volume after the run")
+	cmd.Flags().BoolVar(&opts.keepInstance, "keep-instance", opts.keepInstance, "keep the worker and provider-owned temporary resources after the run")
 	cmd.Flags().DurationVar(&opts.timeout, "timeout", opts.timeout, "timeout for image, instance, and SSH readiness")
 	cmd.Flags().DurationVar(&opts.pollInterval, "poll-interval", opts.pollInterval, "interval between readiness checks")
 	cmd.Flags().SortFlags = false
@@ -156,18 +156,16 @@ func (a *app) newCloudDeployCommand(selection *cloudProviderSelection) *cobra.Co
 	}
 	cmd := &cobra.Command{
 		Use:   "deploy",
-		Short: "Deploy a Verda benchmark worker",
-		Long: `Deploys one Verda instance for nnctl benchmark work.
-The deployment policy is intentionally narrow: CPU-only and single-GPU instance
-types accepted, with spot as the default market. When --source-os-volume-id is set, nnctl
-locks placement to that source volume location and clones it as the instance
-image. When --source-os-volume-name is set, nnctl chooses a matching source OS
-volume in an available market location. Without a source volume, nnctl boots
---image and applies the embedded userdata script from
-nnctl/internal/cloud/verda/packer/bootstrap.sh.`,
+		Short: "Deploy a cloud benchmark worker",
+		Long: `Deploys one instance for nnctl benchmark work through the selected cloud
+provider. Verda defaults to spot and can clone a Packer-built source OS volume.
+DigitalOcean supports on-demand GPU Droplets, requires an attached SSH key, and
+selects a GPU-ready AMD or NVIDIA image unless --image overrides it. Provider-
+specific flags are rejected or ignored according to the provider contract.`,
 		Example: `  nnctl cloud deploy --instance-type 1V100.6V --source-os-volume-name golden-ubuntu --ssh-key-id ssh_key_id
   nnctl cloud deploy --instance-type 1V100.6V --source-os-volume-id volume_id --ssh-key-id ssh_key_id
   nnctl cloud deploy --instance-type 1H200.141S.44V --market on-demand --location-code FIN-02 --ssh-key-id ssh_key_id
+  nnctl cloud deploy --provider digitalocean --instance-type gpu-mi300x1-192gb --location-code tor1 --ssh-key-id 12345
   nnctl cloud deploy --instance-type 1V100.6V --ssh-key-id ssh_key_id
   nnctl cloud deploy --instance-type 1V100.6V --source-os-volume-id volume_id --dry-run --json
   nnctl cloud deploy --instance-type 1V100.6V --source-os-volume-id volume_id --location-code FIN-03
@@ -181,20 +179,20 @@ nnctl/internal/cloud/verda/packer/bootstrap.sh.`,
 			return a.runCloudDeploy(cmd.Context(), opts)
 		},
 	}
-	cmd.Flags().StringVar(&opts.InstanceType, "instance-type", opts.InstanceType, "Verda instance type, for example 1L40S.20V")
+	cmd.Flags().StringVar(&opts.InstanceType, "instance-type", opts.InstanceType, "provider offering or instance type")
 	cmd.Flags().StringVar(&opts.SourceOSVolumeID, "source-os-volume-id", opts.SourceOSVolumeID, "Packer-built Verda source OS volume ID used for location lock and cloning")
 	cmd.Flags().StringVar(&opts.SourceOSVolumeName, "source-os-volume-name", opts.SourceOSVolumeName, "Packer-built Verda source OS volume name; picks a matching volume in an available market location")
 	cmd.Flags().StringVar(&opts.SourceOSVolumeName, "source-volume-name", opts.SourceOSVolumeName, "alias for --source-os-volume-name")
 	cmd.Flags().StringVar(&opts.ClonedOSVolumeID, "cloned-os-volume-id", opts.ClonedOSVolumeID, "existing cloned OS volume ID to use as the instance image instead of creating a new clone")
 	cmd.Flags().StringVar(&opts.Market, "market", opts.Market, "deployment market: spot or on-demand")
-	cmd.Flags().StringVar(&opts.Image, "image", opts.Image, "Verda image to boot when source OS volume flags are omitted")
+	cmd.Flags().StringVar(&opts.Image, "image", opts.Image, "provider image override")
 	cmd.Flags().StringVar(&opts.Hostname, "hostname", opts.Hostname, "instance hostname")
 	cmd.Flags().StringVar(&opts.Description, "description", opts.Description, "instance description")
-	cmd.Flags().StringArrayVar(&opts.SSHKeyIDs, "ssh-key-id", opts.SSHKeyIDs, "Verda SSH key ID to attach (repeatable)")
-	cmd.Flags().StringVar(&opts.LocationCode, "location-code", opts.LocationCode, "Verda location code; defaults to source OS volume location or market placement")
+	cmd.Flags().StringArrayVar(&opts.SSHKeyIDs, "ssh-key-id", opts.SSHKeyIDs, "provider SSH key ID to attach (repeatable)")
+	cmd.Flags().StringVar(&opts.LocationCode, "location-code", opts.LocationCode, "provider location; Verda may infer it from volume or market placement")
 	cmd.Flags().StringVar(&opts.StartupScriptName, "startup-script-name", opts.StartupScriptName, "Verda startup script name")
 	cmd.Flags().StringVar(&opts.userDataFile, "user-data-file", opts.userDataFile, "read userdata from a file; defaults to the embedded script only without source OS volume flags")
-	cmd.Flags().StringVar(&opts.baseURL, "base-url", opts.baseURL, "Verda API base URL")
+	cmd.Flags().StringVar(&opts.baseURL, "base-url", opts.baseURL, "cloud provider API base URL")
 	cmd.Flags().BoolVar(&opts.SkipAvailabilityCheck, "skip-availability-check", opts.SkipAvailabilityCheck, "skip market availability check before creating the instance")
 	cmd.Flags().BoolVar(&opts.KeepClonedOSVolumeOnFailure, "keep-cloned-os-volume-on-failure", opts.KeepClonedOSVolumeOnFailure, "keep a newly cloned OS volume when instance creation fails")
 	cmd.Flags().BoolVar(&opts.DryRun, "dry-run", opts.DryRun, "print the planned deployment without reading keychain credentials")
@@ -211,9 +209,10 @@ func (a *app) newCloudDestroyCommand(selection *cloudProviderSelection) *cobra.C
 	cmd := &cobra.Command{
 		Use:     "destroy INSTANCE_ID [INSTANCE_ID...]",
 		Aliases: []string{"delete", "rm", "terminate"},
-		Short:   "Destroy Verda instances",
-		Long:    "Destroys one or more Verda instances by ID. Instance IDs can be copied from `nnctl cloud list`.",
+		Short:   "Destroy cloud instances",
+		Long:    "Destroys one or more instances through the selected provider. Instance IDs can be copied from `nnctl cloud list`.",
 		Example: `  nnctl cloud destroy instance_id
+  nnctl cloud destroy --provider digitalocean 123456789
   nnctl cloud destroy instance_id --dry-run
   nnctl cloud destroy instance_id --permanent=false
   nnctl cloud destroy instance_id --volume-id cloned_os_volume_id --source-os-volume-id source_os_volume_id --json`,
@@ -227,7 +226,7 @@ func (a *app) newCloudDestroyCommand(selection *cloudProviderSelection) *cobra.C
 	cmd.Flags().StringArrayVar(&opts.VolumeIDs, "volume-id", opts.VolumeIDs, "Verda volume ID to delete with the instance (repeatable)")
 	cmd.Flags().StringVar(&opts.SourceOSVolumeID, "source-os-volume-id", opts.SourceOSVolumeID, "protect this golden Packer source OS volume ID from cleanup")
 	cmd.Flags().BoolVar(&opts.DeletePermanently, "permanent", opts.DeletePermanently, "delete permanently instead of using Verda's non-permanent delete")
-	cmd.Flags().StringVar(&opts.baseURL, "base-url", opts.baseURL, "Verda API base URL")
+	cmd.Flags().StringVar(&opts.baseURL, "base-url", opts.baseURL, "cloud provider API base URL")
 	cmd.Flags().BoolVar(&opts.DryRun, "dry-run", opts.DryRun, "print the planned destroy request without reading keychain credentials")
 	cmd.Flags().BoolVar(&opts.jsonOutput, "json", opts.jsonOutput, "print machine-readable JSON")
 	cmd.Flags().SortFlags = false
@@ -258,9 +257,10 @@ func (a *app) newCloudSSHKeysCommand(selection *cloudProviderSelection) *cobra.C
 	cmd := &cobra.Command{
 		Use:     "ssh-keys",
 		Aliases: []string{"sshkeys", "ssh-key"},
-		Short:   "List Verda SSH key IDs",
-		Long:    "Lists Verda SSH keys and their UUIDs. Pass one of these IDs to cloud deploy with --ssh-key-id.",
+		Short:   "List cloud SSH key IDs",
+		Long:    "Lists SSH keys for the selected provider. Pass one of these IDs to cloud deploy with --ssh-key-id.",
 		Example: `  nnctl cloud ssh-keys
+  nnctl cloud ssh-keys --provider digitalocean
   nnctl cloud ssh-keys --json
   nnctl cloud deploy --instance-type 1L40S.20V --ssh-key-id 00000000-0000-0000-0000-000000000000`,
 		Args: cobra.NoArgs,
@@ -269,7 +269,7 @@ func (a *app) newCloudSSHKeysCommand(selection *cloudProviderSelection) *cobra.C
 			return a.runCloudSSHKeys(cmd.Context(), opts)
 		},
 	}
-	cmd.Flags().StringVar(&opts.baseURL, "base-url", opts.baseURL, "Verda API base URL")
+	cmd.Flags().StringVar(&opts.baseURL, "base-url", opts.baseURL, "cloud provider API base URL")
 	cmd.Flags().BoolVar(&opts.jsonOutput, "json", opts.jsonOutput, "print machine-readable JSON")
 	cmd.Flags().SortFlags = false
 	return cmd
@@ -279,9 +279,10 @@ func (a *app) newCloudListCommand(selection *cloudProviderSelection) *cobra.Comm
 	opts := cloudListOptions{}
 	cmd := &cobra.Command{
 		Use:   "list",
-		Short: "List active Verda instances",
-		Long:  "Lists active Verda instances by default. Use --all to include inactive instances or --status to query one Verda status.",
+		Short: "List active cloud instances",
+		Long:  "Lists active instances from the selected provider. Use --all to include inactive instances or --status to filter provider status.",
 		Example: `  nnctl cloud list
+  nnctl cloud list --provider digitalocean
   nnctl cloud list --all
   nnctl cloud list --status running
   nnctl cloud list --json`,
@@ -291,9 +292,9 @@ func (a *app) newCloudListCommand(selection *cloudProviderSelection) *cobra.Comm
 			return a.runCloudList(cmd.Context(), opts)
 		},
 	}
-	cmd.Flags().StringVar(&opts.status, "status", opts.status, "Verda instance status filter, for example running")
+	cmd.Flags().StringVar(&opts.status, "status", opts.status, "provider instance status filter, for example running")
 	cmd.Flags().BoolVar(&opts.all, "all", opts.all, "include inactive instances")
-	cmd.Flags().StringVar(&opts.baseURL, "base-url", opts.baseURL, "Verda API base URL")
+	cmd.Flags().StringVar(&opts.baseURL, "base-url", opts.baseURL, "cloud provider API base URL")
 	cmd.Flags().BoolVar(&opts.jsonOutput, "json", opts.jsonOutput, "print machine-readable JSON")
 	cmd.Flags().SortFlags = false
 	return cmd
@@ -307,9 +308,11 @@ func (a *app) newCloudPricingCommand(selection *cloudProviderSelection) *cobra.C
 	opts.filters.Market = verda.PricingMarketSpot
 	cmd := &cobra.Command{
 		Use:   "pricing",
-		Short: "List Verda instance prices",
-		Long:  "Lists Verda instance prices with filters for market, location, instance type, GPU model, manufacturer, and GPU count.",
+		Short: "List cloud instance offerings and prices",
+		Long:  "Lists offerings from the selected provider with filters for market, location, instance type, GPU model, manufacturer, and GPU count.",
 		Example: `  nnctl cloud pricing
+  nnctl cloud pricing --provider digitalocean --single-gpu
+  nnctl cloud pricing --provider digitalocean --instance-type gpu-mi325x1-256gb-contracted --location-code nyc3
   nnctl cloud pricing --market on-demand --gpu-count 0
   nnctl cloud pricing --market all --all-gpu-counts
   nnctl cloud pricing --zone FIN-02 --model L40
@@ -334,9 +337,9 @@ func (a *app) newCloudPricingCommand(selection *cloudProviderSelection) *cobra.C
 			return a.runCloudPricing(cmd.Context(), opts)
 		},
 	}
-	cmd.Flags().StringArrayVar(&opts.filters.LocationCodes, "location-code", opts.filters.LocationCodes, "Verda location code filter (repeatable)")
+	cmd.Flags().StringArrayVar(&opts.filters.LocationCodes, "location-code", opts.filters.LocationCodes, "provider location filter (repeatable)")
 	cmd.Flags().StringArrayVar(&opts.zones, "zone", opts.zones, "alias for --location-code")
-	cmd.Flags().StringArrayVar(&opts.filters.InstanceTypes, "instance-type", opts.filters.InstanceTypes, "Verda instance type filter (repeatable)")
+	cmd.Flags().StringArrayVar(&opts.filters.InstanceTypes, "instance-type", opts.filters.InstanceTypes, "provider offering or instance type filter (repeatable)")
 	cmd.Flags().StringVar(&opts.filters.Market, "market", opts.filters.Market, "pricing market: spot, on-demand, or all")
 	cmd.Flags().StringVar(&opts.filters.Model, "model", opts.filters.Model, "GPU model/display substring filter")
 	cmd.Flags().StringVar(&opts.filters.Manufacturer, "manufacturer", opts.filters.Manufacturer, "GPU manufacturer substring filter")
@@ -344,9 +347,9 @@ func (a *app) newCloudPricingCommand(selection *cloudProviderSelection) *cobra.C
 	cmd.Flags().IntSliceVar(&opts.gpuCounts, "gpu-count", opts.gpuCounts, "GPU count filter; use 0 for CPU-only types (repeatable or comma-separated)")
 	cmd.Flags().BoolVar(&opts.allGPU, "all-gpu-counts", opts.allGPU, "show CPU, single-GPU, and multi-GPU instance types")
 	cmd.Flags().BoolVar(&opts.filters.AvailableOnly, "available-only", opts.filters.AvailableOnly, "only show currently available instance types")
-	cmd.Flags().StringVar(&opts.filters.Currency, "currency", opts.filters.Currency, "Verda pricing currency")
+	cmd.Flags().StringVar(&opts.filters.Currency, "currency", opts.filters.Currency, "pricing currency filter")
 	cmd.Flags().StringVar(&opts.sortBy, "sort", opts.sortBy, "sort by price, market, location, or instance-type")
-	cmd.Flags().StringVar(&opts.baseURL, "base-url", opts.baseURL, "Verda API base URL")
+	cmd.Flags().StringVar(&opts.baseURL, "base-url", opts.baseURL, "cloud provider API base URL")
 	cmd.Flags().BoolVar(&opts.jsonOutput, "json", opts.jsonOutput, "print machine-readable JSON")
 	cmd.Flags().SortFlags = false
 	return cmd
