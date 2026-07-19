@@ -284,19 +284,12 @@ func (m *CloudManager) Options(ctx context.Context) (CloudOptions, error) {
 			result.Errors[name] = err.Error()
 			continue
 		}
-		offerings, err := provider.Offerings(ctx, cloudcore.OfferingFilters{
-			GPUCounts: []int{1}, AvailableOnly: true,
-		})
+		offerings, err := m.labOfferings(ctx, name, provider)
 		if err != nil {
 			result.Errors[name] = err.Error()
 			continue
 		}
 		if name == verda.ProviderName {
-			offerings, err = compatibleVerdaOfferings(ctx, provider, offerings)
-			if err != nil {
-				result.Errors[name] = err.Error()
-				continue
-			}
 			for _, offering := range offerings {
 				var price verda.InstancePrice
 				if err := json.Unmarshal(offering.ProviderDetail, &price); err != nil {
@@ -328,6 +321,23 @@ func (m *CloudManager) Options(ctx context.Context) (CloudOptions, error) {
 		result.Errors = nil
 	}
 	return result, nil
+}
+
+func (m *CloudManager) labOfferings(
+	ctx context.Context,
+	name string,
+	provider cloudcore.Provider,
+) ([]cloudcore.Offering, error) {
+	offerings, err := provider.Offerings(ctx, cloudcore.OfferingFilters{
+		GPUCounts: []int{1}, AvailableOnly: true,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if name == verda.ProviderName {
+		return compatibleVerdaOfferings(ctx, provider, offerings)
+	}
+	return offerings, nil
 }
 
 func compatibleVerdaOfferings(
@@ -370,7 +380,7 @@ func cloudVolumeReady(status string) bool {
 func (m *CloudManager) Deploy(ctx context.Context, request CloudDeployRequest) (CloudWorker, error) {
 	request.Provider = strings.ToLower(strings.TrimSpace(request.Provider))
 	if request.Provider == "" {
-		request.Provider = verda.ProviderName
+		request.Provider = m.primaryProviderName()
 	}
 	request.InstanceType = strings.TrimSpace(request.InstanceType)
 	request.Market = strings.ToLower(strings.TrimSpace(request.Market))
@@ -388,6 +398,17 @@ func (m *CloudManager) Deploy(ctx context.Context, request CloudDeployRequest) (
 	if err := ctx.Err(); err != nil {
 		return CloudWorker{}, err
 	}
+	provider, err := m.provider(ctx, request.Provider)
+	if err != nil {
+		return CloudWorker{}, err
+	}
+	offering, err := m.resolveLabOffering(ctx, request, provider)
+	if err != nil {
+		return CloudWorker{}, err
+	}
+	request.InstanceType = offering.ID
+	request.LocationCode = offering.Location
+	request.Market = offering.Market
 	autoDestroy := false
 	if request.AutoDestroy != nil {
 		autoDestroy = *request.AutoDestroy
@@ -403,9 +424,9 @@ func (m *CloudManager) Deploy(ctx context.Context, request CloudDeployRequest) (
 		return CloudWorker{}, errors.New("a cloud worker is already managed by this lab")
 	}
 	now := m.now().UTC()
-	backends := []string{"cpu"}
-	if request.Provider == verda.ProviderName {
-		backends = append(backends, "cuda")
+	backends := append([]string(nil), offering.Backends...)
+	if len(backends) == 0 {
+		backends = []string{"cpu"}
 	}
 	displayName := runtime.factory.Descriptor().DisplayName
 	worker := &managedCloudWorker{CloudWorker: CloudWorker{
@@ -416,6 +437,8 @@ func (m *CloudManager) Deploy(ctx context.Context, request CloudDeployRequest) (
 		InstanceType: request.InstanceType,
 		Market:       request.Market,
 		Backends:     backends,
+		PricePerHour: offering.PricePerHour,
+		Currency:     offering.Currency,
 		AutoDestroy:  autoDestroy,
 		CreatedAt:    now,
 	}}
@@ -446,6 +469,46 @@ func (m *CloudManager) Deploy(ctx context.Context, request CloudDeployRequest) (
 		m.provision(provisionContext, worker.ID, request)
 	}()
 	return created, nil
+}
+
+func (m *CloudManager) resolveLabOffering(
+	ctx context.Context,
+	request CloudDeployRequest,
+	provider cloudcore.Provider,
+) (cloudcore.Offering, error) {
+	offerings, err := m.labOfferings(ctx, request.Provider, provider)
+	if err != nil {
+		return cloudcore.Offering{}, fmt.Errorf("list %s lab offerings: %w", request.Provider, err)
+	}
+	matches := make([]cloudcore.Offering, 0, 1)
+	for _, offering := range offerings {
+		if !strings.EqualFold(offering.Provider, request.Provider) ||
+			!strings.EqualFold(offering.ID, request.InstanceType) {
+			continue
+		}
+		if request.LocationCode != "" && !strings.EqualFold(offering.Location, request.LocationCode) {
+			continue
+		}
+		if request.Market != "" && !strings.EqualFold(offering.Market, request.Market) {
+			continue
+		}
+		matches = append(matches, offering)
+	}
+	if len(matches) == 0 {
+		return cloudcore.Offering{}, fmt.Errorf(
+			"cloud offering %s:%s is not enabled and available for the requested location and market",
+			request.Provider,
+			request.InstanceType,
+		)
+	}
+	if len(matches) > 1 {
+		return cloudcore.Offering{}, fmt.Errorf(
+			"cloud offering %s:%s is ambiguous; specify location_code and market",
+			request.Provider,
+			request.InstanceType,
+		)
+	}
+	return matches[0], nil
 }
 
 func (m *CloudManager) provision(ctx context.Context, workerID string, request CloudDeployRequest) {

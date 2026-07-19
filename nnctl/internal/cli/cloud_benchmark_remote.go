@@ -276,7 +276,19 @@ func defaultCloudBenchmarkOutputPath(repoRoot string, metadata cloudBenchmarkMet
 }
 
 func gitRevision(ctx context.Context, repoRoot, git, ref string) (string, error) {
-	cmd := process.CommandContext(ctx, git, "rev-parse", "--short=12", "--", ref)
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return "", errors.New("git ref is required")
+	}
+	cmd := process.CommandContext(
+		ctx,
+		git,
+		"rev-parse",
+		"--short=12",
+		"--verify",
+		"--end-of-options",
+		ref+"^{commit}",
+	)
 	cmd.Dir = repoRoot
 	output, err := cmd.CombinedOutput()
 	if err != nil {

@@ -32,6 +32,23 @@ func TestNormalizeCloudBenchmarkDeployOptionsDefaultsSourceName(t *testing.T) {
 	}
 }
 
+func TestGitRevisionResolvesHeadAsACommit(t *testing.T) {
+	repoRoot, err := filepath.Abs("../../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	revision, err := gitRevision(t.Context(), repoRoot, "git", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(revision) != 12 {
+		t.Fatalf("revision = %q, want 12 hexadecimal characters", revision)
+	}
+	if _, err := gitRevision(t.Context(), repoRoot, "git", "--help"); err == nil {
+		t.Fatal("option-like ref unexpectedly resolved")
+	}
+}
+
 func TestNormalizeCloudBenchmarkDeployOptionsAllowsSourceID(t *testing.T) {
 	opts := defaultCloudBenchmarkDeployOptions()
 	opts.InstanceType = "1A100.22V"

@@ -132,12 +132,18 @@ func (a *app) runCloudBenchmarkDeploy(ctx context.Context, opts cloudBenchmarkDe
 	defer func() {
 		runErr = errors.Join(runErr, run.removeWorkflowDir())
 	}()
-	if err := run.deployWorker(); err != nil {
-		return err
+	deployErr := run.deployWorker()
+	// A strategy can create an instance and then fail while reporting the
+	// result. Register cleanup from the recorded provider ID before returning
+	// that error so post-create failures cannot leak a billable worker.
+	if strings.TrimSpace(run.instanceID) != "" {
+		defer func() {
+			runErr = errors.Join(runErr, run.cleanupResources())
+		}()
 	}
-	defer func() {
-		runErr = errors.Join(runErr, run.cleanupResources())
-	}()
+	if deployErr != nil {
+		return deployErr
+	}
 
 	for _, step := range []func() error{
 		run.waitForWorker,

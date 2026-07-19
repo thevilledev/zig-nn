@@ -3,6 +3,7 @@ package digitalocean
 import (
 	"context"
 	"errors"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -90,8 +91,11 @@ func TestCloudProviderDeploysAMDWithAccountSSHKeys(t *testing.T) {
 	if client.createRequest.Image != AMDImage || client.createRequest.Region != "tor1" {
 		t.Fatalf("create request = %#v", client.createRequest)
 	}
-	if strings.Join(client.createRequest.SSHKeys, ",") != "17,23" || !strings.Contains(client.createRequest.UserData, "ZIG_VERSION=\"0.16.0\"") {
+	if !slices.Equal(client.createRequest.SSHKeys, []int{17, 23}) || !strings.Contains(client.createRequest.UserData, "ZIG_VERSION=\"0.16.0\"") {
 		t.Fatalf("create authentication/bootstrap = %#v", client.createRequest)
+	}
+	if len(client.createRequest.Tags) != 0 {
+		t.Fatalf("create request unexpectedly requires tag:create scope: %#v", client.createRequest.Tags)
 	}
 
 	result, err := provider.Destroy(t.Context(), cloudcore.DestroyRequest{InstanceIDs: []string{"42"}, Permanent: true})
@@ -113,6 +117,57 @@ func TestCloudProviderDryRunDoesNotRequireCredentials(t *testing.T) {
 	}
 	if !deployment.DryRun || deployment.Request.Image != NVIDIAX1Image || deployment.Request.Market != MarketOnDemand {
 		t.Fatalf("dry-run deployment = %#v", deployment)
+	}
+}
+
+func TestCloudProviderCleansUpDropletWhenCreateResponseCannotBeMapped(t *testing.T) {
+	client := &fakeClient{created: Droplet{ID: 42, SizeSlug: "unknown-gpu-size"}}
+	provider := NewCloudProvider(client, nil, []string{"17"})
+	_, err := provider.Deploy(t.Context(), cloudcore.DeployRequest{
+		OfferingID: "gpu-mi300x1-192gb", Location: "tor1",
+	})
+	if err == nil || !strings.Contains(err.Error(), "map DigitalOcean Droplet 42") {
+		t.Fatalf("Deploy() error = %v", err)
+	}
+	if strings.Join(client.deleted, ",") != "42" {
+		t.Fatalf("cleanup deleted = %#v", client.deleted)
+	}
+}
+
+func TestCloudProviderRejectsNonNumericSSHKeyID(t *testing.T) {
+	provider := NewCloudProvider(nil, nil, nil)
+	_, err := provider.Deploy(t.Context(), cloudcore.DeployRequest{
+		OfferingID: "gpu-mi300x1-192gb", Location: "tor1",
+		SSHKeyIDs: []string{"fingerprint"}, DryRun: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "positive integer") {
+		t.Fatalf("Deploy() error = %v", err)
+	}
+}
+
+func TestCloudProviderRejectsUnsupportedProviderOptions(t *testing.T) {
+	provider := NewCloudProvider(nil, nil, nil)
+	_, err := provider.Deploy(t.Context(), cloudcore.DeployRequest{
+		OfferingID: "gpu-mi300x1-192gb", Location: "tor1", DryRun: true,
+		Options: map[string]string{"source-os-volume-id": "volume-1"},
+	})
+	if err == nil || !strings.Contains(err.Error(), `does not support provider option "source-os-volume-id"`) {
+		t.Fatalf("Deploy() error = %v", err)
+	}
+}
+
+func TestCloudProviderRejectsNonPermanentOrAuxiliaryDestroy(t *testing.T) {
+	provider := NewCloudProvider(nil, nil, nil)
+	if _, err := provider.Destroy(t.Context(), cloudcore.DestroyRequest{
+		InstanceIDs: []string{"42"}, DryRun: true,
+	}); err == nil || !strings.Contains(err.Error(), "permanent must be true") {
+		t.Fatalf("non-permanent Destroy() error = %v", err)
+	}
+	if _, err := provider.Destroy(t.Context(), cloudcore.DestroyRequest{
+		InstanceIDs: []string{"42"}, Permanent: true, DryRun: true,
+		Resources: []cloudcore.ResourceRef{{Kind: "volume", ID: "volume-1"}},
+	}); err == nil || !strings.Contains(err.Error(), "auxiliary resource") {
+		t.Fatalf("resource Destroy() error = %v", err)
 	}
 }
 

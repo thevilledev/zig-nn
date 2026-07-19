@@ -2,6 +2,9 @@ package cli
 
 import (
 	"context"
+	"errors"
+	"io"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -63,6 +66,50 @@ func TestDigitalOceanCloudBenchmarkStrategyUsesROCmAndCleansUp(t *testing.T) {
 	if !slices.Equal(provider.destroyed, []string{"42"}) {
 		t.Fatalf("destroyed = %#v", provider.destroyed)
 	}
+}
+
+func TestDigitalOceanCloudBenchmarkCleansUpAfterPostCreateProgressFailure(t *testing.T) {
+	provider := &fakeDigitalOceanBenchmarkProvider{}
+	registry, err := cloudcore.NewRegistry(fakeDigitalOceanBenchmarkFactory{provider: provider})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repoRoot, err := filepath.Abs("../../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := &app{
+		repoRoot: repoRoot, cloudRegistry: registry,
+		stdoutWriter: io.Discard,
+		stderrWriter: failOnCloudBenchmarkProgress{
+			needle: "Worker: 42", err: errors.New("progress unavailable"),
+		},
+	}
+	opts := defaultCloudBenchmarkDeployOptions()
+	opts.provider = digitalocean.ProviderName
+	opts.InstanceType = "gpu-mi300x1-192gb"
+	opts.LocationCode = "tor1"
+	opts.SSHKeyIDs = []string{"17"}
+	opts.ignoreDirty = true
+	err = app.runCloudBenchmarkDeploy(t.Context(), opts)
+	if err == nil || !strings.Contains(err.Error(), "progress unavailable") {
+		t.Fatalf("runCloudBenchmarkDeploy() error = %v", err)
+	}
+	if !slices.Equal(provider.destroyed, []string{"42"}) {
+		t.Fatalf("destroyed after post-create failure = %#v", provider.destroyed)
+	}
+}
+
+type failOnCloudBenchmarkProgress struct {
+	needle string
+	err    error
+}
+
+func (w failOnCloudBenchmarkProgress) Write(data []byte) (int, error) {
+	if strings.Contains(string(data), w.needle) {
+		return 0, w.err
+	}
+	return len(data), nil
 }
 
 type fakeDigitalOceanBenchmarkFactory struct {

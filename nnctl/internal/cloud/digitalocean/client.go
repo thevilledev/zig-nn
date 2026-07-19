@@ -119,7 +119,7 @@ type CreateDropletRequest struct {
 	Region           string   `json:"region"`
 	Size             string   `json:"size"`
 	Image            string   `json:"image"`
-	SSHKeys          []string `json:"ssh_keys,omitempty"`
+	SSHKeys          []int    `json:"ssh_keys,omitempty"`
 	UserData         string   `json:"user_data,omitempty"`
 	Backups          bool     `json:"backups"`
 	IPv6             bool     `json:"ipv6"`

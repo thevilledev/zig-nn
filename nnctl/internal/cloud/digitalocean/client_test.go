@@ -10,6 +10,7 @@ import (
 )
 
 func TestAPIClientUsesBearerAuthenticationAndV2Endpoints(t *testing.T) {
+	var createRequest CreateDropletRequest
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.Header.Get("Authorization") != "Bearer test-token" || request.Header.Get("User-Agent") != "nnctl-test" {
 			t.Errorf("headers = %#v", request.Header)
@@ -23,8 +24,7 @@ func TestAPIClientUsesBearerAuthenticationAndV2Endpoints(t *testing.T) {
 			_, _ = writer.Write([]byte(`{"sizes":[{"slug":"gpu-mi300x1-192gb","available":true,"regions":["tor1"],"gpu_info":{"count":1,"model":"amd_mi300x","vram":{"amount":192,"unit":"gib"}}}]}`))
 		case "/v2/droplets":
 			if request.Method == http.MethodPost {
-				var create CreateDropletRequest
-				if err := json.NewDecoder(request.Body).Decode(&create); err != nil {
+				if err := json.NewDecoder(request.Body).Decode(&createRequest); err != nil {
 					t.Error(err)
 				}
 				_, _ = writer.Write([]byte(`{"droplet":{"id":42,"status":"new","size_slug":"gpu-mi300x1-192gb"}}`))
@@ -51,8 +51,13 @@ func TestAPIClientUsesBearerAuthenticationAndV2Endpoints(t *testing.T) {
 	if sizes, err := client.ListSizes(t.Context()); err != nil || len(sizes) != 1 {
 		t.Fatalf("sizes = %#v, %v", sizes, err)
 	}
-	if _, err := client.CreateDroplet(t.Context(), CreateDropletRequest{Name: "worker", Size: "gpu-mi300x1-192gb"}); err != nil {
+	if _, err := client.CreateDroplet(t.Context(), CreateDropletRequest{
+		Name: "worker", Size: "gpu-mi300x1-192gb", SSHKeys: []int{17},
+	}); err != nil {
 		t.Fatal(err)
+	}
+	if len(createRequest.SSHKeys) != 1 || createRequest.SSHKeys[0] != 17 {
+		t.Fatalf("create SSH key IDs = %#v", createRequest.SSHKeys)
 	}
 	if droplet, err := client.GetDroplet(t.Context(), "42"); err != nil || droplet.Status != "active" {
 		t.Fatalf("droplet = %#v, %v", droplet, err)

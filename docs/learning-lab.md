@@ -147,6 +147,12 @@ Store a DigitalOcean API token under service `nnctl/digitalocean`, account
 security add-generic-password -U -s nnctl/digitalocean -a token -w "$DIGITALOCEAN_TOKEN"
 ```
 
+For a custom-scope token, grant `droplet:create`, `droplet:delete`, and the
+required `droplet:read`, `regions:read`, `sizes:read`, `actions:read`, and
+`image:read` dependencies. Add `ssh_key:read` so `nnctl cloud ssh-keys` can
+list the numeric account key ID to attach. `nnctl` does not tag created
+Droplets, so it does not require `tag:create`.
+
 On Linux, store the same service/account pairs in the desktop Secret Service
 keyring. Verify provider access and find an SSH key ID with:
 
@@ -165,7 +171,8 @@ locations with a ready golden volume.
 
 DigitalOcean workers use the provider's GPU-ready AI/ML image selected for the
 accelerator: AMD offerings expose ROCm and NVIDIA offerings expose CUDA. A
-DigitalOcean SSH key ID must be supplied server-side with `--cloud-ssh-key`;
+numeric DigitalOcean SSH key ID must be supplied server-side with
+`--cloud-ssh-key`;
 the implementation deliberately does not attach every key in the account.
 `nnctl` installs its pinned Zig toolchain and benchmark prerequisites through
 cloud-init, then verifies SSH, Zig, and the selected accelerator runtime.
@@ -182,6 +189,9 @@ nnctl lab \
 
 Explicit contract offerings are not treated as API-discovered availability;
 the account contract and region still determine whether deployment succeeds.
+The server accepts deployments only for an available API-discovered offering
+or an explicit `--cloud-offering`; a browser request cannot opt itself into an
+unconfigured contract SKU.
 DigitalOcean bare-metal products are outside this provider adapter: its
 lifecycle is intentionally limited to GPU Droplets.
 

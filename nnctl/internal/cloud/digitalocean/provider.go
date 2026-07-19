@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	cloudcore "nnctl/internal/cloud"
 )
@@ -89,7 +90,7 @@ func (*CloudProvider) Descriptor() cloudcore.Descriptor {
 
 func providerDescriptor() cloudcore.Descriptor {
 	return cloudcore.Descriptor{
-		Name: ProviderName, DisplayName: "DigitalOcean",
+		Name: ProviderName, DisplayName: "DigitalOcean", DefaultMarket: MarketOnDemand,
 		Capabilities: []cloudcore.Capability{
 			cloudcore.CapabilityCompute,
 			cloudcore.CapabilityPricing,
@@ -155,6 +156,9 @@ func (p *CloudProvider) Offerings(ctx context.Context, filters cloudcore.Offerin
 }
 
 func (p *CloudProvider) Deploy(ctx context.Context, request cloudcore.DeployRequest) (*cloudcore.Deployment, error) {
+	if len(request.SSHKeyIDs) == 0 && p != nil {
+		request.SSHKeyIDs = append([]string(nil), p.defaultSSHKeys...)
+	}
 	normalized, plan, create, err := normalizeDeployRequest(request)
 	if err != nil {
 		return nil, err
@@ -166,10 +170,6 @@ func (p *CloudProvider) Deploy(ctx context.Context, request cloudcore.DeployRequ
 		return nil, errors.New("DigitalOcean provider client is required")
 	}
 	if len(create.SSHKeys) == 0 {
-		create.SSHKeys = append([]string(nil), p.defaultSSHKeys...)
-		normalized.SSHKeyIDs = append([]string(nil), p.defaultSSHKeys...)
-	}
-	if len(create.SSHKeys) == 0 {
 		return nil, errors.New("DigitalOcean deployment requires --ssh-key-id or a configured cloud SSH key")
 	}
 	droplet, err := p.client.CreateDroplet(ctx, create)
@@ -178,7 +178,10 @@ func (p *CloudProvider) Deploy(ctx context.Context, request cloudcore.DeployRequ
 	}
 	instance, err := instanceFromDroplet(droplet)
 	if err != nil {
-		return nil, err
+		return nil, p.cleanupUnmappedDroplet(ctx, droplet, err)
+	}
+	if strings.TrimSpace(instance.ID) == "" {
+		return nil, errors.New("create DigitalOcean GPU Droplet did not return an ID")
 	}
 	if instance.OfferingID == "" {
 		instance.OfferingID = plan.Slug
@@ -201,6 +204,18 @@ func (p *CloudProvider) Deploy(ctx context.Context, request cloudcore.DeployRequ
 		Provider: ProviderName, Request: normalized, Instance: &instance,
 		ProviderDetail: detail,
 	}, nil
+}
+
+func (p *CloudProvider) cleanupUnmappedDroplet(ctx context.Context, droplet Droplet, cause error) error {
+	if droplet.ID <= 0 {
+		return cause
+	}
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+	defer cancel()
+	if err := p.client.DeleteDroplet(cleanupCtx, strconv.Itoa(droplet.ID)); err != nil {
+		return errors.Join(cause, fmt.Errorf("clean up unmapped DigitalOcean Droplet %d: %w", droplet.ID, err))
+	}
+	return cause
 }
 
 func (p *CloudProvider) Instance(ctx context.Context, id string) (cloudcore.Instance, error) {
@@ -248,6 +263,12 @@ func (p *CloudProvider) Instances(ctx context.Context, options cloudcore.ListOpt
 }
 
 func (p *CloudProvider) Destroy(ctx context.Context, request cloudcore.DestroyRequest) (*cloudcore.DestroyResult, error) {
+	if !request.Permanent {
+		return nil, errors.New("DigitalOcean Droplet deletion is permanent; permanent must be true")
+	}
+	if len(request.Resources) > 0 {
+		return nil, errors.New("DigitalOcean Droplet deletion does not accept auxiliary resource references")
+	}
 	ids := make([]string, 0, len(request.InstanceIDs))
 	for _, rawID := range request.InstanceIDs {
 		id, err := normalizeDropletID(rawID)
@@ -311,6 +332,15 @@ func normalizeDeployRequest(request cloudcore.DeployRequest) (cloudcore.DeployRe
 	request.Image = strings.TrimSpace(request.Image)
 	request.Name = strings.TrimSpace(request.Name)
 	request.SSHKeyIDs = compactStrings(request.SSHKeyIDs)
+	for name, value := range request.Options {
+		value = strings.TrimSpace(value)
+		if value != "" && !strings.EqualFold(value, "false") {
+			return cloudcore.DeployRequest{}, gpuPlan{}, CreateDropletRequest{}, fmt.Errorf(
+				"DigitalOcean deployment does not support provider option %q",
+				name,
+			)
+		}
+	}
 	if request.OfferingID == "" {
 		return cloudcore.DeployRequest{}, gpuPlan{}, CreateDropletRequest{}, errors.New("DigitalOcean size slug is required")
 	}
@@ -333,15 +363,31 @@ func normalizeDeployRequest(request cloudcore.DeployRequest) (cloudcore.DeployRe
 	if request.Name == "" {
 		request.Name = "nnctl-" + strings.TrimPrefix(plan.Slug, "gpu-")
 	}
+	sshKeyIDs, err := numericSSHKeyIDs(request.SSHKeyIDs)
+	if err != nil {
+		return cloudcore.DeployRequest{}, gpuPlan{}, CreateDropletRequest{}, err
+	}
 	if strings.TrimSpace(request.UserData) == "" {
 		request.UserData = DefaultUserDataScript
 	}
 	create := CreateDropletRequest{
 		Name: request.Name, Region: request.Location, Size: plan.Slug, Image: request.Image,
-		SSHKeys: append([]string(nil), request.SSHKeyIDs...), UserData: request.UserData,
-		PublicNetworking: true, Tags: []string{"nnctl"},
+		SSHKeys: sshKeyIDs, UserData: request.UserData, PublicNetworking: true,
 	}
 	return request, plan, create, nil
+}
+
+func numericSSHKeyIDs(values []string) ([]int, error) {
+	ids := make([]int, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		id, err := strconv.Atoi(value)
+		if err != nil || id <= 0 {
+			return nil, fmt.Errorf("DigitalOcean SSH key ID %q must be a positive integer", value)
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
 }
 
 func instanceFromDroplet(droplet Droplet) (cloudcore.Instance, error) {

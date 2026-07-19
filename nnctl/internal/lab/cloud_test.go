@@ -401,6 +401,10 @@ func writeFakeCloudTransport(t *testing.T) fakeCloudTransport {
 	ssh := filepath.Join(directory, "ssh")
 	sshScript := `#!/bin/sh
 case "$*" in
+  *run_optimizer_lab*-Dgpu=rocm*)
+    printf '%s\n' '{"v":1,"type":"run_started","experiment":"optimizer-lab","data":{"config":{},"execution":{"requested_backend":"rocm","selected_backend":"rocm","optimize":"Debug"}}}'
+    printf '%s\n' '{"v":1,"type":"run_completed","experiment":"optimizer-lab","step":1,"total_steps":1,"data":{"final_loss":0.1}}'
+    ;;
   *run_optimizer_lab*)
     printf '%s\n' '{"v":1,"type":"run_started","experiment":"optimizer-lab","data":{"config":{},"execution":{"requested_backend":"cuda","selected_backend":"cuda","optimize":"Debug"}}}'
     printf '%s\n' '{"v":1,"type":"run_completed","experiment":"optimizer-lab","step":1,"total_steps":1,"data":{"final_loss":0.1}}'

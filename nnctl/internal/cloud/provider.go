@@ -21,9 +21,10 @@ const (
 )
 
 type Descriptor struct {
-	Name         string       `json:"name"`
-	DisplayName  string       `json:"display_name"`
-	Capabilities []Capability `json:"capabilities"`
+	Name          string       `json:"name"`
+	DisplayName   string       `json:"display_name"`
+	DefaultMarket string       `json:"default_market,omitempty"`
+	Capabilities  []Capability `json:"capabilities"`
 }
 
 func (d Descriptor) Supports(capability Capability) bool {

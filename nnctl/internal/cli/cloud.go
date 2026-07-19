@@ -12,18 +12,34 @@ import (
 	"text/tabwriter"
 
 	cloudcore "nnctl/internal/cloud"
-	"nnctl/internal/cloud/digitalocean"
 	"nnctl/internal/cloud/verda"
 )
 
+const (
+	defaultCloudDeployDescription = "nnctl benchmark worker"
+	cloudMarketAll                = "all"
+)
+
 type cloudDeployOptions struct {
-	verda.DeployOptions
-	userDataFile string
-	baseURL      string
-	jsonOutput   bool
-	provider     string
-	marketSet    bool
-	imageSet     bool
+	InstanceType                string
+	SourceOSVolumeID            string
+	SourceOSVolumeName          string
+	ClonedOSVolumeID            string
+	Market                      string
+	Image                       string
+	Hostname                    string
+	Description                 string
+	SSHKeyIDs                   []string
+	LocationCode                string
+	StartupScriptName           string
+	UserDataScript              string
+	DryRun                      bool
+	SkipAvailabilityCheck       bool
+	KeepClonedOSVolumeOnFailure bool
+	userDataFile                string
+	baseURL                     string
+	jsonOutput                  bool
+	provider                    string
 }
 
 type cloudSSHKeysOptions struct {
@@ -33,7 +49,9 @@ type cloudSSHKeysOptions struct {
 }
 
 type cloudVolumesOptions struct {
-	verda.PurgeVolumesOptions
+	VolumeIDs      []string
+	AllDeleted     bool
+	DryRun         bool
 	includeDeleted bool
 	purge          bool
 	baseURL        string
@@ -42,10 +60,14 @@ type cloudVolumesOptions struct {
 }
 
 type cloudDestroyOptions struct {
-	verda.DestroyOptions
-	baseURL    string
-	jsonOutput bool
-	provider   string
+	InstanceIDs       []string
+	VolumeIDs         []string
+	SourceOSVolumeID  string
+	DeletePermanently bool
+	DryRun            bool
+	baseURL           string
+	jsonOutput        bool
+	provider          string
 }
 
 type cloudPackerTemplateOptions struct {
@@ -62,7 +84,8 @@ type cloudListOptions struct {
 }
 
 type cloudPricingOptions struct {
-	filters    verda.PricingFilters
+	filters    cloudcore.OfferingFilters
+	market     string
 	zones      []string
 	gpuCounts  []int
 	singleGPU  bool
@@ -71,7 +94,10 @@ type cloudPricingOptions struct {
 	sortBy     string
 	jsonOutput bool
 	provider   string
-	marketSet  bool
+}
+
+func defaultCloudDeployOptions() cloudDeployOptions {
+	return cloudDeployOptions{Description: defaultCloudDeployDescription}
 }
 
 func (a *app) newVerdaSDKClientWithCredentials(ctx context.Context, baseURL string) (*verda.SDKClient, verda.Credentials, error) {
@@ -90,11 +116,17 @@ func (a *app) newVerdaSDKClientWithCredentials(ctx context.Context, baseURL stri
 }
 
 func (a *app) runCloudDeploy(ctx context.Context, opts cloudDeployOptions) error {
-	if strings.EqualFold(opts.provider, digitalocean.ProviderName) && !opts.marketSet {
-		opts.Market = digitalocean.MarketOnDemand
+	factory, err := a.cloudProviderFactory(opts.provider)
+	if err != nil {
+		return err
 	}
-	if strings.EqualFold(opts.provider, digitalocean.ProviderName) && !opts.imageSet {
-		opts.Image = ""
+	descriptor := factory.Descriptor()
+	if strings.TrimSpace(opts.Market) == "" {
+		opts.Market = descriptor.DefaultMarket
+	}
+	providerOptions, err := cloudDeployProviderOptions(descriptor.Name, opts)
+	if err != nil {
+		return err
 	}
 	userData := opts.UserDataScript
 	if opts.userDataFile != "" {
@@ -118,19 +150,30 @@ func (a *app) runCloudDeploy(ctx context.Context, opts cloudDeployOptions) error
 		SSHKeyIDs:   opts.SSHKeyIDs,
 		UserData:    userData,
 		DryRun:      opts.DryRun,
-		Options: map[string]string{
-			verda.OptionSourceOSVolumeID:          opts.SourceOSVolumeID,
-			verda.OptionSourceOSVolumeName:        opts.SourceOSVolumeName,
-			verda.OptionClonedOSVolumeID:          opts.ClonedOSVolumeID,
-			verda.OptionStartupScriptName:         opts.StartupScriptName,
-			verda.OptionSkipAvailabilityCheck:     strconv.FormatBool(opts.SkipAvailabilityCheck),
-			verda.OptionKeepClonedVolumeOnFailure: strconv.FormatBool(opts.KeepClonedOSVolumeOnFailure),
-		},
+		Options:     providerOptions,
 	})
 	if err != nil {
 		return err
 	}
 	return a.printProviderDeployResult(deployment, opts.jsonOutput)
+}
+
+func cloudDeployProviderOptions(providerName string, opts cloudDeployOptions) (map[string]string, error) {
+	if !strings.EqualFold(providerName, verda.ProviderName) {
+		if opts.SourceOSVolumeID != "" || opts.SourceOSVolumeName != "" || opts.ClonedOSVolumeID != "" ||
+			opts.StartupScriptName != "" || opts.SkipAvailabilityCheck || opts.KeepClonedOSVolumeOnFailure {
+			return nil, fmt.Errorf("verda volume, startup-script, and availability flags are not supported by %s", providerName)
+		}
+		return nil, nil
+	}
+	return map[string]string{
+		verda.OptionSourceOSVolumeID:          opts.SourceOSVolumeID,
+		verda.OptionSourceOSVolumeName:        opts.SourceOSVolumeName,
+		verda.OptionClonedOSVolumeID:          opts.ClonedOSVolumeID,
+		verda.OptionStartupScriptName:         opts.StartupScriptName,
+		verda.OptionSkipAvailabilityCheck:     strconv.FormatBool(opts.SkipAvailabilityCheck),
+		verda.OptionKeepClonedVolumeOnFailure: strconv.FormatBool(opts.KeepClonedOSVolumeOnFailure),
+	}, nil
 }
 
 func (a *app) runCloudSSHKeys(ctx context.Context, opts cloudSSHKeysOptions) error {
@@ -177,16 +220,25 @@ func (a *app) runCloudVolumes(ctx context.Context, opts cloudVolumesOptions) err
 }
 
 func (a *app) runCloudDestroy(ctx context.Context, opts cloudDestroyOptions) error {
-	provider, err := a.cloudProvider(ctx, opts.provider, opts.baseURL, "nnctl", opts.DryRun)
+	factory, err := a.cloudProviderFactory(opts.provider)
 	if err != nil {
 		return err
 	}
+	descriptor := factory.Descriptor()
 	resources := make([]cloudcore.ResourceRef, 0, len(opts.VolumeIDs)+1)
-	if opts.SourceOSVolumeID != "" {
-		resources = append(resources, cloudcore.ResourceRef{Kind: verda.ResourceOSVolume, ID: opts.SourceOSVolumeID, Preserve: true})
+	if strings.EqualFold(descriptor.Name, verda.ProviderName) {
+		if opts.SourceOSVolumeID != "" {
+			resources = append(resources, cloudcore.ResourceRef{Kind: verda.ResourceOSVolume, ID: opts.SourceOSVolumeID, Preserve: true})
+		}
+		for _, id := range opts.VolumeIDs {
+			resources = append(resources, cloudcore.ResourceRef{Kind: verda.ResourceOSVolume, ID: id})
+		}
+	} else if opts.SourceOSVolumeID != "" || len(opts.VolumeIDs) > 0 {
+		return fmt.Errorf("verda volume cleanup flags are not supported by %s", descriptor.Name)
 	}
-	for _, id := range opts.VolumeIDs {
-		resources = append(resources, cloudcore.ResourceRef{Kind: verda.ResourceOSVolume, ID: id})
+	provider, err := a.cloudProvider(ctx, descriptor.Name, opts.baseURL, "nnctl", opts.DryRun)
+	if err != nil {
+		return err
 	}
 	result, err := provider.Destroy(ctx, cloudcore.DestroyRequest{
 		InstanceIDs: opts.InstanceIDs,
@@ -273,32 +325,36 @@ func writeCloudTemplateFiles(outputDir string, force bool, files []cloudcore.Tem
 }
 
 func (a *app) runCloudPricing(ctx context.Context, opts cloudPricingOptions) error {
-	if strings.EqualFold(opts.provider, digitalocean.ProviderName) && !opts.marketSet {
-		opts.filters.Market = digitalocean.MarketOnDemand
-	}
-	opts.filters = verda.NormalizePricingFilters(opts.filters)
-	if err := verda.ValidatePricingFilters(opts.filters); err != nil {
+	factory, err := a.cloudProviderFactory(opts.provider)
+	if err != nil {
 		return err
+	}
+	if strings.TrimSpace(opts.market) == "" {
+		opts.market = factory.Descriptor().DefaultMarket
+	}
+	opts.market = strings.ToLower(strings.TrimSpace(opts.market))
+	opts.filters.IDs = sortUniqueStrings(opts.filters.IDs)
+	opts.filters.Locations = sortUniqueStrings(opts.filters.Locations)
+	opts.filters.Model = strings.TrimSpace(opts.filters.Model)
+	opts.filters.Manufacturer = strings.TrimSpace(opts.filters.Manufacturer)
+	opts.filters.Currency = strings.TrimSpace(opts.filters.Currency)
+	opts.filters.GPUCounts = sortUniqueInts(opts.filters.GPUCounts)
+	for _, count := range opts.filters.GPUCounts {
+		if count < 0 {
+			return fmt.Errorf("gpu count filter must be zero or greater")
+		}
 	}
 
 	provider, err := a.cloudProvider(ctx, opts.provider, opts.baseURL, "nnctl", false)
 	if err != nil {
 		return err
 	}
-	markets := []string{opts.filters.Market}
-	if opts.filters.Market == verda.PricingMarketAll {
-		markets = nil
+	if opts.market != "" && opts.market != cloudMarketAll {
+		opts.filters.Markets = []string{opts.market}
+	} else {
+		opts.filters.Markets = nil
 	}
-	offerings, err := provider.Offerings(ctx, cloudcore.OfferingFilters{
-		IDs:           opts.filters.InstanceTypes,
-		Locations:     opts.filters.LocationCodes,
-		Markets:       markets,
-		Model:         opts.filters.Model,
-		Manufacturer:  opts.filters.Manufacturer,
-		GPUCounts:     opts.filters.GPUCounts,
-		AvailableOnly: opts.filters.AvailableOnly,
-		Currency:      opts.filters.Currency,
-	})
+	offerings, err := provider.Offerings(ctx, opts.filters)
 	if err != nil {
 		return err
 	}

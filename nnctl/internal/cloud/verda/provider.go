@@ -99,8 +99,9 @@ func (*CloudProvider) Descriptor() cloudcore.Descriptor {
 
 func providerDescriptor() cloudcore.Descriptor {
 	return cloudcore.Descriptor{
-		Name:        ProviderName,
-		DisplayName: "Verda",
+		Name:          ProviderName,
+		DisplayName:   "Verda",
+		DefaultMarket: PricingMarketSpot,
 		Capabilities: []cloudcore.Capability{
 			cloudcore.CapabilityCompute,
 			cloudcore.CapabilityPricing,

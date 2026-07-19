@@ -5,8 +5,6 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
-
-	"nnctl/internal/cloud/verda"
 )
 
 func (a *app) newCloudCommand(withRepo repoRunner) *cobra.Command {
@@ -151,9 +149,7 @@ func (a *app) newCloudVolumeCommand(selection *cloudProviderSelection) *cobra.Co
 }
 
 func (a *app) newCloudDeployCommand(selection *cloudProviderSelection) *cobra.Command {
-	opts := cloudDeployOptions{
-		DeployOptions: verda.DefaultDeployOptions(""),
-	}
+	opts := defaultCloudDeployOptions()
 	cmd := &cobra.Command{
 		Use:   "deploy",
 		Short: "Deploy a cloud benchmark worker",
@@ -174,8 +170,6 @@ specific flags are rejected or ignored according to the provider contract.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.provider = selection.name
-			opts.marketSet = cmd.Flags().Changed("market")
-			opts.imageSet = cmd.Flags().Changed("image")
 			return a.runCloudDeploy(cmd.Context(), opts)
 		},
 	}
@@ -203,9 +197,7 @@ specific flags are rejected or ignored according to the provider contract.`,
 }
 
 func (a *app) newCloudDestroyCommand(selection *cloudProviderSelection) *cobra.Command {
-	opts := cloudDestroyOptions{
-		DestroyOptions: verda.DefaultDestroyOptions(nil),
-	}
+	opts := cloudDestroyOptions{DeletePermanently: true}
 	cmd := &cobra.Command{
 		Use:     "destroy INSTANCE_ID [INSTANCE_ID...]",
 		Aliases: []string{"delete", "rm", "terminate"},
@@ -305,7 +297,6 @@ func (a *app) newCloudPricingCommand(selection *cloudProviderSelection) *cobra.C
 		sortBy: "price",
 	}
 	opts.filters.AvailableOnly = true
-	opts.filters.Market = verda.PricingMarketSpot
 	cmd := &cobra.Command{
 		Use:   "pricing",
 		Short: "List cloud instance offerings and prices",
@@ -321,10 +312,9 @@ func (a *app) newCloudPricingCommand(selection *cloudProviderSelection) *cobra.C
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.provider = selection.name
-			opts.marketSet = cmd.Flags().Changed("market")
-			opts.filters.LocationCodes = append(opts.filters.LocationCodes, opts.zones...)
-			opts.filters.LocationCodes = sortUniqueStrings(opts.filters.LocationCodes)
-			opts.filters.InstanceTypes = sortUniqueStrings(opts.filters.InstanceTypes)
+			opts.filters.Locations = append(opts.filters.Locations, opts.zones...)
+			opts.filters.Locations = sortUniqueStrings(opts.filters.Locations)
+			opts.filters.IDs = sortUniqueStrings(opts.filters.IDs)
 			gpuCounts, err := resolveCloudPricingGPUCounts(
 				opts,
 				cmd.Flags().Changed("single-gpu"),
@@ -337,10 +327,10 @@ func (a *app) newCloudPricingCommand(selection *cloudProviderSelection) *cobra.C
 			return a.runCloudPricing(cmd.Context(), opts)
 		},
 	}
-	cmd.Flags().StringArrayVar(&opts.filters.LocationCodes, "location-code", opts.filters.LocationCodes, "provider location filter (repeatable)")
+	cmd.Flags().StringArrayVar(&opts.filters.Locations, "location-code", opts.filters.Locations, "provider location filter (repeatable)")
 	cmd.Flags().StringArrayVar(&opts.zones, "zone", opts.zones, "alias for --location-code")
-	cmd.Flags().StringArrayVar(&opts.filters.InstanceTypes, "instance-type", opts.filters.InstanceTypes, "provider offering or instance type filter (repeatable)")
-	cmd.Flags().StringVar(&opts.filters.Market, "market", opts.filters.Market, "pricing market: spot, on-demand, or all")
+	cmd.Flags().StringArrayVar(&opts.filters.IDs, "instance-type", opts.filters.IDs, "provider offering or instance type filter (repeatable)")
+	cmd.Flags().StringVar(&opts.market, "market", opts.market, "provider market filter; use all for every market")
 	cmd.Flags().StringVar(&opts.filters.Model, "model", opts.filters.Model, "GPU model/display substring filter")
 	cmd.Flags().StringVar(&opts.filters.Manufacturer, "manufacturer", opts.filters.Manufacturer, "GPU manufacturer substring filter")
 	cmd.Flags().BoolVar(&opts.singleGPU, "single-gpu", opts.singleGPU, "only show single-GPU instance types")

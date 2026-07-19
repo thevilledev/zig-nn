@@ -193,7 +193,9 @@ Try it in [DQN](../experiments/dqn/dqn.zig).
 accelerators, instances, deployment requests, owned resources, and destroy
 results. A registry resolves a provider factory by stable name; Verda remains
 the default for command compatibility, while the lab persists the selected
-provider with each managed worker.
+provider with each managed worker. Provider descriptors also carry the default
+market policy, avoiding shared-command assumptions about spot, on-demand, or
+future reservation models.
 
 The base `Provider` interface contains only the lifecycle shared by GPU clouds:
 catalog discovery, deploy, get/list instances, and destroy. Less universal
@@ -221,7 +223,9 @@ GPU Droplet sizes, GPU-ready images, account SSH keys, and on-demand lifecycle.
 AMD offerings advertise ROCm and NVIDIA offerings advertise CUDA. The
 [learning-lab manager](../nnctl/internal/lab/cloud.go) consumes only normalized
 offerings and resource references, tolerates one provider catalog failing, and
-dispatches recovery and cleanup to the provider stored with the worker.
+dispatches recovery and cleanup to the provider stored with the worker. It
+resolves every deploy request against the server-side available-offering list,
+including explicitly configured contract inventory, before provisioning.
 
 When adding a neocloud:
 

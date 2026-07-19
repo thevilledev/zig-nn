@@ -80,7 +80,7 @@ func (m *CloudManager) primaryProviderName() string {
 func (m *CloudManager) providerRuntime(name string) (cloudProviderRuntime, error) {
 	name = strings.ToLower(strings.TrimSpace(name))
 	if name == "" {
-		name = verda.ProviderName
+		name = m.primaryProviderName()
 	}
 	provider, ok := m.providers[name]
 	if !ok {
