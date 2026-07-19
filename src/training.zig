@@ -1,7 +1,7 @@
 const std = @import("std");
 const tensor = @import("tensor.zig");
 
-const BackendType = @import("backend.zig").BackendType;
+const BackendInstance = @import("backend.zig").BackendInstance;
 const ExecutionContext = tensor.ExecutionContext;
 const Tensor = tensor.Tensor;
 
@@ -96,7 +96,7 @@ pub const Optimizer = struct {
     allocator: std.mem.Allocator,
     config: OptimizerConfig,
     parameter_addresses: []usize,
-    parameter_backends: []BackendType,
+    parameter_backends: []BackendInstance,
     states: []ParameterState,
     pending_steps: usize = 0,
     update_steps: usize = 0,
@@ -112,7 +112,7 @@ pub const Optimizer = struct {
         const allocator = context.device.allocator;
         const addresses = try allocator.alloc(usize, parameters.len);
         errdefer allocator.free(addresses);
-        const backends = try allocator.alloc(BackendType, parameters.len);
+        const backends = try allocator.alloc(BackendInstance, parameters.len);
         errdefer allocator.free(backends);
         const states = try allocator.alloc(ParameterState, parameters.len);
         errdefer allocator.free(states);
@@ -120,7 +120,7 @@ pub const Optimizer = struct {
         var initialized: usize = 0;
         errdefer for (states[0..initialized]) |*state| state.deinit();
         for (parameters, 0..) |parameter, index| {
-            if (parameter.backendType() != context.device.backendType()) {
+            if (!parameter.matrix.backend.sameInstance(context.device.instance)) {
                 return error.BackendMismatch;
             }
             var first_moment = try context.createTensor(parameter.shape.slice());
@@ -134,7 +134,7 @@ pub const Optimizer = struct {
                 .accumulated_gradient = accumulated_gradient,
             };
             addresses[index] = @intFromPtr(parameter);
-            backends[index] = parameter.backendType();
+            backends[index] = parameter.matrix.backend;
             initialized += 1;
         }
 
@@ -271,7 +271,9 @@ pub const Optimizer = struct {
         if (gradients.len != self.states.len) return error.ParameterCountMismatch;
         for (parameters, gradients) |parameter, gradient| {
             if (!parameter.shape.eql(gradient.shape)) return error.DimensionMismatch;
-            if (parameter.backendType() != gradient.backendType()) return error.BackendMismatch;
+            if (!parameter.matrix.backend.sameInstance(gradient.matrix.backend)) {
+                return error.BackendMismatch;
+            }
         }
     }
 
@@ -281,10 +283,10 @@ pub const Optimizer = struct {
         parameters: []const *Tensor,
     ) !void {
         if (parameters.len != self.states.len) return error.ParameterCountMismatch;
-        for (parameters, self.parameter_addresses, self.parameter_backends, self.states) |parameter, address, backend_type, state| {
+        for (parameters, self.parameter_addresses, self.parameter_backends, self.states) |parameter, address, backend, state| {
             if (@intFromPtr(parameter) != address) return error.ParameterOrderChanged;
-            if (parameter.backendType() != backend_type or
-                parameter.backendType() != context.device.backendType())
+            if (!parameter.matrix.backend.sameInstance(backend) or
+                !parameter.matrix.backend.sameInstance(context.device.instance))
             {
                 return error.BackendMismatch;
             }
@@ -376,4 +378,40 @@ test "optimizer flushes partial AdamW accumulation" {
     var actual: [1]f32 = undefined;
     try context.readback(parameter, &actual);
     try testing.expectApproxEqAbs(@as(f32, 0.899), actual[0], 1e-5);
+}
+
+test "optimizer requires the context's exact backend instance" {
+    const testing = std.testing;
+
+    var first_device = try tensor.Device.init(testing.allocator, .cpu);
+    defer first_device.deinit();
+    var second_device = try tensor.Device.init(testing.allocator, .cpu);
+    defer second_device.deinit();
+    var first_context = ExecutionContext.init(&first_device);
+    var second_context = ExecutionContext.init(&second_device);
+    var parameter = try first_context.upload(&.{ 1, 1 }, &.{1});
+    defer parameter.deinit();
+    var foreign_parameter = try second_context.upload(&.{ 1, 1 }, &.{1});
+    defer foreign_parameter.deinit();
+    var foreign_gradient = try second_context.upload(&.{ 1, 1 }, &.{1});
+    defer foreign_gradient.deinit();
+
+    const foreign_parameters = [_]*Tensor{&foreign_parameter};
+    try testing.expectError(
+        error.BackendMismatch,
+        Optimizer.init(&first_context, OptimizerConfig.sgd(0.1), &foreign_parameters),
+    );
+
+    const parameters = [_]*Tensor{&parameter};
+    const gradients = [_]Tensor{foreign_gradient};
+    var optimizer = try Optimizer.init(
+        &first_context,
+        OptimizerConfig.sgd(0.1),
+        &parameters,
+    );
+    defer optimizer.deinit();
+    try testing.expectError(
+        error.BackendMismatch,
+        optimizer.step(&first_context, &parameters, &gradients),
+    );
 }

@@ -270,10 +270,12 @@ pub const Gru = struct {
         if (input.shape.rank != 2 or previous_hidden.shape.rank != 2 or
             input.shape.dims[0] != previous_hidden.shape.dims[0] or
             input.shape.dims[1] != self.input_size or
-            previous_hidden.shape.dims[1] != self.hidden_size or
-            input.backendType() != previous_hidden.backendType())
+            previous_hidden.shape.dims[1] != self.hidden_size)
         {
             return error.DimensionMismatch;
+        }
+        if (!input.matrix.backend.sameInstance(previous_hidden.matrix.backend)) {
+            return error.BackendMismatch;
         }
     }
 };
@@ -381,6 +383,28 @@ test "GRU exposes forward, backward, and parameter shapes" {
     try testing.expect(gradients.previous_hidden.shape.eql(hidden.shape));
     try testing.expectEqual(@as(usize, 12), gru.parameterTensorCount());
     try testing.expectEqual(@as(usize, 63), gru.parameterCount());
+}
+
+test "GRU rejects hidden state from a separate backend instance" {
+    const testing = std.testing;
+    var first_device = try tensor.Device.init(testing.allocator, .cpu);
+    defer first_device.deinit();
+    var second_device = try tensor.Device.init(testing.allocator, .cpu);
+    defer second_device.deinit();
+    var first_context = ExecutionContext.init(&first_device);
+    var second_context = ExecutionContext.init(&second_device);
+    var prng = std.Random.DefaultPrng.init(7);
+    var gru = try Gru.init(&first_context, 2, 2, prng.random());
+    defer gru.deinit();
+    var input = try first_context.upload(&.{ 1, 2 }, &.{ 0.1, 0.2 });
+    defer input.deinit();
+    var hidden = try second_context.upload(&.{ 1, 2 }, &.{ 0.3, 0.4 });
+    defer hidden.deinit();
+
+    try testing.expectError(
+        error.BackendMismatch,
+        gru.forward(&first_context, input, hidden),
+    );
 }
 
 test "GRU input and recurrent gradients match finite differences" {

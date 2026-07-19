@@ -8,6 +8,7 @@ const matrix_mod = @import("matrix.zig");
 const Matrix = matrix_mod.Matrix;
 const backend_mod = @import("backend.zig");
 const BackendMatrix = backend_mod.Matrix;
+const BackendInstance = backend_mod.BackendInstance;
 const Activation = @import("activation.zig").Activation;
 
 fn unixMilliTimestamp() i64 {
@@ -211,6 +212,8 @@ fn calculateBackendLoss(loss_function: LossFunction, allocator: Allocator, predi
     if (predicted.rows != target.rows or predicted.cols != target.cols) {
         return error.DimensionMismatch;
     }
+    if (predicted.rows == 0) return error.EmptyDataset;
+    if (!predicted.backend.sameInstance(target.backend)) return error.BackendMismatch;
 
     var total_loss: f64 = 0.0;
     const n = @as(f64, @floatFromInt(predicted.rows));
@@ -267,6 +270,8 @@ fn calculateBackendLossGradient(loss_function: LossFunction, allocator: Allocato
     if (predicted.rows != target.rows or predicted.cols != target.cols) {
         return error.DimensionMismatch;
     }
+    if (predicted.rows == 0) return error.EmptyDataset;
+    if (!predicted.backend.sameInstance(target.backend)) return error.BackendMismatch;
 
     const n = @as(f64, @floatFromInt(predicted.rows));
 
@@ -536,13 +541,13 @@ const BackendLayerSnapshot = union(LayerType) {
 /// or training the source `Network`.
 pub const BackendNetwork = struct {
     allocator: Allocator,
-    backend_type: backend_mod.BackendType,
+    backend: BackendInstance,
     layers: ArrayList(BackendLayerSnapshot),
 
     pub fn init(allocator: Allocator, source: Network, backend_instance: anytype) !BackendNetwork {
         var snapshot = BackendNetwork{
             .allocator = allocator,
-            .backend_type = backend_instance.getBackendType(),
+            .backend = backend_instance,
             .layers = .empty,
         };
         errdefer snapshot.deinit();
@@ -569,7 +574,7 @@ pub const BackendNetwork = struct {
         if (self.layers.items.len == 0) {
             return error.EmptyNetwork;
         }
-        if (input.backend.getBackendType() != self.backend_type) {
+        if (!self.backend.sameInstance(input.backend)) {
             return error.BackendMismatch;
         }
 
@@ -1048,6 +1053,20 @@ const BackendTrainingLayer = union(LayerType) {
         }
     }
 
+    fn getInputSize(self: BackendTrainingLayer) usize {
+        return switch (self) {
+            .Standard => |layer| layer.weights.rows,
+            .Gated => |layer| layer.linear_weights.rows,
+        };
+    }
+
+    fn getOutputSize(self: BackendTrainingLayer) usize {
+        return switch (self) {
+            .Standard => |layer| layer.weights.cols,
+            .Gated => |layer| layer.linear_weights.cols,
+        };
+    }
+
     fn forwardInference(self: BackendTrainingLayer, input: *const BackendMatrix, allocator: Allocator) !*BackendMatrix {
         return switch (self) {
             .Standard => |layer| layer.forwardInference(input, allocator),
@@ -1096,7 +1115,7 @@ const BackendTrainingLayer = union(LayerType) {
 /// `Network` only when `syncToNetwork` is called.
 pub const BackendTrainer = struct {
     allocator: Allocator,
-    backend_type: backend_mod.BackendType,
+    backend: BackendInstance,
     learning_rate: f64,
     optimizer: BackendOptimizerConfig,
     loss_function: LossFunction,
@@ -1116,7 +1135,7 @@ pub const BackendTrainer = struct {
 
         var trainer = BackendTrainer{
             .allocator = allocator,
-            .backend_type = backend_instance.getBackendType(),
+            .backend = backend_instance,
             .learning_rate = source.learning_rate,
             .optimizer = optimizer,
             .loss_function = source.loss_function,
@@ -1152,8 +1171,21 @@ pub const BackendTrainer = struct {
         if (self.layers.items.len == 0) {
             return error.EmptyNetwork;
         }
-        if (input.backend.getBackendType() != self.backend_type) {
-            return error.BackendMismatch;
+        if (!self.backend.sameInstance(input.backend)) return error.BackendMismatch;
+        if (input.rows == 0) return error.EmptyDataset;
+        if (input.cols != self.layers.items[0].getInputSize()) return error.InvalidInputDimensions;
+    }
+
+    fn checkTrainingBatch(
+        self: BackendTrainer,
+        inputs: *const BackendMatrix,
+        targets: *const BackendMatrix,
+    ) !void {
+        try self.checkInput(inputs);
+        if (!self.backend.sameInstance(targets.backend)) return error.BackendMismatch;
+        if (inputs.rows != targets.rows) return error.DimensionMismatch;
+        if (targets.cols != self.layers.items[self.layers.items.len - 1].getOutputSize()) {
+            return error.InvalidTargetDimensions;
         }
     }
 
@@ -1230,6 +1262,7 @@ pub const BackendTrainer = struct {
     }
 
     pub fn trainBatch(self: *BackendTrainer, inputs: *const BackendMatrix, targets: *const BackendMatrix) !f64 {
+        try self.checkTrainingBatch(inputs, targets);
         try inputs.backend.beginBatch();
         var batch_active = true;
         errdefer if (batch_active) inputs.backend.endBatch() catch {};
@@ -1300,6 +1333,47 @@ pub const Network = struct {
         if (self.layers.items[self.layers.items.len - 1].getOutputSize() != input_size) {
             return error.InvalidLayerTopology;
         }
+    }
+
+    fn validateTrainingDimensions(
+        self: Network,
+        input_rows: usize,
+        input_cols: usize,
+        target_rows: usize,
+        target_cols: usize,
+    ) !void {
+        if (self.layers.items.len == 0) return error.EmptyNetwork;
+        if (input_rows == 0 or target_rows == 0) return error.EmptyDataset;
+        if (input_rows != target_rows) return error.DimensionMismatch;
+        if (input_cols != self.layers.items[0].getInputSize()) {
+            return error.InvalidInputDimensions;
+        }
+        if (target_cols != self.layers.items[self.layers.items.len - 1].getOutputSize()) {
+            return error.InvalidTargetDimensions;
+        }
+    }
+
+    fn validateTrainingMatrices(self: Network, inputs: Matrix, targets: Matrix) !void {
+        return self.validateTrainingDimensions(
+            inputs.rows,
+            inputs.cols,
+            targets.rows,
+            targets.cols,
+        );
+    }
+
+    fn validateBackendTrainingMatrices(
+        self: Network,
+        inputs: *const BackendMatrix,
+        targets: *const BackendMatrix,
+    ) !void {
+        try self.validateTrainingDimensions(
+            inputs.rows,
+            inputs.cols,
+            targets.rows,
+            targets.cols,
+        );
+        if (!inputs.backend.sameInstance(targets.backend)) return error.BackendMismatch;
     }
 
     /// Adds a standard fully connected layer to the network
@@ -1469,6 +1543,7 @@ pub const Network = struct {
         if (predicted.rows != target.rows or predicted.cols != target.cols) {
             return error.DimensionMismatch;
         }
+        if (predicted.rows == 0) return error.EmptyDataset;
 
         var total_loss: f64 = 0.0;
         const n = @as(f64, @floatFromInt(predicted.rows));
@@ -1536,6 +1611,7 @@ pub const Network = struct {
         if (predicted.rows != target.rows or predicted.cols != target.cols) {
             return error.DimensionMismatch;
         }
+        if (predicted.rows == 0) return error.EmptyDataset;
 
         var gradient = try Matrix.init(self.allocator, predicted.rows, predicted.cols);
         const n = @as(f64, @floatFromInt(predicted.rows));
@@ -1656,6 +1732,7 @@ pub const Network = struct {
 
     /// Train the network on a single batch of data
     pub fn trainBatch(self: *Network, inputs: Matrix, targets: Matrix) !f64 {
+        try self.validateTrainingMatrices(inputs, targets);
         // Forward pass
         var predictions = try self.forward(inputs);
         defer predictions.deinit();
@@ -1671,6 +1748,7 @@ pub const Network = struct {
 
     /// Train the network on a single backend-aware batch of data.
     pub fn trainBatchBackend(self: *Network, inputs: *const BackendMatrix, targets: *const BackendMatrix) !f64 {
+        try self.validateBackendTrainingMatrices(inputs, targets);
         try inputs.backend.beginBatch();
         var batch_active = true;
         errdefer if (batch_active) inputs.backend.endBatch() catch {};
@@ -1689,12 +1767,11 @@ pub const Network = struct {
 
     /// Train the network for a specified number of epochs
     pub fn train(self: *Network, inputs: Matrix, targets: Matrix, epochs: usize, batch_size: usize) ![]f64 {
-        if (inputs.rows != targets.rows) {
-            return error.DimensionMismatch;
-        }
+        if (batch_size == 0) return error.InvalidBatchSize;
+        try self.validateTrainingMatrices(inputs, targets);
 
         const num_samples = inputs.rows;
-        const num_batches = (num_samples + batch_size - 1) / batch_size; // Ceiling division
+        const num_batches = try std.math.divCeil(usize, num_samples, batch_size);
 
         // Allocate array to store loss history
         var loss_history = try self.allocator.alloc(f64, epochs);
@@ -1718,7 +1795,7 @@ pub const Network = struct {
             // Process each batch
             for (0..num_batches) |batch| {
                 const start_idx = batch * batch_size;
-                const end_idx = @min(start_idx + batch_size, num_samples);
+                const end_idx = start_idx + @min(batch_size, num_samples - start_idx);
                 const current_batch_size = end_idx - start_idx;
 
                 // Create batch inputs and targets
@@ -1753,12 +1830,11 @@ pub const Network = struct {
 
     /// Train the network using backend-aware matrices for mini-batch work.
     pub fn trainBackend(self: *Network, inputs: *const BackendMatrix, targets: *const BackendMatrix, epochs: usize, batch_size: usize) ![]f64 {
-        if (inputs.rows != targets.rows) {
-            return error.DimensionMismatch;
-        }
+        if (batch_size == 0) return error.InvalidBatchSize;
+        try self.validateBackendTrainingMatrices(inputs, targets);
 
         const num_samples = inputs.rows;
-        const num_batches = (num_samples + batch_size - 1) / batch_size;
+        const num_batches = try std.math.divCeil(usize, num_samples, batch_size);
 
         var loss_history = try self.allocator.alloc(f64, epochs);
         errdefer self.allocator.free(loss_history);
@@ -1778,7 +1854,7 @@ pub const Network = struct {
 
             for (0..num_batches) |batch| {
                 const start_idx = batch * batch_size;
-                const end_idx = @min(start_idx + batch_size, num_samples);
+                const end_idx = start_idx + @min(batch_size, num_samples - start_idx);
                 const current_batch_size = end_idx - start_idx;
 
                 const batch_inputs = try BackendMatrix.init(inputs.backend, self.allocator, current_batch_size, inputs.cols);
@@ -2784,6 +2860,89 @@ test "backpropagation and training" {
         const value = try predictions.get(i, 0);
         try testing.expect(value >= 0.0 and value <= 1.0);
     }
+}
+
+test "training validates dataset and batch contracts" {
+    const allocator = testing.allocator;
+    var network = Network.init(allocator, 0.05, .MeanSquaredError);
+    defer network.deinit();
+    try network.addLayer(2, 1, Activation.linear, Activation.linear_derivative);
+
+    var inputs = try Matrix.init(allocator, 3, 2);
+    defer inputs.deinit();
+    var targets = try Matrix.init(allocator, 3, 1);
+    defer targets.deinit();
+    var empty_inputs = try Matrix.init(allocator, 0, 2);
+    defer empty_inputs.deinit();
+    var empty_targets = try Matrix.init(allocator, 0, 1);
+    defer empty_targets.deinit();
+    var short_targets = try Matrix.init(allocator, 2, 1);
+    defer short_targets.deinit();
+    var wide_inputs = try Matrix.init(allocator, 3, 3);
+    defer wide_inputs.deinit();
+    var wide_targets = try Matrix.init(allocator, 3, 2);
+    defer wide_targets.deinit();
+
+    try testing.expectError(error.InvalidBatchSize, network.train(inputs, targets, 1, 0));
+    try testing.expectError(error.EmptyDataset, network.train(empty_inputs, empty_targets, 1, 1));
+    try testing.expectError(error.DimensionMismatch, network.trainBatch(inputs, short_targets));
+    try testing.expectError(error.InvalidInputDimensions, network.trainBatch(wide_inputs, targets));
+    try testing.expectError(error.InvalidTargetDimensions, network.trainBatch(inputs, wide_targets));
+
+    const no_epochs = try network.train(inputs, targets, 0, 2);
+    defer allocator.free(no_epochs);
+    try testing.expectEqual(@as(usize, 0), no_epochs.len);
+
+    const partial_batch = try network.train(inputs, targets, 1, 2);
+    defer allocator.free(partial_batch);
+    try testing.expectEqual(@as(usize, 1), partial_batch.len);
+    try testing.expect(std.math.isFinite(partial_batch[0]));
+}
+
+test "backend training requires one exact backend instance" {
+    const allocator = testing.allocator;
+    var network = Network.init(allocator, 0.05, .MeanSquaredError);
+    defer network.deinit();
+    try network.addLayer(2, 1, Activation.linear, Activation.linear_derivative);
+
+    var inputs = try Matrix.init(allocator, 2, 2);
+    defer inputs.deinit();
+    var targets = try Matrix.init(allocator, 2, 1);
+    defer targets.deinit();
+    var first_backend = try backend_mod.createBackend(allocator, .CPU);
+    defer first_backend.deinit();
+    var second_backend = try backend_mod.createBackend(allocator, .CPU);
+    defer second_backend.deinit();
+    const backend_inputs = try BackendMatrix.fromMatrix(first_backend, inputs, allocator);
+    defer backend_inputs.deinit();
+    const local_targets = try BackendMatrix.fromMatrix(first_backend, targets, allocator);
+    defer local_targets.deinit();
+    const foreign_targets = try BackendMatrix.fromMatrix(second_backend, targets, allocator);
+    defer foreign_targets.deinit();
+
+    try testing.expectError(
+        error.BackendMismatch,
+        network.trainBatchBackend(backend_inputs, foreign_targets),
+    );
+    try testing.expectError(
+        error.BackendMismatch,
+        network.trainBackend(backend_inputs, foreign_targets, 1, 1),
+    );
+    try testing.expectError(
+        error.InvalidBatchSize,
+        network.trainBackend(backend_inputs, local_targets, 1, 0),
+    );
+
+    const no_epochs = try network.trainBackend(backend_inputs, local_targets, 0, 1);
+    defer allocator.free(no_epochs);
+    try testing.expectEqual(@as(usize, 0), no_epochs.len);
+
+    var trainer = try network.backendTrainer(first_backend);
+    defer trainer.deinit();
+    try testing.expectError(
+        error.BackendMismatch,
+        trainer.trainBatch(backend_inputs, foreign_targets),
+    );
 }
 
 test "softmax cross entropy training step reduces loss" {
