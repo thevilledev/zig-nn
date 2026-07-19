@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"nnctl/internal/cloud/digitalocean"
 	"nnctl/internal/cloud/verda"
 	cloudworkflow "nnctl/internal/cloud/workflow"
 )
@@ -63,6 +64,9 @@ type cloudBenchmarkDeployOptions struct {
 	keepInstance          bool
 	timeout               time.Duration
 	pollInterval          time.Duration
+	marketSet             bool
+	imageSet              bool
+	backendSet            bool
 }
 
 type cloudBenchmarkClient interface {
@@ -148,6 +152,23 @@ func normalizeCloudBenchmarkDeployOptions(opts *cloudBenchmarkDeployOptions) err
 	return validateCloudBenchmarkDeployOptions(*opts)
 }
 
+func normalizeCloudBenchmarkDeployOptionsForProvider(opts *cloudBenchmarkDeployOptions, provider string) error {
+	if provider == verda.ProviderName {
+		return normalizeCloudBenchmarkDeployOptions(opts)
+	}
+	normalizeCloudBenchmarkStrings(opts)
+	if provider != digitalocean.ProviderName {
+		return fmt.Errorf("cloud provider %q does not implement benchmark option validation", provider)
+	}
+	if !opts.marketSet {
+		opts.Market = digitalocean.MarketOnDemand
+	}
+	if !opts.imageSet {
+		opts.Image = ""
+	}
+	return validateDigitalOceanCloudBenchmarkOptions(*opts)
+}
+
 func normalizeCloudBenchmarkStrings(opts *cloudBenchmarkDeployOptions) {
 	opts.baseURL = strings.TrimSpace(opts.baseURL)
 	opts.InstanceType = strings.TrimSpace(opts.InstanceType)
@@ -201,6 +222,45 @@ func validateCloudBenchmarkSelection(opts cloudBenchmarkDeployOptions) error {
 func validateCloudBenchmarkTools(opts cloudBenchmarkDeployOptions) error {
 	if !allConfigured(opts.packerDir, opts.packer, opts.packerInstanceType) {
 		return fmt.Errorf("packer directory, executable, and instance type must be configured")
+	}
+	if opts.ref == "" {
+		return fmt.Errorf("--ref must not be empty")
+	}
+	if !allConfigured(opts.sshUser, opts.ssh, opts.rsync, opts.git, opts.tar) {
+		return fmt.Errorf("SSH user, ssh, rsync, git, and tar must be configured")
+	}
+	if err := cloudworkflow.ValidateSSHUser(opts.sshUser); err != nil {
+		return err
+	}
+	if opts.timeout <= 0 || opts.pollInterval <= 0 {
+		return fmt.Errorf("timeout and poll interval must be positive")
+	}
+	if opts.updateDocs && opts.docsPath == "" {
+		return fmt.Errorf("--docs must not be empty with --update-docs")
+	}
+	return nil
+}
+
+func validateDigitalOceanCloudBenchmarkOptions(opts cloudBenchmarkDeployOptions) error {
+	if opts.InstanceType == "" {
+		return fmt.Errorf("instance type is required")
+	}
+	if opts.LocationCode == "" {
+		return fmt.Errorf("DigitalOcean benchmark deployment requires --location-code")
+	}
+	if opts.Market != digitalocean.MarketOnDemand {
+		return fmt.Errorf("DigitalOcean benchmark market must be on-demand")
+	}
+	if opts.SourceOSVolumeID != "" || opts.SourceOSVolumeName != "" || opts.authorizedKeysFile != "" || opts.refreshPackerTemplate {
+		return fmt.Errorf("DigitalOcean benchmarks use GPU-ready images and do not accept Verda source-volume or Packer image flags")
+	}
+	if len(opts.SSHKeyIDs) == 0 {
+		return fmt.Errorf("DigitalOcean benchmark deployment requires --ssh-key-id")
+	}
+	switch opts.backend {
+	case "cuda", "rocm", "none":
+	default:
+		return fmt.Errorf("benchmark GPU backend must be cuda, rocm, or none")
 	}
 	if opts.ref == "" {
 		return fmt.Errorf("--ref must not be empty")

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	cloudcore "nnctl/internal/cloud"
+	"nnctl/internal/cloud/digitalocean"
 	"nnctl/internal/cloud/verda"
 	cloudworkflow "nnctl/internal/cloud/workflow"
 )
@@ -24,6 +25,7 @@ type cloudBenchmarkOperations struct {
 	deploy               func(context.Context, verda.Client, verda.DeployOptions) (*verda.DeployResult, error)
 	waitInstance         func(context.Context, cloudBenchmarkClient, string, time.Duration, time.Duration) (verda.Instance, error)
 	waitSSH              func(context.Context, string, []string, string, time.Duration, time.Duration) error
+	waitCommand          func(context.Context, string, []string, string, string, time.Duration, time.Duration) error
 	upload               func(context.Context, deployOptions) error
 	runSSH               func(context.Context, string, []string, string, string, io.Writer) error
 	captureSSH           func(context.Context, string, []string, string, string) ([]byte, error)
@@ -45,6 +47,7 @@ func newCloudBenchmarkOperations(a *app) cloudBenchmarkOperations {
 		deploy:              verda.Deploy,
 		waitInstance:        waitForCloudBenchmarkInstance,
 		waitSSH:             waitForCloudBenchmarkSSH,
+		waitCommand:         cloudworkflow.WaitCommand,
 		upload:              a.runDeploy,
 		runSSH:              a.runCloudBenchmarkSSH,
 		captureSSH:          a.captureCloudBenchmarkSSH,
@@ -76,7 +79,19 @@ type cloudBenchmarkRun struct {
 	benchmarkOutput []byte
 	rows            []benchmarkRow
 	metadata        cloudBenchmarkMetadata
+	strategy        cloudBenchmarkStrategy
 }
+
+type cloudBenchmarkStrategy interface {
+	prepareImage(*cloudBenchmarkRun) error
+	deploy(*cloudBenchmarkRun) error
+	wait(*cloudBenchmarkRun) error
+	metadata(*cloudBenchmarkRun) cloudBenchmarkMetadata
+	cleanup(context.Context, *cloudBenchmarkRun) error
+	resources(*cloudBenchmarkRun) string
+}
+
+type verdaCloudBenchmarkStrategy struct{}
 
 func newCloudBenchmarkRun(a *app, ctx context.Context, opts cloudBenchmarkDeployOptions) *cloudBenchmarkRun {
 	return &cloudBenchmarkRun{
@@ -96,17 +111,22 @@ func (a *app) runCloudBenchmarkDeploy(ctx context.Context, opts cloudBenchmarkDe
 	if !factory.Descriptor().Supports(cloudcore.CapabilityBenchmarkImage) {
 		return unsupportedCloudCapability(factory.Descriptor(), cloudcore.CapabilityBenchmarkImage)
 	}
-	if factory.Descriptor().Name != verda.ProviderName {
-		return fmt.Errorf("cloud provider %q does not implement benchmark deployment", factory.Descriptor().Name)
-	}
-	if err := normalizeCloudBenchmarkDeployOptions(&opts); err != nil {
+	if err := normalizeCloudBenchmarkDeployOptionsForProvider(&opts, factory.Descriptor().Name); err != nil {
 		return err
 	}
 	run := newCloudBenchmarkRun(a, ctx, opts)
+	switch factory.Descriptor().Name {
+	case verda.ProviderName:
+		run.strategy = verdaCloudBenchmarkStrategy{}
+	case digitalocean.ProviderName:
+		run.strategy = &digitalOceanCloudBenchmarkStrategy{}
+	default:
+		return fmt.Errorf("cloud provider %q does not implement benchmark deployment", factory.Descriptor().Name)
+	}
 	if err := run.prepare(); err != nil {
 		return err
 	}
-	if err := run.resolveSourceVolume(); err != nil {
+	if err := run.prepareProviderImage(); err != nil {
 		return err
 	}
 	defer func() {
@@ -131,6 +151,21 @@ func (a *app) runCloudBenchmarkDeploy(ctx context.Context, opts cloudBenchmarkDe
 		}
 	}
 	return nil
+}
+
+func (r *cloudBenchmarkRun) selectedStrategy() cloudBenchmarkStrategy {
+	if r.strategy == nil {
+		return verdaCloudBenchmarkStrategy{}
+	}
+	return r.strategy
+}
+
+func (r *cloudBenchmarkRun) prepareProviderImage() error {
+	return r.selectedStrategy().prepareImage(r)
+}
+
+func (verdaCloudBenchmarkStrategy) prepareImage(r *cloudBenchmarkRun) error {
+	return r.resolveSourceVolume()
 }
 
 func (r *cloudBenchmarkRun) prepare() error {
@@ -180,9 +215,8 @@ func (r *cloudBenchmarkRun) resolveSourceVolume() (runErr error) {
 	if err != nil {
 		return err
 	}
-	r.workflowDir, err = os.MkdirTemp("", "nnctl-cloud-benchmark-*")
-	if err != nil {
-		return fmt.Errorf("create cloud benchmark work directory: %w", err)
+	if err := r.ensureWorkflowDir(); err != nil {
+		return err
 	}
 	defer func() {
 		if runErr != nil {
@@ -212,6 +246,18 @@ func (r *cloudBenchmarkRun) resolveSourceVolume() (runErr error) {
 	return r.progress.Err()
 }
 
+func (r *cloudBenchmarkRun) ensureWorkflowDir() error {
+	if r.workflowDir != "" {
+		return nil
+	}
+	directory, err := os.MkdirTemp("", "nnctl-cloud-benchmark-*")
+	if err != nil {
+		return fmt.Errorf("create cloud benchmark work directory: %w", err)
+	}
+	r.workflowDir = directory
+	return nil
+}
+
 func (r *cloudBenchmarkRun) reportPackerTemplate(written []string) error {
 	for _, path := range written {
 		r.progress.detail("Wrote Packer file: %s", path)
@@ -223,6 +269,14 @@ func (r *cloudBenchmarkRun) reportPackerTemplate(written []string) error {
 }
 
 func (r *cloudBenchmarkRun) deployWorker() error {
+	return r.selectedStrategy().deploy(r)
+}
+
+func (verdaCloudBenchmarkStrategy) deploy(r *cloudBenchmarkRun) error {
+	return r.deployVerdaWorker()
+}
+
+func (r *cloudBenchmarkRun) deployVerdaWorker() error {
 	r.progress.phase(cloudBenchmarkPhaseDeploy, "Deploy cloud worker")
 	r.progress.detail("Instance: %s, market: %s, location: %s", r.opts.InstanceType, r.opts.Market, r.opts.LocationCode)
 	if err := r.progress.Err(); err != nil {
@@ -245,6 +299,14 @@ func (r *cloudBenchmarkRun) deployWorker() error {
 }
 
 func (r *cloudBenchmarkRun) waitForWorker() error {
+	return r.selectedStrategy().wait(r)
+}
+
+func (verdaCloudBenchmarkStrategy) wait(r *cloudBenchmarkRun) error {
+	return r.waitForVerdaWorker()
+}
+
+func (r *cloudBenchmarkRun) waitForVerdaWorker() error {
 	r.progress.phase(cloudBenchmarkPhaseReady, "Wait for worker readiness")
 	r.progress.detail("Waiting for an IP address and SSH access")
 	if err := r.progress.Err(); err != nil {
@@ -347,7 +409,7 @@ func (r *cloudBenchmarkRun) collectResults() error {
 		return err
 	}
 	r.rows = rows
-	r.metadata = r.buildMetadata()
+	r.metadata = r.selectedStrategy().metadata(r)
 	if err := r.collectRemoteMetadata(); err != nil {
 		return err
 	}
@@ -380,7 +442,7 @@ func (r *cloudBenchmarkRun) collectResults() error {
 	return r.progress.Err()
 }
 
-func (r *cloudBenchmarkRun) buildMetadata() cloudBenchmarkMetadata {
+func (verdaCloudBenchmarkStrategy) metadata(r *cloudBenchmarkRun) cloudBenchmarkMetadata {
 	pricePerHour := r.instance.PricePerHour
 	if pricePerHour == 0 && r.result.Placement != nil {
 		pricePerHour = r.result.Placement.SpotPrice
@@ -420,20 +482,28 @@ func (r *cloudBenchmarkRun) cleanupResources() error {
 	progressErr := r.progress.Err()
 	if r.opts.keepInstance {
 		r.progress.detail("Skipped because --keep-instance was set")
-		r.progress.detail("Worker: %s, cloned volume: %s", r.instanceID, r.cloneID)
+		r.progress.detail("Retained: %s", r.selectedStrategy().resources(r))
 		return errors.Join(progressErr, r.progress.Err())
 	}
-	r.progress.detail("Destroying worker %s and cloned volume %s", r.instanceID, r.cloneID)
+	r.progress.detail("Destroying %s", r.selectedStrategy().resources(r))
 	progressErr = errors.Join(progressErr, r.progress.Err())
 	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(r.ctx), 5*time.Minute)
 	defer cancel()
-	err := r.ops.cleanup(cleanupCtx, r.client, r.instanceID, r.cloneID, r.sourceVolume.ID)
+	err := r.selectedStrategy().cleanup(cleanupCtx, r)
 	if err != nil {
 		r.progress.detail("Cleanup failed: %v", err)
 		return errors.Join(progressErr, err, r.progress.Err())
 	}
 	r.progress.detail("Cleanup complete")
 	return errors.Join(progressErr, r.progress.Err())
+}
+
+func (verdaCloudBenchmarkStrategy) cleanup(ctx context.Context, r *cloudBenchmarkRun) error {
+	return r.ops.cleanup(ctx, r.client, r.instanceID, r.cloneID, r.sourceVolume.ID)
+}
+
+func (verdaCloudBenchmarkStrategy) resources(r *cloudBenchmarkRun) string {
+	return fmt.Sprintf("worker %s and cloned volume %s", r.instanceID, r.cloneID)
 }
 
 func (r *cloudBenchmarkRun) removeWorkflowDir() error {

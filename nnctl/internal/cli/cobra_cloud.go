@@ -39,36 +39,39 @@ func (a *app) newCloudBenchmarkDeployCommand(withRepo repoRunner, selection *clo
 		Use:     "benchmark-deploy",
 		Aliases: []string{"benchmark"},
 		Short:   "Provision a worker and capture a cloud benchmark",
-		Long: `Runs the complete Verda benchmark workflow with one command. It writes the
-embedded Packer template, reuses a matching golden OS volume or builds one when
-needed, clones the volume, deploys a spot or on-demand worker, waits for SSH,
-deploys a clean git snapshot, runs the benchmark, and saves a local CSV.
+		Long: `Runs the complete cloud benchmark workflow with one command. Verda reuses
+or builds a golden OS volume; DigitalOcean selects an accelerator-compatible
+GPU-ready image. The command deploys a worker, waits for SSH and its accelerator
+runtime, uploads a clean git snapshot, runs the benchmark, and saves a local CSV.
 
-The worker and cloned OS volume are destroyed after the CSV is captured, even
-when a later workflow step fails. The golden source volume is always retained.
-Use --keep-instance to retain the worker and clone. Packer is only required when
-no reusable source OS volume is available.`,
+Provider-owned temporary resources are destroyed after capture, including on
+later workflow failures. Use --keep-instance to retain the worker. Packer and
+source-volume flags apply only to the Verda strategy.`,
 		Example: `  nnctl cloud benchmark-deploy --instance-type 1A100.22V --ssh-key-id ssh_key_id
   nnctl cloud benchmark-deploy --instance-type 1H200.141S.44V --market on-demand --location-code FIN-02 --ssh-key-id ssh_key_id
+  nnctl cloud benchmark-deploy --provider digitalocean --instance-type gpu-mi300x1-192gb --location-code tor1 --ssh-key-id 12345
   nnctl cloud benchmark-deploy --instance-type 1A100.22V --filter gpu_peak --output a100-peak.csv --update-docs
   nnctl cloud benchmark --instance-type 1A100.22V --source-os-volume-id volume_id --skip-smoke`,
 		Args: cobra.NoArgs,
 		RunE: withRepo(func(ctx context.Context, cmd *cobra.Command, args []string) error {
 			opts.provider = selection.name
+			opts.marketSet = cmd.Flags().Changed("market")
+			opts.imageSet = cmd.Flags().Changed("image")
+			opts.backendSet = cmd.Flags().Changed("gpu")
 			return a.runCloudBenchmarkDeploy(ctx, opts)
 		}),
 	}
-	cmd.Flags().StringVar(&opts.InstanceType, "instance-type", opts.InstanceType, "Verda benchmark worker instance type")
+	cmd.Flags().StringVar(&opts.InstanceType, "instance-type", opts.InstanceType, "provider benchmark worker offering or instance type")
 	cmd.Flags().StringVar(&opts.SourceOSVolumeID, "source-os-volume-id", opts.SourceOSVolumeID, "existing golden source OS volume ID; skips name lookup and Packer")
 	cmd.Flags().StringVar(&opts.SourceOSVolumeName, "source-os-volume-name", opts.SourceOSVolumeName, "golden source OS volume name; defaults to "+defaultCloudBenchmarkSourceName)
 	cmd.Flags().StringVar(&opts.SourceOSVolumeName, "source-volume-name", opts.SourceOSVolumeName, "alias for --source-os-volume-name")
 	cmd.Flags().StringVar(&opts.Market, "market", opts.Market, "worker market: spot or on-demand")
-	cmd.Flags().StringVar(&opts.LocationCode, "location-code", opts.LocationCode, "Verda location; defaults to the cheapest available location with a reusable source volume")
-	cmd.Flags().StringVar(&opts.Image, "image", opts.Image, "base Verda image used only when Packer must build the golden volume")
+	cmd.Flags().StringVar(&opts.LocationCode, "location-code", opts.LocationCode, "provider location; Verda can infer it from a reusable source volume")
+	cmd.Flags().StringVar(&opts.Image, "image", opts.Image, "provider image override; otherwise selects an accelerator-compatible image")
 	cmd.Flags().StringVar(&opts.Hostname, "hostname", opts.Hostname, "benchmark worker hostname")
 	cmd.Flags().StringVar(&opts.Description, "description", opts.Description, "benchmark worker description")
-	cmd.Flags().StringArrayVar(&opts.SSHKeyIDs, "ssh-key-id", opts.SSHKeyIDs, "Verda SSH key ID to attach and bake into a new golden volume (repeatable)")
-	cmd.Flags().StringVar(&opts.baseURL, "base-url", opts.baseURL, "Verda API base URL")
+	cmd.Flags().StringArrayVar(&opts.SSHKeyIDs, "ssh-key-id", opts.SSHKeyIDs, "provider SSH key ID to attach (repeatable)")
+	cmd.Flags().StringVar(&opts.baseURL, "base-url", opts.baseURL, "cloud provider API base URL")
 	cmd.Flags().StringVar(&opts.packerDir, "packer-dir", opts.packerDir, "directory for the generated Packer template")
 	cmd.Flags().StringVar(&opts.packer, "packer", opts.packer, "Packer executable")
 	cmd.Flags().StringVar(&opts.packerInstanceType, "packer-instance-type", opts.packerInstanceType, "instance type used to build a missing golden volume")

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"nnctl/internal/cloud/digitalocean"
 	"nnctl/internal/cloud/verda"
 )
 
@@ -53,6 +54,28 @@ func TestNormalizeCloudBenchmarkDeployOptionsRejectsUnsafeSSHUser(t *testing.T) 
 	err := normalizeCloudBenchmarkDeployOptions(&opts)
 	if err == nil || !strings.Contains(err.Error(), "SSH user") {
 		t.Fatalf("normalizeCloudBenchmarkDeployOptions() error = %v", err)
+	}
+}
+
+func TestNormalizeDigitalOceanCloudBenchmarkOptions(t *testing.T) {
+	opts := defaultCloudBenchmarkDeployOptions()
+	opts.provider = digitalocean.ProviderName
+	opts.InstanceType = "gpu-mi300x1-192gb"
+	opts.LocationCode = "tor1"
+	opts.SSHKeyIDs = []string{"17"}
+	if err := normalizeCloudBenchmarkDeployOptionsForProvider(&opts, digitalocean.ProviderName); err != nil {
+		t.Fatal(err)
+	}
+	if opts.Market != digitalocean.MarketOnDemand || opts.Image != "" || opts.SourceOSVolumeName != "" {
+		t.Fatalf("DigitalOcean options = %#v", opts)
+	}
+
+	missingLocation := defaultCloudBenchmarkDeployOptions()
+	missingLocation.InstanceType = "gpu-mi300x1-192gb"
+	missingLocation.SSHKeyIDs = []string{"17"}
+	err := normalizeCloudBenchmarkDeployOptionsForProvider(&missingLocation, digitalocean.ProviderName)
+	if err == nil || !strings.Contains(err.Error(), "--location-code") {
+		t.Fatalf("missing location error = %v", err)
 	}
 }
 
@@ -179,6 +202,14 @@ func TestRemoteBenchmarkCommandQuotesRemoteInputs(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("remote command missing %q:\n%s", want, got)
 		}
+	}
+}
+
+func TestMergeCloudBenchmarkRemoteMetadataReadsAMD(t *testing.T) {
+	metadata := cloudBenchmarkMetadata{}
+	mergeCloudBenchmarkRemoteMetadata(&metadata, []byte("zig=0.16.0\namd=AMD Instinct MI300X\namd_driver=6.12.12\n"))
+	if metadata.ZigVersion != "0.16.0" || metadata.GPU != "AMD Instinct MI300X" || metadata.Driver != "6.12.12" {
+		t.Fatalf("metadata = %#v", metadata)
 	}
 }
 

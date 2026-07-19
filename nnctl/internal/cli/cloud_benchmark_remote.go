@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"nnctl/internal/cloud/digitalocean"
 	"nnctl/internal/cloud/verda"
 	cloudworkflow "nnctl/internal/cloud/workflow"
 	"nnctl/internal/process"
@@ -50,7 +51,9 @@ func remoteBenchmarkCommand(remoteDir, backend, filter string, quick bool) strin
 
 func remoteBenchmarkMetadataCommand() string {
 	return "if command -v zig >/dev/null 2>&1; then printf 'zig='; zig version; fi; " +
-		"if command -v nvidia-smi >/dev/null 2>&1; then nvidia-smi --query-gpu=name,memory.total,compute_cap,driver_version --format=csv,noheader,nounits | sed 's/^/nvidia=/'; fi"
+		"if command -v nvidia-smi >/dev/null 2>&1; then nvidia-smi --query-gpu=name,memory.total,compute_cap,driver_version --format=csv,noheader,nounits | sed 's/^/nvidia=/'; fi; " +
+		"if command -v rocminfo >/dev/null 2>&1; then rocminfo 2>/dev/null | sed -n 's/^[[:space:]]*Marketing Name:[[:space:]]*/amd=/p' | head -n 1; fi; " +
+		"if [ -r /sys/module/amdgpu/version ]; then printf 'amd_driver='; cat /sys/module/amdgpu/version; fi"
 }
 
 func (a *app) runCloudBenchmarkSSH(ctx context.Context, ssh string, baseArgs []string, host, remoteCommand string, stdout io.Writer) error {
@@ -167,6 +170,14 @@ func mergeCloudBenchmarkRemoteMetadata(metadata *cloudBenchmarkMetadata, output 
 			metadata.ZigVersion = strings.TrimSpace(strings.TrimPrefix(line, "zig="))
 			continue
 		}
+		if strings.HasPrefix(line, "amd=") {
+			metadata.GPU = strings.TrimSpace(strings.TrimPrefix(line, "amd="))
+			continue
+		}
+		if strings.HasPrefix(line, "amd_driver=") {
+			metadata.Driver = strings.TrimSpace(strings.TrimPrefix(line, "amd_driver="))
+			continue
+		}
 		if !strings.HasPrefix(line, "nvidia=") {
 			continue
 		}
@@ -228,8 +239,10 @@ func renderCloudBenchmarkDocsBlock(startMarker, endMarker, relativeCSV string, m
 	fmt.Fprintln(&out, startMarker)
 	title := firstNonEmpty(metadata.GPU, metadata.InstanceType)
 	fmt.Fprintf(&out, "### %s — %s\n\n", markdownCell(title), metadata.Timestamp.UTC().Format("2006-01-02"))
-	fmt.Fprintf(&out, "Verda `%s` `%s` run in `%s` from commit `%s`; raw [CSV](%s).\n\n",
-		markdownCell(metadata.Market), markdownCell(metadata.InstanceType), markdownCell(metadata.Location), markdownCell(metadata.Commit), relativeCSV)
+	fmt.Fprintf(&out, "%s `%s` `%s` run in `%s` from commit `%s`; raw [CSV](%s).\n\n",
+		markdownCell(cloudBenchmarkProviderDisplayName(metadata.Provider)), markdownCell(metadata.Market),
+		markdownCell(metadata.InstanceType), markdownCell(metadata.Location),
+		markdownCell(metadata.Commit), relativeCSV)
 	fmt.Fprintln(&out, "| suite | case | backend | average | status |")
 	fmt.Fprintln(&out, "| --- | --- | --- | ---: | --- |")
 	for i := range rows {
@@ -242,6 +255,17 @@ func renderCloudBenchmarkDocsBlock(startMarker, endMarker, relativeCSV string, m
 	}
 	fmt.Fprint(&out, endMarker)
 	return out.String()
+}
+
+func cloudBenchmarkProviderDisplayName(provider string) string {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case verda.ProviderName:
+		return "Verda"
+	case digitalocean.ProviderName:
+		return "DigitalOcean"
+	default:
+		return firstNonEmpty(provider, "Cloud")
+	}
 }
 
 func defaultCloudBenchmarkOutputPath(repoRoot string, metadata cloudBenchmarkMetadata) string {
