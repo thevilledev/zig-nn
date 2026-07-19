@@ -312,6 +312,14 @@ pub const ExecutionContext = struct {
         return .{ .device = device };
     }
 
+    fn requireOwned(self: ExecutionContext, tensors: []const Tensor) !void {
+        for (tensors) |value| {
+            if (!self.device.instance.sameInstance(value.matrix.backend)) {
+                return error.BackendMismatch;
+            }
+        }
+    }
+
     pub fn createTensor(self: *ExecutionContext, shape: []const usize) !Tensor {
         return self.device.createTensor(shape);
     }
@@ -330,15 +338,16 @@ pub const ExecutionContext = struct {
     }
 
     pub fn readback(self: *ExecutionContext, tensor: Tensor, values: []f32) !void {
+        try self.requireOwned(&.{tensor});
         try tensor.readF32(values);
         self.stats.readbacks += 1;
         self.stats.readback_bytes += values.len * @sizeOf(f32);
     }
 
     pub fn matmul(self: *ExecutionContext, a: Tensor, b: Tensor) !Tensor {
+        try self.requireOwned(&.{ a, b });
         if (a.shape.rank != 2 or b.shape.rank != 2) return error.InvalidRank;
         if (a.shape.dims[1] != b.shape.dims[0]) return error.DimensionMismatch;
-        if (a.backendType() != b.backendType()) return error.BackendMismatch;
 
         const matrix = try a.matrix.dotProduct(b.matrix, self.device.allocator);
         self.stats.kernels += 1;
@@ -353,9 +362,9 @@ pub const ExecutionContext = struct {
     /// multiplication. Transpose flags affect only each logical matrix, not
     /// the batch dimension.
     pub fn batchedMatmul(self: *ExecutionContext, a: Tensor, b: Tensor, transpose_a: bool, transpose_b: bool) !Tensor {
+        try self.requireOwned(&.{ a, b });
         if (a.shape.rank != 3 or b.shape.rank != 3) return error.InvalidRank;
         if (a.shape.dims[0] != b.shape.dims[0]) return error.DimensionMismatch;
-        if (a.backendType() != b.backendType()) return error.BackendMismatch;
         const a_rows = a.shape.dims[1];
         const a_cols = a.shape.dims[2];
         const b_rows = b.shape.dims[1];
@@ -388,6 +397,7 @@ pub const ExecutionContext = struct {
     /// Splits token-major channels into head-major batches:
     /// `[batch, tokens, heads, width] -> [batch * heads, tokens, width]`.
     pub fn splitHeads(self: *ExecutionContext, input: Tensor) !Tensor {
+        try self.requireOwned(&.{input});
         if (input.shape.rank != 4) return error.InvalidRank;
         const batch = input.shape.dims[0];
         const tokens = input.shape.dims[1];
@@ -401,6 +411,7 @@ pub const ExecutionContext = struct {
     /// Merges head-major batches back into token-major channels:
     /// `[batch * heads, tokens, width] -> [batch, tokens, heads, width]`.
     pub fn mergeHeads(self: *ExecutionContext, input: Tensor, batch: usize, heads: usize) !Tensor {
+        try self.requireOwned(&.{input});
         if (input.shape.rank != 3 or batch == 0 or heads == 0 or
             !dimension_utils.matches(input.shape.dims[0], &.{ batch, heads }))
         {
@@ -414,8 +425,8 @@ pub const ExecutionContext = struct {
     }
 
     pub fn add(self: *ExecutionContext, a: Tensor, b: Tensor) !Tensor {
+        try self.requireOwned(&.{ a, b });
         if (!a.shape.eql(b.shape)) return error.DimensionMismatch;
-        if (a.backendType() != b.backendType()) return error.BackendMismatch;
 
         const matrix = try a.matrix.add(b.matrix, self.device.allocator);
         self.stats.kernels += 1;
@@ -427,8 +438,8 @@ pub const ExecutionContext = struct {
     }
 
     pub fn subtract(self: *ExecutionContext, a: Tensor, b: Tensor) !Tensor {
+        try self.requireOwned(&.{ a, b });
         if (!a.shape.eql(b.shape)) return error.DimensionMismatch;
-        if (a.backendType() != b.backendType()) return error.BackendMismatch;
 
         const matrix = try a.matrix.subtract(b.matrix, self.device.allocator);
         self.stats.kernels += 1;
@@ -440,8 +451,8 @@ pub const ExecutionContext = struct {
     }
 
     pub fn multiply(self: *ExecutionContext, a: Tensor, b: Tensor) !Tensor {
+        try self.requireOwned(&.{ a, b });
         if (!a.shape.eql(b.shape)) return error.DimensionMismatch;
-        if (a.backendType() != b.backendType()) return error.BackendMismatch;
 
         const matrix = try a.matrix.elementWiseMultiply(b.matrix, self.device.allocator);
         self.stats.kernels += 1;
@@ -453,6 +464,7 @@ pub const ExecutionContext = struct {
     }
 
     pub fn scale(self: *ExecutionContext, input: Tensor, scalar: f32) !Tensor {
+        try self.requireOwned(&.{input});
         const matrix = try input.matrix.scale(scalar, self.device.allocator);
         self.stats.kernels += 1;
         return .{
@@ -463,6 +475,7 @@ pub const ExecutionContext = struct {
     }
 
     pub fn transpose(self: *ExecutionContext, input: Tensor) !Tensor {
+        try self.requireOwned(&.{input});
         if (input.shape.rank != 2) return error.InvalidRank;
         const matrix = try input.matrix.transpose(self.device.allocator);
         self.stats.kernels += 1;
@@ -474,6 +487,7 @@ pub const ExecutionContext = struct {
     }
 
     pub fn sumRows(self: *ExecutionContext, input: Tensor) !Tensor {
+        try self.requireOwned(&.{input});
         if (input.shape.rank != 2) return error.InvalidRank;
         const matrix = try input.matrix.sumRows(self.device.allocator);
         self.stats.kernels += 1;
@@ -508,6 +522,7 @@ pub const ExecutionContext = struct {
         total_squares: Tensor,
         config: OptimizerUpdateConfig,
     ) !void {
+        try self.requireOwned(&.{ parameter.*, gradient, first_moment.*, second_moment.*, total_squares });
         if (!parameter.shape.eql(gradient.shape) or
             !parameter.shape.eql(first_moment.shape) or
             !parameter.shape.eql(second_moment.shape) or
@@ -515,13 +530,6 @@ pub const ExecutionContext = struct {
             total_squares.shape.dims[1] != 1)
         {
             return error.DimensionMismatch;
-        }
-        if (parameter.backendType() != gradient.backendType() or
-            parameter.backendType() != first_moment.backendType() or
-            parameter.backendType() != second_moment.backendType() or
-            parameter.backendType() != total_squares.backendType())
-        {
-            return error.BackendMismatch;
         }
         try parameter.matrix.optimizerUpdate(
             gradient.matrix,
@@ -534,9 +542,9 @@ pub const ExecutionContext = struct {
     }
 
     pub fn addRowBias(self: *ExecutionContext, input: Tensor, bias: Tensor) !Tensor {
+        try self.requireOwned(&.{ input, bias });
         if (input.shape.rank != 2 or bias.shape.rank != 2) return error.InvalidRank;
         if (bias.shape.dims[0] != 1 or bias.shape.dims[1] != input.shape.dims[1]) return error.DimensionMismatch;
-        if (input.backendType() != bias.backendType()) return error.BackendMismatch;
 
         const matrix = try input.matrix.addRowBias(bias.matrix, self.device.allocator);
         self.stats.kernels += 1;
@@ -554,6 +562,7 @@ pub const ExecutionContext = struct {
     }
 
     pub fn activate(self: *ExecutionContext, input: Tensor, kind: ActivationKind) !Tensor {
+        try self.requireOwned(&.{input});
         const function = activationFunction(kind);
         const matrix = try input.matrix.applyActivation(function, self.device.allocator);
         self.stats.kernels += 1;
@@ -565,6 +574,7 @@ pub const ExecutionContext = struct {
     }
 
     pub fn activationDerivative(self: *ExecutionContext, input: Tensor, kind: ActivationKind) !Tensor {
+        try self.requireOwned(&.{input});
         const function = activationDerivativeFunction(kind);
         const matrix = try input.matrix.applyActivation(function, self.device.allocator);
         self.stats.kernels += 1;
@@ -584,14 +594,13 @@ pub const ExecutionContext = struct {
     }
 
     pub fn layerNorm(self: *ExecutionContext, input: Tensor, gamma: Tensor, beta: Tensor, epsilon: f32) !Tensor {
+        try self.requireOwned(&.{ input, gamma, beta });
         if (input.shape.rank != 2 or gamma.shape.rank != 2 or beta.shape.rank != 2) return error.InvalidRank;
         if (gamma.shape.dims[0] != 1 or beta.shape.dims[0] != 1 or
             gamma.shape.dims[1] != input.shape.dims[1] or beta.shape.dims[1] != input.shape.dims[1])
         {
             return error.DimensionMismatch;
         }
-        if (input.backendType() != gamma.backendType() or input.backendType() != beta.backendType()) return error.BackendMismatch;
-
         const matrix = try input.matrix.layerNorm(gamma.matrix, beta.matrix, epsilon, self.device.allocator);
         self.stats.kernels += 1;
         return .{
@@ -602,11 +611,11 @@ pub const ExecutionContext = struct {
     }
 
     pub fn layerNormBackward(self: *ExecutionContext, input: Tensor, gamma: Tensor, output_gradient: Tensor, epsilon: f32) !LayerNormGradients {
+        try self.requireOwned(&.{ input, gamma, output_gradient });
         if (input.shape.rank != 2 or gamma.shape.rank != 2 or output_gradient.shape.rank != 2) return error.InvalidRank;
         if (!input.shape.eql(output_gradient.shape) or gamma.shape.dims[0] != 1 or gamma.shape.dims[1] != input.shape.dims[1]) {
             return error.DimensionMismatch;
         }
-        if (input.backendType() != gamma.backendType() or input.backendType() != output_gradient.backendType()) return error.BackendMismatch;
         const gradients = try input.matrix.layerNormBackward(gamma.matrix, output_gradient.matrix, epsilon, self.device.allocator);
         self.stats.kernels += 1;
         return .{
@@ -617,14 +626,13 @@ pub const ExecutionContext = struct {
     }
 
     pub fn causalSelfAttention(self: *ExecutionContext, query: Tensor, key: Tensor, value: Tensor, heads: usize) !Tensor {
+        try self.requireOwned(&.{ query, key, value });
         if (query.shape.rank != 2 or key.shape.rank != 2 or value.shape.rank != 2) return error.InvalidRank;
         if (!query.shape.eql(key.shape) or !query.shape.eql(value.shape) or
             heads == 0 or query.shape.dims[1] % heads != 0)
         {
             return error.DimensionMismatch;
         }
-        if (query.backendType() != key.backendType() or query.backendType() != value.backendType()) return error.BackendMismatch;
-
         const matrix = try query.matrix.causalSelfAttention(key.matrix, value.matrix, heads, self.device.allocator);
         self.stats.kernels += 1;
         return .{
@@ -635,16 +643,12 @@ pub const ExecutionContext = struct {
     }
 
     pub fn causalSelfAttentionBackward(self: *ExecutionContext, query: Tensor, key: Tensor, value: Tensor, output_gradient: Tensor, heads: usize) !AttentionGradients {
+        try self.requireOwned(&.{ query, key, value, output_gradient });
         if (query.shape.rank != 2 or key.shape.rank != 2 or value.shape.rank != 2 or output_gradient.shape.rank != 2) return error.InvalidRank;
         if (!query.shape.eql(key.shape) or !query.shape.eql(value.shape) or !query.shape.eql(output_gradient.shape) or
             heads == 0 or query.shape.dims[1] % heads != 0)
         {
             return error.DimensionMismatch;
-        }
-        if (query.backendType() != key.backendType() or query.backendType() != value.backendType() or
-            query.backendType() != output_gradient.backendType())
-        {
-            return error.BackendMismatch;
         }
         const gradients = try query.matrix.causalSelfAttentionBackward(key.matrix, value.matrix, output_gradient.matrix, heads, self.device.allocator);
         self.stats.kernels += 2;
@@ -656,8 +660,8 @@ pub const ExecutionContext = struct {
     }
 
     pub fn embedding(self: *ExecutionContext, table: Tensor, indices: Tensor) !Tensor {
+        try self.requireOwned(&.{ table, indices });
         if (table.shape.rank != 2 or indices.shape.rank != 2 or indices.shape.dims[1] != 1) return error.InvalidRank;
-        if (table.backendType() != indices.backendType()) return error.BackendMismatch;
         const matrix = try table.matrix.embeddingLookup(indices.matrix, self.device.allocator);
         self.stats.kernels += 1;
         return .{
@@ -668,12 +672,12 @@ pub const ExecutionContext = struct {
     }
 
     pub fn embeddingBackward(self: *ExecutionContext, indices: Tensor, output_gradient: Tensor, vocabulary_size: usize) !Tensor {
+        try self.requireOwned(&.{ indices, output_gradient });
         if (indices.shape.rank != 2 or output_gradient.shape.rank != 2 or indices.shape.dims[1] != 1 or
             indices.shape.dims[0] != output_gradient.shape.dims[0])
         {
             return error.DimensionMismatch;
         }
-        if (indices.backendType() != output_gradient.backendType()) return error.BackendMismatch;
         const matrix = try output_gradient.matrix.embeddingGradient(indices.matrix, vocabulary_size, self.device.allocator);
         self.stats.kernels += 1;
         return .{
@@ -684,6 +688,7 @@ pub const ExecutionContext = struct {
     }
 
     pub fn cachedSelfAttention(self: *ExecutionContext, query: Tensor, key: Tensor, value: Tensor, key_cache: *Tensor, value_cache: *Tensor, position: usize, heads: usize) !Tensor {
+        try self.requireOwned(&.{ query, key, value, key_cache.*, value_cache.* });
         if (query.shape.rank != 2 or !query.shape.eql(key.shape) or !query.shape.eql(value.shape) or query.shape.dims[0] != 1 or
             key_cache.shape.rank != 2 or !key_cache.shape.eql(value_cache.shape) or key_cache.shape.dims[1] != query.shape.dims[1] or
             position >= key_cache.shape.dims[0] or heads == 0 or query.shape.dims[1] % heads != 0)
@@ -696,6 +701,7 @@ pub const ExecutionContext = struct {
     }
 
     pub fn softmax(self: *ExecutionContext, input: Tensor) !Tensor {
+        try self.requireOwned(&.{input});
         if (input.shape.rank != 2) return error.InvalidRank;
         const matrix = try input.matrix.applySoftmax(self.device.allocator);
         self.stats.kernels += 1;
@@ -709,9 +715,9 @@ pub const ExecutionContext = struct {
     /// Row-wise softmax over the final dimension. Zero mask entries receive
     /// exactly zero probability, including rows where every entry is masked.
     pub fn maskedSoftmax(self: *ExecutionContext, input: Tensor, mask: Tensor) !Tensor {
+        try self.requireOwned(&.{ input, mask });
         if (input.shape.rank < 2 or input.shape.rank > 3) return error.InvalidRank;
         if (!input.shape.eql(mask.shape)) return error.DimensionMismatch;
-        if (input.backendType() != mask.backendType()) return error.BackendMismatch;
 
         var ones = try self.createTensor(input.shape.slice());
         defer ones.deinit();
@@ -735,9 +741,9 @@ pub const ExecutionContext = struct {
     /// Jacobian-vector product for `maskedSoftmax`, evaluated entirely with
     /// device tensor operations.
     pub fn maskedSoftmaxBackward(self: *ExecutionContext, probabilities: Tensor, output_gradient: Tensor, mask: Tensor) !Tensor {
+        try self.requireOwned(&.{ probabilities, output_gradient, mask });
         if (probabilities.shape.rank < 2 or probabilities.shape.rank > 3) return error.InvalidRank;
         if (!probabilities.shape.eql(output_gradient.shape) or !probabilities.shape.eql(mask.shape)) return error.DimensionMismatch;
-        if (probabilities.backendType() != output_gradient.backendType() or probabilities.backendType() != mask.backendType()) return error.BackendMismatch;
         const cols = probabilities.shape.dims[probabilities.shape.rank - 1];
         const rows = probabilities.shape.len / cols;
         var probabilities_view = probabilities;
@@ -772,6 +778,7 @@ pub const ExecutionContext = struct {
     /// Applies inverted dropout. Supplying a seed makes the mask reproducible,
     /// which keeps learning experiments and gradient tests deterministic.
     pub fn dropout(self: *ExecutionContext, input: Tensor, probability: f32, seed: u64, training: bool) !DropoutResult {
+        try self.requireOwned(&.{input});
         if (probability < 0 or probability >= 1) return error.InvalidProbability;
         const values = try self.device.allocator.alloc(f32, input.shape.len);
         defer self.device.allocator.free(values);
@@ -799,6 +806,7 @@ pub const ExecutionContext = struct {
     /// indices are expanded once at the upload boundary; probabilities and the
     /// training gradient remain device-resident.
     pub fn maskedSparseCrossEntropy(self: *ExecutionContext, logits: Tensor, targets: []const usize, token_mask: []const f32) !MaskedSparseCrossEntropy {
+        try self.requireOwned(&.{logits});
         if (logits.shape.rank < 2 or logits.shape.rank > 3) return error.InvalidRank;
         const classes = logits.shape.dims[logits.shape.rank - 1];
         const rows = logits.shape.len / classes;
@@ -1014,6 +1022,40 @@ test "execution context tracks tensor transfers and kernels" {
     try testing.expectEqual(@as(usize, 2), context.stats.uploads);
     try testing.expectEqual(@as(usize, 1), context.stats.readbacks);
     try testing.expectEqual(@as(usize, 1), context.stats.kernels);
+}
+
+test "execution context rejects a separate backend instance" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var first_device = try Device.init(allocator, .cpu);
+    defer first_device.deinit();
+    var second_device = try Device.init(allocator, .cpu);
+    defer second_device.deinit();
+    var first_context = ExecutionContext.init(&first_device);
+    var second_context = ExecutionContext.init(&second_device);
+
+    try testing.expect(first_device.instance.sameInstance(first_device.instance));
+    try testing.expect(!first_device.instance.sameInstance(second_device.instance));
+
+    var local = try first_context.upload(&.{ 1, 2 }, &.{ 1, 2 });
+    defer local.deinit();
+    var foreign = try second_context.upload(&.{ 1, 2 }, &.{ 3, 4 });
+    defer foreign.deinit();
+
+    try testing.expectError(error.BackendMismatch, first_context.add(local, foreign));
+    try testing.expectError(error.BackendMismatch, first_context.scale(foreign, 2));
+    var values: [2]f32 = undefined;
+    try testing.expectError(error.BackendMismatch, first_context.readback(foreign, &values));
+    try testing.expectError(
+        error.BackendMismatch,
+        local.matrix.add(foreign.matrix, allocator),
+    );
+
+    var sum = try first_context.add(local, local);
+    defer sum.deinit();
+    try first_context.readback(sum, &values);
+    try testing.expectEqualSlices(f32, &.{ 2, 4 }, &values);
 }
 
 test "batched matmul supports logical transposes on every available device" {

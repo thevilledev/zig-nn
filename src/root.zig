@@ -129,6 +129,36 @@ pub const BackendInstance = union(BackendType) {
 
     // --- Mirrored Interface Methods ---
 
+    /// Returns true only when both values refer to the same concrete backend
+    /// allocation. Matching backend types are not sufficient because separate
+    /// GPU instances may own unrelated native contexts and buffers.
+    pub fn sameInstance(self: BackendInstance, other: BackendInstance) bool {
+        return switch (self) {
+            .CPU => |ptr| switch (other) {
+                .CPU => |other_ptr| ptr == other_ptr,
+                else => false,
+            },
+            .Metal => |ptr| switch (other) {
+                .Metal => |other_ptr| ptr == other_ptr,
+                else => false,
+            },
+            .CUDA => |ptr| switch (other) {
+                .CUDA => |other_ptr| ptr == other_ptr,
+                else => false,
+            },
+            .ROCm => |ptr| switch (other) {
+                .ROCm => |other_ptr| ptr == other_ptr,
+                else => false,
+            },
+        };
+    }
+
+    fn requireMatrices(self: BackendInstance, matrices: []const *const BackendMatrix) !void {
+        for (matrices) |matrix| {
+            if (!self.sameInstance(matrix.backend)) return error.BackendMismatch;
+        }
+    }
+
     fn attachBackend(self: BackendInstance, matrix: *BackendMatrix) *BackendMatrix {
         matrix.backend = self;
         return matrix;
@@ -199,6 +229,7 @@ pub const BackendInstance = union(BackendType) {
     }
 
     pub fn copyMatrix(self: BackendInstance, source: *const BackendMatrix, allocator: std.mem.Allocator) !*BackendMatrix {
+        try self.requireMatrices(&.{source});
         const matrix = try switch (self) {
             .CPU => |ptr| CPUBackend.copyMatrix(ptr, source, allocator),
             .Metal => |ptr| MetalBackend.copyMatrix(ptr, source, allocator),
@@ -254,6 +285,7 @@ pub const BackendInstance = union(BackendType) {
     }
 
     pub fn dotProduct(self: BackendInstance, a: *const BackendMatrix, b: *const BackendMatrix, allocator: std.mem.Allocator) !*BackendMatrix {
+        try self.requireMatrices(&.{ a, b });
         const matrix = try switch (self) {
             .CPU => |ptr| CPUBackend.dotProduct(ptr, a, b, allocator),
             .Metal => |ptr| MetalBackend.dotProduct(ptr, a, b, allocator),
@@ -276,6 +308,7 @@ pub const BackendInstance = union(BackendType) {
         transpose_a: bool,
         transpose_b: bool,
     ) !*BackendMatrix {
+        try self.requireMatrices(&.{ a, b });
         const matrix = try switch (self) {
             .CPU => |ptr| CPUBackend.batchedDotProduct(ptr, a, b, allocator, batch, a_rows, a_cols, b_rows, b_cols, transpose_a, transpose_b),
             .Metal => |ptr| MetalBackend.batchedDotProduct(ptr, a, b, allocator, batch, a_rows, a_cols, b_rows, b_cols, transpose_a, transpose_b),
@@ -286,6 +319,7 @@ pub const BackendInstance = union(BackendType) {
     }
 
     pub fn permuteBatchHeads(self: BackendInstance, input: *const BackendMatrix, allocator: std.mem.Allocator, batch: usize, tokens: usize, heads: usize, width: usize, split: bool) !*BackendMatrix {
+        try self.requireMatrices(&.{input});
         const matrix = try switch (self) {
             .CPU => |ptr| CPUBackend.permuteBatchHeads(ptr, input, allocator, batch, tokens, heads, width, split),
             .Metal => |ptr| MetalBackend.permuteBatchHeads(ptr, input, allocator, batch, tokens, heads, width, split),
@@ -296,6 +330,7 @@ pub const BackendInstance = union(BackendType) {
     }
 
     pub fn add(self: BackendInstance, a: *const BackendMatrix, b: *const BackendMatrix, allocator: std.mem.Allocator) !*BackendMatrix {
+        try self.requireMatrices(&.{ a, b });
         const matrix = try switch (self) {
             .CPU => |ptr| CPUBackend.add(ptr, a, b, allocator),
             .Metal => |ptr| MetalBackend.add(ptr, a, b, allocator),
@@ -306,6 +341,7 @@ pub const BackendInstance = union(BackendType) {
     }
 
     pub fn addRowBias(self: BackendInstance, matrix: *const BackendMatrix, bias: *const BackendMatrix, allocator: std.mem.Allocator) !*BackendMatrix {
+        try self.requireMatrices(&.{ matrix, bias });
         const result = try switch (self) {
             .CPU => |ptr| CPUBackend.addRowBias(ptr, matrix, bias, allocator),
             .Metal => |ptr| MetalBackend.addRowBias(ptr, matrix, bias, allocator),
@@ -316,6 +352,7 @@ pub const BackendInstance = union(BackendType) {
     }
 
     pub fn subtract(self: BackendInstance, a: *const BackendMatrix, b: *const BackendMatrix, allocator: std.mem.Allocator) !*BackendMatrix {
+        try self.requireMatrices(&.{ a, b });
         const matrix = try switch (self) {
             .CPU => |ptr| CPUBackend.subtract(ptr, a, b, allocator),
             .Metal => |ptr| MetalBackend.subtract(ptr, a, b, allocator),
@@ -326,6 +363,7 @@ pub const BackendInstance = union(BackendType) {
     }
 
     pub fn elementWiseMultiply(self: BackendInstance, a: *const BackendMatrix, b: *const BackendMatrix, allocator: std.mem.Allocator) !*BackendMatrix {
+        try self.requireMatrices(&.{ a, b });
         const matrix = try switch (self) {
             .CPU => |ptr| CPUBackend.elementWiseMultiply(ptr, a, b, allocator),
             .Metal => |ptr| MetalBackend.elementWiseMultiply(ptr, a, b, allocator),
@@ -336,6 +374,7 @@ pub const BackendInstance = union(BackendType) {
     }
 
     pub fn scale(self: BackendInstance, matrix: *const BackendMatrix, scalar: f64, allocator: std.mem.Allocator) !*BackendMatrix {
+        try self.requireMatrices(&.{matrix});
         const result = try switch (self) {
             .CPU => |ptr| CPUBackend.scale(ptr, matrix, scalar, allocator),
             .Metal => |ptr| MetalBackend.scale(ptr, matrix, scalar, allocator),
@@ -354,6 +393,7 @@ pub const BackendInstance = union(BackendType) {
         total_squares: *const BackendMatrix,
         config: backend_mod.OptimizerUpdateConfig,
     ) !void {
+        try self.requireMatrices(&.{ parameter, gradient, first_moment, second_moment, total_squares });
         return switch (self) {
             .CPU => |ptr| CPUBackend.optimizerUpdate(ptr, parameter, gradient, first_moment, second_moment, total_squares, config),
             .Metal => |ptr| MetalBackend.optimizerUpdate(ptr, parameter, gradient, first_moment, second_moment, total_squares, config),
@@ -363,6 +403,7 @@ pub const BackendInstance = union(BackendType) {
     }
 
     pub fn sumRows(self: BackendInstance, matrix: *const BackendMatrix, allocator: std.mem.Allocator) !*BackendMatrix {
+        try self.requireMatrices(&.{matrix});
         const result = try switch (self) {
             .CPU => |ptr| CPUBackend.sumRows(ptr, matrix, allocator),
             .Metal => |ptr| MetalBackend.sumRows(ptr, matrix, allocator),
@@ -373,6 +414,7 @@ pub const BackendInstance = union(BackendType) {
     }
 
     pub fn transpose(self: BackendInstance, matrix: *const BackendMatrix, allocator: std.mem.Allocator) !*BackendMatrix {
+        try self.requireMatrices(&.{matrix});
         const result = try switch (self) {
             .CPU => |ptr| CPUBackend.transpose(ptr, matrix, allocator),
             .Metal => |ptr| MetalBackend.transpose(ptr, matrix, allocator),
@@ -383,6 +425,7 @@ pub const BackendInstance = union(BackendType) {
     }
 
     pub fn extractBatch(self: BackendInstance, matrix: *const BackendMatrix, start: usize, end: usize, allocator: std.mem.Allocator) !*BackendMatrix {
+        try self.requireMatrices(&.{matrix});
         const result = try switch (self) {
             .CPU => |ptr| CPUBackend.extractBatch(ptr, matrix, start, end, allocator),
             .Metal => |ptr| MetalBackend.extractBatch(ptr, matrix, start, end, allocator),
@@ -402,6 +445,7 @@ pub const BackendInstance = union(BackendType) {
     }
 
     pub fn applyActivation(self: BackendInstance, matrix: *const BackendMatrix, activation_fn: *const fn (f64) f64, allocator: std.mem.Allocator) !*BackendMatrix {
+        try self.requireMatrices(&.{matrix});
         const result = try switch (self) {
             .CPU => |ptr| CPUBackend.applyActivation(ptr, matrix, activation_fn, allocator),
             .Metal => |ptr| MetalBackend.applyActivation(ptr, matrix, activation_fn, allocator),
@@ -412,6 +456,7 @@ pub const BackendInstance = union(BackendType) {
     }
 
     pub fn applySoftmax(self: BackendInstance, matrix: *const BackendMatrix, allocator: std.mem.Allocator) !*BackendMatrix {
+        try self.requireMatrices(&.{matrix});
         const result = try switch (self) {
             .CPU => |ptr| CPUBackend.applySoftmax(ptr, matrix, allocator),
             .Metal => |ptr| MetalBackend.applySoftmax(ptr, matrix, allocator),
@@ -422,6 +467,7 @@ pub const BackendInstance = union(BackendType) {
     }
 
     pub fn layerNorm(self: BackendInstance, matrix: *const BackendMatrix, gamma: *const BackendMatrix, beta: *const BackendMatrix, epsilon: f64, allocator: std.mem.Allocator) !*BackendMatrix {
+        try self.requireMatrices(&.{ matrix, gamma, beta });
         const result = try switch (self) {
             .CPU => |ptr| CPUBackend.layerNorm(ptr, matrix, gamma, beta, epsilon, allocator),
             .Metal => |ptr| MetalBackend.layerNorm(ptr, matrix, gamma, beta, epsilon, allocator),
@@ -432,6 +478,7 @@ pub const BackendInstance = union(BackendType) {
     }
 
     pub fn layerNormBackward(self: BackendInstance, input: *const BackendMatrix, gamma: *const BackendMatrix, output_gradient: *const BackendMatrix, epsilon: f64, allocator: std.mem.Allocator) !backend_mod.LayerNormGradients {
+        try self.requireMatrices(&.{ input, gamma, output_gradient });
         var gradients = try switch (self) {
             .CPU => |ptr| CPUBackend.layerNormBackward(ptr, input, gamma, output_gradient, epsilon, allocator),
             .Metal => |ptr| MetalBackend.layerNormBackward(ptr, input, gamma, output_gradient, epsilon, allocator),
@@ -445,6 +492,7 @@ pub const BackendInstance = union(BackendType) {
     }
 
     pub fn causalSelfAttention(self: BackendInstance, query: *const BackendMatrix, key: *const BackendMatrix, value: *const BackendMatrix, heads: usize, allocator: std.mem.Allocator) !*BackendMatrix {
+        try self.requireMatrices(&.{ query, key, value });
         const result = try switch (self) {
             .CPU => |ptr| CPUBackend.causalSelfAttention(ptr, query, key, value, heads, allocator),
             .Metal => |ptr| MetalBackend.causalSelfAttention(ptr, query, key, value, heads, allocator),
@@ -455,6 +503,7 @@ pub const BackendInstance = union(BackendType) {
     }
 
     pub fn causalSelfAttentionBackward(self: BackendInstance, query: *const BackendMatrix, key: *const BackendMatrix, value: *const BackendMatrix, output_gradient: *const BackendMatrix, heads: usize, allocator: std.mem.Allocator) !backend_mod.AttentionGradients {
+        try self.requireMatrices(&.{ query, key, value, output_gradient });
         var gradients = try switch (self) {
             .CPU => |ptr| CPUBackend.causalSelfAttentionBackward(ptr, query, key, value, output_gradient, heads, allocator),
             .Metal => |ptr| MetalBackend.causalSelfAttentionBackward(ptr, query, key, value, output_gradient, heads, allocator),
@@ -468,6 +517,7 @@ pub const BackendInstance = union(BackendType) {
     }
 
     pub fn embeddingLookup(self: BackendInstance, table: *const BackendMatrix, indices: *const BackendMatrix, allocator: std.mem.Allocator) !*BackendMatrix {
+        try self.requireMatrices(&.{ table, indices });
         const result = try switch (self) {
             .CPU => |ptr| CPUBackend.embeddingLookup(ptr, table, indices, allocator),
             .Metal => |ptr| MetalBackend.embeddingLookup(ptr, table, indices, allocator),
@@ -478,6 +528,7 @@ pub const BackendInstance = union(BackendType) {
     }
 
     pub fn embeddingGradient(self: BackendInstance, indices: *const BackendMatrix, output_gradient: *const BackendMatrix, vocabulary_size: usize, allocator: std.mem.Allocator) !*BackendMatrix {
+        try self.requireMatrices(&.{ indices, output_gradient });
         const result = try switch (self) {
             .CPU => |ptr| CPUBackend.embeddingGradient(ptr, indices, output_gradient, vocabulary_size, allocator),
             .Metal => |ptr| MetalBackend.embeddingGradient(ptr, indices, output_gradient, vocabulary_size, allocator),
@@ -488,6 +539,7 @@ pub const BackendInstance = union(BackendType) {
     }
 
     pub fn cachedSelfAttention(self: BackendInstance, query: *const BackendMatrix, key: *const BackendMatrix, value: *const BackendMatrix, key_cache: *BackendMatrix, value_cache: *BackendMatrix, position: usize, heads: usize, allocator: std.mem.Allocator) !*BackendMatrix {
+        try self.requireMatrices(&.{ query, key, value, key_cache, value_cache });
         const result = try switch (self) {
             .CPU => |ptr| CPUBackend.cachedSelfAttention(ptr, query, key, value, key_cache, value_cache, position, heads, allocator),
             .Metal => |ptr| MetalBackend.cachedSelfAttention(ptr, query, key, value, key_cache, value_cache, position, heads, allocator),
@@ -498,6 +550,7 @@ pub const BackendInstance = union(BackendType) {
     }
 
     pub fn applyGLU(self: BackendInstance, linear_part: *const BackendMatrix, gating_part: *const BackendMatrix, allocator: std.mem.Allocator) !*BackendMatrix {
+        try self.requireMatrices(&.{ linear_part, gating_part });
         const result = try switch (self) {
             .CPU => |ptr| CPUBackend.applyGLU(ptr, linear_part, gating_part, allocator),
             .Metal => |ptr| MetalBackend.applyGLU(ptr, linear_part, gating_part, allocator),
@@ -508,6 +561,7 @@ pub const BackendInstance = union(BackendType) {
     }
 
     pub fn applySwiGLU(self: BackendInstance, linear_part: *const BackendMatrix, gating_part: *const BackendMatrix, allocator: std.mem.Allocator) !*BackendMatrix {
+        try self.requireMatrices(&.{ linear_part, gating_part });
         const result = try switch (self) {
             .CPU => |ptr| CPUBackend.applySwiGLU(ptr, linear_part, gating_part, allocator),
             .Metal => |ptr| MetalBackend.applySwiGLU(ptr, linear_part, gating_part, allocator),
