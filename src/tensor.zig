@@ -1071,8 +1071,19 @@ test "batched matmul supports logical transposes on every available device" {
         var context = ExecutionContext.init(&device);
         var a = try context.upload(&.{ 2, 2, 3 }, &.{ 1, 2, 3, 4, 5, 6, 2, 0, 1, 1, 3, 2 });
         defer a.deinit();
+        var plain_b = try context.upload(&.{ 2, 3, 2 }, &.{ 1, 2, 3, 4, 5, 6, 1, 0, 0, 1, 1, 1 });
+        defer plain_b.deinit();
         var b = try context.upload(&.{ 2, 2, 3 }, &.{ 1, 0, 1, 0, 1, 1, 1, 1, 0, 0, 1, 1 });
         defer b.deinit();
+
+        context.resetStats();
+        var plain_product = try context.batchedMatmul(a, plain_b, false, false);
+        defer plain_product.deinit();
+        try testing.expectEqualSlices(usize, &.{ 2, 2, 2 }, plain_product.shape.slice());
+        try testing.expectEqual(@as(usize, 0), context.stats.readbacks);
+        var plain_actual: [8]f32 = undefined;
+        try context.readback(plain_product, &plain_actual);
+        try testing.expectEqualSlices(f32, &.{ 22, 28, 49, 64, 3, 1, 3, 5 }, &plain_actual);
 
         context.resetStats();
         var product = try context.batchedMatmul(a, b, false, true);

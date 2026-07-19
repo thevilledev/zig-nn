@@ -146,12 +146,13 @@ pub const Matrix = struct {
         const result = try Matrix.init(allocator, self.rows, other.cols);
 
         for (0..self.rows) |i| {
-            for (0..other.cols) |j| {
-                var sum: f64 = 0;
-                for (0..self.cols) |k| {
-                    sum += self.data[i * self.cols + k] * other.data[k * other.cols + j];
+            const output = result.data[i * result.cols ..][0..result.cols];
+            for (0..self.cols) |k| {
+                const left = self.data[i * self.cols + k];
+                const right = other.data[k * other.cols ..][0..other.cols];
+                for (output, right) |*value, factor| {
+                    value.* += left * factor;
                 }
-                result.data[i * result.cols + j] = sum;
             }
         }
 

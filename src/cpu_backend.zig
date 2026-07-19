@@ -166,14 +166,16 @@ pub const CPUBackend = struct {
 
         const a_cpu = @as(*const CPUMatrix, @ptrCast(@alignCast(a.impl_data)));
         const b_cpu = @as(*const CPUMatrix, @ptrCast(@alignCast(b.impl_data)));
+        const result_cpu = @as(*CPUMatrix, @ptrCast(@alignCast(result.impl_data)));
 
         for (0..a.rows) |i| {
-            for (0..b.cols) |j| {
-                var sum: f32 = 0;
-                for (0..a.cols) |k| {
-                    sum += a_cpu.data[i * a.cols + k] * b_cpu.data[k * b.cols + j];
+            const output = result_cpu.data[i * b.cols ..][0..b.cols];
+            for (0..a.cols) |k| {
+                const left = a_cpu.data[i * a.cols + k];
+                const right = b_cpu.data[k * b.cols ..][0..b.cols];
+                for (output, right) |*value, factor| {
+                    value.* += left * factor;
                 }
-                setMatrixElement(undefined, result, i, j, sum);
             }
         }
 
@@ -215,6 +217,25 @@ pub const CPUBackend = struct {
         const a_cpu = @as(*const CPUMatrix, @ptrCast(@alignCast(a.impl_data)));
         const b_cpu = @as(*const CPUMatrix, @ptrCast(@alignCast(b.impl_data)));
         const result_cpu = @as(*CPUMatrix, @ptrCast(@alignCast(result.impl_data)));
+
+        if (!transpose_a and !transpose_b) {
+            for (0..batch) |batch_index| {
+                const a_offset = batch_index * a_rows * a_cols;
+                const b_offset = batch_index * b_rows * b_cols;
+                const result_offset = batch_index * output_rows * output_cols;
+                for (0..output_rows) |row| {
+                    const output = result_cpu.data[result_offset + row * output_cols ..][0..output_cols];
+                    for (0..inner_a) |inner| {
+                        const left = a_cpu.data[a_offset + row * a_cols + inner];
+                        const right = b_cpu.data[b_offset + inner * b_cols ..][0..b_cols];
+                        for (output, right) |*value, factor| {
+                            value.* += left * factor;
+                        }
+                    }
+                }
+            }
+            return result;
+        }
 
         for (0..batch) |batch_index| {
             const a_offset = batch_index * a_rows * a_cols;
