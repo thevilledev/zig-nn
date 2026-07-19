@@ -2,7 +2,6 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const backend = @import("backend.zig");
 const dimensions = @import("dimensions.zig");
-const ComputeBackend = backend.ComputeBackend;
 const BackendType = backend.BackendType;
 const Matrix = backend.Matrix;
 const randomSeed = @import("matrix.zig").randomSeed;

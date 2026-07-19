@@ -1,7 +1,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const backend = @import("backend.zig");
-const ComputeBackend = backend.ComputeBackend;
 const BackendType = backend.BackendType;
 const Matrix = backend.Matrix;
 const randomSeed = @import("matrix.zig").randomSeed;
@@ -33,7 +32,6 @@ pub const CPUBackend = struct {
         self.allocator.destroy(self);
     }
 
-    // ComputeBackend interface implementations
     pub fn initMatrix(ptr: *anyopaque, allocator: Allocator, rows: usize, cols: usize) error{OutOfMemory}!*Matrix {
         const self = @as(*CPUBackend, @ptrCast(@alignCast(ptr)));
         // Allocate the matrix wrapper
