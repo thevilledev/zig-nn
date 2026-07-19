@@ -82,6 +82,9 @@ pub fn main(init: std.process.Init) !void {
     if (shouldRun(options, "training")) {
         try benchmarkTraining(allocator, metal, cuda, rocm, options);
     }
+    if (shouldRun(options, "training_epoch")) {
+        try benchmarkTrainingEpoch(allocator, options);
+    }
     if (shouldRun(options, "tiny_gpt")) {
         try benchmarkTinyGpt(allocator, options);
     }
@@ -124,6 +127,7 @@ fn printHelp() void {
         \\  gpu_peak      opt-in huge GEMM workloads for high-end GPUs
         \\  layer_norm    CPU LayerNorm forward passes
         \\  training      CPU Network.trainBatch loops
+        \\  training_epoch  shuffled Network.train epochs with mini-batches
         \\  tiny_gpt      CPU TinyGPT forward passes
         \\  quantization  CPU uniform, TurboQuant, and KV-cache-shaped quantization loops
         \\
@@ -884,6 +888,43 @@ fn benchmarkTraining(
     }
 }
 
+fn benchmarkTrainingEpoch(allocator: Allocator, options: Options) !void {
+    const samples: usize = 1025;
+    const input_size: usize = 8;
+    const hidden_size: usize = 16;
+    const output_size: usize = 4;
+    const epochs: usize = 10;
+    const batch_size: usize = 64;
+
+    var inputs = try Matrix.init(allocator, samples, input_size);
+    defer inputs.deinit();
+    var targets = try Matrix.init(allocator, samples, output_size);
+    defer targets.deinit();
+    fillCpuMatrix(&inputs, 211);
+    fillCpuMatrix(&targets, 223);
+
+    var network = try makeTrainingNetwork(allocator, input_size, hidden_size, output_size);
+    defer network.deinit();
+    const timing = try timeTrainingEpoch(
+        allocator,
+        &network,
+        inputs,
+        targets,
+        epochs,
+        batch_size,
+        quickCount(options, 1),
+        quickCount(options, 5),
+    );
+    printResult(
+        "training_epoch",
+        "samples1025_batch64_epochs10",
+        "cpu",
+        timing,
+        0.0,
+        "ok",
+    );
+}
+
 fn makeTrainingNetwork(
     allocator: Allocator,
     input_size: usize,
@@ -951,6 +992,47 @@ fn timeTrainingLoop(
         max_ns = @max(max_ns, elapsed_ns);
     }
 
+    return .{
+        .warmups = warmups,
+        .iterations = iterations,
+        .average_ns = total_ns / @as(f64, @floatFromInt(iterations)),
+        .min_ns = min_ns,
+        .max_ns = max_ns,
+        .checksum = checksum,
+    };
+}
+
+fn timeTrainingEpoch(
+    allocator: Allocator,
+    network: *nn.Network,
+    inputs: Matrix,
+    targets: Matrix,
+    epochs: usize,
+    batch_size: usize,
+    warmups: usize,
+    iterations: usize,
+) !Timing {
+    for (0..warmups) |_| {
+        const history = try network.train(inputs, targets, epochs, batch_size);
+        allocator.free(history);
+    }
+
+    var total_ns: f64 = 0.0;
+    var min_ns: f64 = std.math.inf(f64);
+    var max_ns: f64 = 0.0;
+    var checksum: f64 = 0.0;
+    for (0..iterations) |_| {
+        const start = nowNs();
+        const history = try network.train(inputs, targets, epochs, batch_size);
+        const elapsed = nowNs() - start;
+        checksum += history[history.len - 1];
+        allocator.free(history);
+
+        const elapsed_ns = @as(f64, @floatFromInt(elapsed));
+        total_ns += elapsed_ns;
+        min_ns = @min(min_ns, elapsed_ns);
+        max_ns = @max(max_ns, elapsed_ns);
+    }
     return .{
         .warmups = warmups,
         .iterations = iterations,

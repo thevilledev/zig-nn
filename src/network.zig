@@ -1776,20 +1776,23 @@ pub const Network = struct {
         // Allocate array to store loss history
         var loss_history = try self.allocator.alloc(f64, epochs);
         errdefer self.allocator.free(loss_history);
+        if (epochs == 0) return loss_history;
 
         var prng = std.Random.DefaultPrng.init(matrix_mod.randomSeed());
         const rand = prng.random();
+        const indices = try self.allocator.alloc(usize, num_samples);
+        defer self.allocator.free(indices);
+        for (0..num_samples) |i| indices[i] = i;
+        const scratch_rows = @min(batch_size, num_samples);
+        var input_scratch = try Matrix.init(self.allocator, scratch_rows, inputs.cols);
+        defer input_scratch.deinit();
+        var target_scratch = try Matrix.init(self.allocator, scratch_rows, targets.cols);
+        defer target_scratch.deinit();
 
         // Training loop
         for (0..epochs) |epoch| {
             var epoch_loss: f64 = 0.0;
 
-            // Create a random permutation for shuffling
-            var indices = try self.allocator.alloc(usize, num_samples);
-            defer self.allocator.free(indices);
-            for (0..num_samples) |i| {
-                indices[i] = i;
-            }
             rand.shuffle(usize, indices);
 
             // Process each batch
@@ -1798,21 +1801,28 @@ pub const Network = struct {
                 const end_idx = start_idx + @min(batch_size, num_samples - start_idx);
                 const current_batch_size = end_idx - start_idx;
 
-                // Create batch inputs and targets
-                var batch_inputs = try Matrix.init(self.allocator, current_batch_size, inputs.cols);
-                defer batch_inputs.deinit();
-                var batch_targets = try Matrix.init(self.allocator, current_batch_size, targets.cols);
-                defer batch_targets.deinit();
+                const batch_inputs = Matrix{
+                    .rows = current_batch_size,
+                    .cols = inputs.cols,
+                    .data = input_scratch.data[0 .. current_batch_size * inputs.cols],
+                    .allocator = self.allocator,
+                };
+                const batch_targets = Matrix{
+                    .rows = current_batch_size,
+                    .cols = targets.cols,
+                    .data = target_scratch.data[0 .. current_batch_size * targets.cols],
+                    .allocator = self.allocator,
+                };
 
                 // Fill batch with shuffled data
                 for (0..current_batch_size) |i| {
                     const sample_idx = indices[start_idx + i];
-                    for (0..inputs.cols) |j| {
-                        try batch_inputs.set(i, j, try inputs.get(sample_idx, j));
-                    }
-                    for (0..targets.cols) |j| {
-                        try batch_targets.set(i, j, try targets.get(sample_idx, j));
-                    }
+                    const input_destination = batch_inputs.data[i * inputs.cols ..][0..inputs.cols];
+                    const input_source = inputs.data[sample_idx * inputs.cols ..][0..inputs.cols];
+                    @memcpy(input_destination, input_source);
+                    const target_destination = batch_targets.data[i * targets.cols ..][0..targets.cols];
+                    const target_source = targets.data[sample_idx * targets.cols ..][0..targets.cols];
+                    @memcpy(target_destination, target_source);
                 }
 
                 // Train on batch
@@ -1838,18 +1848,17 @@ pub const Network = struct {
 
         var loss_history = try self.allocator.alloc(f64, epochs);
         errdefer self.allocator.free(loss_history);
+        if (epochs == 0) return loss_history;
 
         var prng = std.Random.DefaultPrng.init(matrix_mod.randomSeed());
         const rand = prng.random();
+        const indices = try self.allocator.alloc(usize, num_samples);
+        defer self.allocator.free(indices);
+        for (0..num_samples) |i| indices[i] = i;
 
         for (0..epochs) |epoch| {
             var epoch_loss: f64 = 0.0;
 
-            var indices = try self.allocator.alloc(usize, num_samples);
-            errdefer self.allocator.free(indices);
-            for (0..num_samples) |i| {
-                indices[i] = i;
-            }
             rand.shuffle(usize, indices);
 
             for (0..num_batches) |batch| {
@@ -1880,7 +1889,6 @@ pub const Network = struct {
 
             epoch_loss /= @as(f64, @floatFromInt(num_samples));
             loss_history[epoch] = epoch_loss;
-            self.allocator.free(indices);
         }
 
         return loss_history;
