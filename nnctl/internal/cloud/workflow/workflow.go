@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	cloudcore "nnctl/internal/cloud"
 	"nnctl/internal/cloud/verda"
 	"nnctl/internal/process"
 )
@@ -51,7 +52,7 @@ func SSHDestination(user, rawIP string) (string, error) {
 	}
 	address, err := netip.ParseAddr(strings.TrimSpace(rawIP))
 	if err != nil || address.Zone() != "" || !address.IsGlobalUnicast() {
-		return "", fmt.Errorf("verda instance returned an invalid unicast IP address")
+		return "", fmt.Errorf("cloud provider returned an invalid unicast IP address")
 	}
 	return user + "@" + address.Unmap().String(), nil
 }
@@ -132,6 +133,34 @@ func WaitInstance(ctx context.Context, client InstanceLister, instanceID string,
 		}
 		if err := wait(ctx, poll); err != nil {
 			return verda.Instance{}, err
+		}
+	}
+}
+
+func WaitProviderInstance(
+	ctx context.Context,
+	provider cloudcore.Provider,
+	instanceID string,
+	timeout time.Duration,
+	poll time.Duration,
+) (cloudcore.Instance, error) {
+	deadline := time.Now().Add(timeout)
+	for {
+		instance, err := provider.Instance(ctx, instanceID)
+		if err != nil {
+			return cloudcore.Instance{}, fmt.Errorf("get cloud instance %s while waiting: %w", instanceID, err)
+		}
+		if instance.State.Terminal() {
+			return cloudcore.Instance{}, fmt.Errorf("instance %s entered terminal state %q", instanceID, instance.State)
+		}
+		if instance.State == cloudcore.InstanceRunning && strings.TrimSpace(instance.PublicIP) != "" {
+			return instance, nil
+		}
+		if time.Now().After(deadline) {
+			return cloudcore.Instance{}, fmt.Errorf("timed out waiting for instance %s to be running with an IP", instanceID)
+		}
+		if err := wait(ctx, poll); err != nil {
+			return cloudcore.Instance{}, err
 		}
 	}
 }

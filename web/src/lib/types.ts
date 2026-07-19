@@ -48,6 +48,15 @@ export interface CloudStatus {
   provider: string;
   error?: string;
   repository: RepositoryState;
+  providers?: CloudProviderStatus[];
+}
+
+export interface CloudProviderStatus {
+  name: string;
+  display_name: string;
+  configured: boolean;
+  error?: string;
+  capabilities: string[];
 }
 
 export interface CloudPrice {
@@ -69,6 +78,30 @@ export interface CloudOptions {
   provider: string;
   prices: CloudPrice[];
   source_os_volume_name: string;
+  offerings?: CloudOffering[];
+  errors?: Record<string, string>;
+}
+
+export interface CloudAccelerator {
+  manufacturer?: string;
+  model?: string;
+  count: number;
+  memory_mib?: number;
+}
+
+export interface CloudOffering {
+  provider: string;
+  id: string;
+  display_name?: string;
+  location: string;
+  market?: string;
+  accelerator: CloudAccelerator;
+  backends: Backend[];
+  price_per_hour?: number;
+  price_known: boolean;
+  currency?: string;
+  available: boolean;
+  discoverable: boolean;
 }
 
 export type CloudWorkerState = 'provisioning' | 'ready' | 'busy' | 'destroying' | 'failed' | 'destroyed';
@@ -95,8 +128,9 @@ export interface CloudWorker {
 }
 
 export interface CloudDeployRequest {
+  provider: string;
   instance_type: string;
-  market: 'spot' | 'on-demand';
+  market: string;
   location_code: string;
   auto_destroy: boolean;
 }

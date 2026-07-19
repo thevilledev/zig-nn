@@ -2,11 +2,14 @@ package lab
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	cloudcore "nnctl/internal/cloud"
 )
 
 func TestCloudStorePersistsManagedWorker(t *testing.T) {
@@ -27,6 +30,7 @@ func TestCloudStorePersistsManagedWorker(t *testing.T) {
 			IP:           "192.0.2.10",
 			Backends:     []string{"cpu", "cuda"},
 		},
+		Resources:      []cloudcore.ResourceRef{{Kind: "volume", ID: "clone-1"}},
 		SourceVolumeID: "source-1",
 		CloneVolumeID:  "clone-1",
 	}
@@ -55,6 +59,86 @@ func TestCloudStorePersistsManagedWorker(t *testing.T) {
 		if strings.Contains(strings.ToLower(payload), forbidden) {
 			t.Fatalf("worker state contains %q: %s", forbidden, payload)
 		}
+	}
+	var provider, resources string
+	if err := store.db.QueryRowContext(t.Context(), "SELECT provider, CAST(resources_json AS TEXT) FROM cloud_workers WHERE id = ?", worker.ID).Scan(&provider, &resources); err != nil {
+		t.Fatal(err)
+	}
+	if provider != "verda" || !strings.Contains(resources, "clone-1") {
+		t.Fatalf("provider columns = %q, %q", provider, resources)
+	}
+}
+
+func TestCloudStoreMigratesVersionOneSchema(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.sqlite")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker := managedCloudWorker{
+		CloudWorker:   CloudWorker{ID: "worker-1", State: CloudWorkerReady, InstanceID: "instance-1"},
+		CloneVolumeID: "clone-1",
+	}
+	payload, err := json.Marshal(worker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statements := []string{
+		`CREATE TABLE cloud_workers (
+			id TEXT PRIMARY KEY,
+			instance_id TEXT NOT NULL,
+			clone_volume_id TEXT NOT NULL,
+			source_volume_id TEXT NOT NULL,
+			state TEXT NOT NULL,
+			worker_json BLOB NOT NULL,
+			updated_at INTEGER NOT NULL
+		)`,
+		"PRAGMA user_version = 1",
+	}
+	for _, statement := range statements {
+		if _, err := db.ExecContext(t.Context(), statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.ExecContext(t.Context(), `
+		INSERT INTO cloud_workers (
+			id, instance_id, clone_volume_id, source_volume_id,
+			state, worker_json, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?)
+	`, worker.ID, worker.InstanceID, worker.CloneVolumeID, worker.SourceVolumeID, worker.State, payload, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := openCloudStore(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	var version int
+	if err := store.db.QueryRowContext(t.Context(), "PRAGMA user_version").Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if version != 2 {
+		t.Fatalf("schema version = %d", version)
+	}
+	for _, column := range []string{"provider", "resources_json"} {
+		exists, err := store.hasColumn(t.Context(), "cloud_workers", column)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !exists {
+			t.Fatalf("migrated schema is missing %s", column)
+		}
+	}
+	loaded, err := store.Load(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded == nil || loaded.ID != worker.ID || loaded.CloneVolumeID != worker.CloneVolumeID {
+		t.Fatalf("migrated worker = %#v", loaded)
 	}
 }
 

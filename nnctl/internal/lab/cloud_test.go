@@ -479,6 +479,8 @@ func (c *fakeCloudClient) WaitVolumeReady(context.Context, string) (verda.Volume
 
 func (c *fakeCloudClient) DeleteVolume(context.Context, string, bool) error { return nil }
 
+func (c *fakeCloudClient) PermanentDeleteVolume(context.Context, string) error { return nil }
+
 func (c *fakeCloudClient) CreateInstance(_ context.Context, request verda.CreateInstanceRequest) (verda.Instance, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

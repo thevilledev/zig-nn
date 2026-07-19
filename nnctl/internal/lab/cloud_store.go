@@ -51,16 +51,62 @@ func (s *cloudStore) initialize(ctx context.Context) error {
 			source_volume_id TEXT NOT NULL,
 			state TEXT NOT NULL,
 			worker_json BLOB NOT NULL,
+			provider TEXT NOT NULL DEFAULT '',
+			resources_json BLOB NOT NULL DEFAULT '[]',
 			updated_at INTEGER NOT NULL
 		)`,
-		"PRAGMA user_version = 1",
 	}
 	for _, statement := range statements {
 		if _, err := s.db.ExecContext(ctx, statement); err != nil {
 			return fmt.Errorf("initialize cloud state database: %w", err)
 		}
 	}
+	for _, column := range []struct {
+		name       string
+		definition string
+	}{
+		{name: "provider", definition: "TEXT NOT NULL DEFAULT ''"},
+		{name: "resources_json", definition: "BLOB NOT NULL DEFAULT '[]'"},
+	} {
+		exists, err := s.hasColumn(ctx, "cloud_workers", column.name)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			if _, err := s.db.ExecContext(ctx, "ALTER TABLE cloud_workers ADD COLUMN "+column.name+" "+column.definition); err != nil {
+				return fmt.Errorf("migrate cloud state database: add %s: %w", column.name, err)
+			}
+		}
+	}
+	if _, err := s.db.ExecContext(ctx, "PRAGMA user_version = 2"); err != nil {
+		return fmt.Errorf("set cloud state schema version: %w", err)
+	}
 	return nil
+}
+
+func (s *cloudStore) hasColumn(ctx context.Context, table, column string) (bool, error) {
+	rows, err := s.db.QueryContext(ctx, "PRAGMA table_info("+table+")")
+	if err != nil {
+		return false, fmt.Errorf("inspect cloud state schema: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var cid int
+		var name, kind string
+		var notNull int
+		var defaultValue any
+		var primaryKey int
+		if err := rows.Scan(&cid, &name, &kind, &notNull, &defaultValue, &primaryKey); err != nil {
+			return false, fmt.Errorf("read cloud state schema: %w", err)
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, fmt.Errorf("read cloud state schema: %w", err)
+	}
+	return false, nil
 }
 
 func (s *cloudStore) Save(ctx context.Context, worker managedCloudWorker) error {
@@ -68,20 +114,26 @@ func (s *cloudStore) Save(ctx context.Context, worker managedCloudWorker) error 
 	if err != nil {
 		return fmt.Errorf("encode cloud worker state: %w", err)
 	}
+	resources, err := json.Marshal(worker.Resources)
+	if err != nil {
+		return fmt.Errorf("encode cloud worker resources: %w", err)
+	}
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO cloud_workers (
 			id, instance_id, clone_volume_id, source_volume_id,
-			state, worker_json, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?)
+			state, worker_json, provider, resources_json, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			instance_id = excluded.instance_id,
 			clone_volume_id = excluded.clone_volume_id,
 			source_volume_id = excluded.source_volume_id,
 			state = excluded.state,
 			worker_json = excluded.worker_json,
+			provider = excluded.provider,
+			resources_json = excluded.resources_json,
 			updated_at = excluded.updated_at
 	`, worker.ID, worker.InstanceID, worker.CloneVolumeID, worker.SourceVolumeID,
-		worker.State, data, time.Now().UTC().UnixNano())
+		worker.State, data, worker.Provider, resources, time.Now().UTC().UnixNano())
 	if err != nil {
 		return fmt.Errorf("save cloud worker state: %w", err)
 	}

@@ -245,6 +245,7 @@ describe('App', () => {
     await waitFor(() => expect(screen.getByText('Ready for experiments')).toBeTruthy());
     const deployRequest = fetchMock.mock.calls[5]?.[1] as RequestInit;
     expect(JSON.parse(String(deployRequest.body))).toEqual({
+      provider: 'verda',
       instance_type: '1A100.22V',
       market: 'spot',
       location_code: 'FIN-02',
@@ -264,6 +265,49 @@ describe('App', () => {
       target: { kind: 'cloud', worker_id: 'worker-1' },
       acknowledge_committed_head: false
     });
+  });
+
+  it('selects offerings from multiple configured cloud providers', async () => {
+    const multiStatus: CloudStatus = {
+      ...cloudStatus,
+      providers: [
+        { name: 'verda', display_name: 'Verda', configured: true, capabilities: ['compute', 'pricing'] },
+        { name: 'digitalocean', display_name: 'DigitalOcean', configured: true, capabilities: ['compute', 'pricing'] }
+      ]
+    };
+    const multiOptions: CloudOptions = {
+      ...cloudOptions,
+      offerings: [
+        {
+          provider: 'verda', id: '1A100.22V', location: 'FIN-02', market: 'spot',
+          accelerator: { manufacturer: 'nvidia', model: 'A100', count: 1 }, backends: ['cpu', 'cuda'],
+          price_per_hour: 1.25, price_known: true, currency: 'EUR', available: true, discoverable: true
+        },
+        {
+          provider: 'digitalocean', id: 'gpu-mi300x1-192gb', location: 'tor1', market: 'on-demand',
+          accelerator: { manufacturer: 'amd', model: 'MI300X', count: 1 }, backends: ['cpu', 'rocm'],
+          price_per_hour: 1.99, price_known: true, currency: 'USD', available: true, discoverable: true
+        }
+      ]
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(response([experiment]))
+      .mockResolvedValueOnce(response({ ...capabilities, cloud_enabled: true }))
+      .mockResolvedValueOnce(response(multiStatus))
+      .mockResolvedValueOnce(response([]))
+      .mockResolvedValueOnce(response(multiOptions));
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal('EventSource', FakeEventSource);
+    render(App);
+
+    await screen.findByRole('heading', { name: 'Learning XOR', level: 1 });
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(5));
+    await fireEvent.change(screen.getByRole('combobox', { name: /Execution target/ }), { target: { value: 'cloud' } });
+    const provider = screen.getByRole('combobox', { name: 'Provider' });
+    await fireEvent.change(provider, { target: { value: 'digitalocean' } });
+    expect(screen.getByRole('option', { name: /MI300X/ })).toBeTruthy();
+    expect(screen.queryByRole('option', { name: /A100/ })).toBeNull();
   });
 
   it('keeps a recovered worker visible when cloud credentials are unavailable', async () => {

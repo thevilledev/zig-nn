@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	cloudcore "nnctl/internal/cloud"
 	"nnctl/internal/cloud/verda"
 	cloudworkflow "nnctl/internal/cloud/workflow"
 )
@@ -30,7 +31,7 @@ func (m *CloudManager) persistWorker() error {
 	}
 	worker := cloneManagedCloudWorker(*m.worker)
 	m.mu.Unlock()
-	if worker.State == CloudWorkerDestroyed || (worker.InstanceID == "" && worker.CloneVolumeID == "") {
+	if worker.State == CloudWorkerDestroyed || (worker.InstanceID == "" && len(worker.Resources) == 0 && worker.CloneVolumeID == "") {
 		return m.withPersistenceContext(func(ctx context.Context) error { return m.store.Delete(ctx, worker.ID) })
 	}
 	return m.withPersistenceContext(func(ctx context.Context) error { return m.store.Save(ctx, worker) })
@@ -48,7 +49,22 @@ func (m *CloudManager) loadWorker() error {
 	if err != nil || worker == nil {
 		return err
 	}
-	if worker.InstanceID == "" && worker.CloneVolumeID == "" {
+	if worker.Provider == "" {
+		worker.Provider = verda.ProviderName
+	}
+	if len(worker.Resources) == 0 {
+		if worker.SourceVolumeID != "" {
+			worker.Resources = append(worker.Resources, cloudcore.ResourceRef{
+				Kind: verda.ResourceOSVolume, ID: worker.SourceVolumeID, Preserve: true,
+			})
+		}
+		if worker.CloneVolumeID != "" {
+			worker.Resources = append(worker.Resources, cloudcore.ResourceRef{
+				Kind: verda.ResourceOSVolume, ID: worker.CloneVolumeID,
+			})
+		}
+	}
+	if worker.InstanceID == "" && len(worker.Resources) == 0 {
 		return m.withPersistenceContext(func(ctx context.Context) error { return m.store.Delete(ctx, worker.ID) })
 	}
 	worker.State = CloudWorkerProvisioning
@@ -103,46 +119,39 @@ func (m *CloudManager) reconnectWorker(ctx context.Context, workerID string) err
 	if !ok {
 		return errors.New("persisted cloud worker not found")
 	}
-	client, err := m.newClient(ctx, worker.BaseURL)
+	provider, err := m.provider(ctx, worker.Provider)
 	if err != nil {
 		return err
 	}
-	instances, err := client.ListInstances(ctx, "")
+	instance, err := provider.Instance(ctx, worker.InstanceID)
 	if err != nil {
-		return fmt.Errorf("list Verda instances while reconnecting: %w", err)
+		return fmt.Errorf("get persisted %s instance %s: %w", worker.Provider, worker.InstanceID, err)
 	}
-	var instance *verda.Instance
-	for index := range instances {
-		if instances[index].ID == worker.InstanceID {
-			instance = &instances[index]
-			break
-		}
-	}
-	if instance == nil {
-		return fmt.Errorf("persisted Verda instance %s was not found", worker.InstanceID)
-	}
-	if strings.ToLower(strings.TrimSpace(instance.Status)) != "running" || instance.IP == nil || strings.TrimSpace(*instance.IP) == "" {
-		ready, err := cloudworkflow.WaitInstance(ctx, client, worker.InstanceID, m.timeout, m.pollInterval)
+	if instance.State != cloudcore.InstanceRunning || strings.TrimSpace(instance.PublicIP) == "" {
+		ready, err := cloudworkflow.WaitProviderInstance(ctx, provider, worker.InstanceID, m.timeout, m.pollInterval)
 		if err != nil {
 			return err
 		}
-		instance = &ready
+		instance = ready
 	}
 	knownHosts, err := m.knownHostsPath(workerID)
 	if err != nil {
 		return err
 	}
-	ip := strings.TrimSpace(*instance.IP)
+	ip := strings.TrimSpace(instance.PublicIP)
 	host, err := cloudworkflow.SSHDestination(m.sshUser, ip)
 	if err != nil {
 		return err
 	}
 	if !m.updateProvisioningWorker(workerID, func(current *managedCloudWorker) {
 		current.IP = ip
-		current.Hostname = firstCloudString(instance.Hostname, current.Hostname)
+		current.Hostname = firstCloudString(instance.Name, current.Hostname)
 		current.Location = firstCloudString(instance.Location, current.Location)
 		current.PricePerHour = firstCloudPrice(instance.PricePerHour, current.PricePerHour)
 		current.Currency = firstCloudString(instance.Currency, current.Currency)
+		if len(instance.Backends) > 0 {
+			current.Backends = append([]string(nil), instance.Backends...)
+		}
 		current.Message = "Verifying persisted cloud worker"
 	}) {
 		return errors.New("cloud worker is no longer reconnecting")
@@ -151,7 +160,11 @@ func (m *CloudManager) reconnectWorker(ctx context.Context, workerID string) err
 	if err := cloudworkflow.WaitSSH(ctx, m.ssh, sshArgs, host, m.timeout, m.pollInterval); err != nil {
 		return err
 	}
-	if err := cloudworkflow.WaitCommand(ctx, m.ssh, sshArgs, host, cloudPreflightCommand, m.timeout, m.pollInterval); err != nil {
+	backends := instance.Backends
+	if len(backends) == 0 {
+		backends = worker.Backends
+	}
+	if err := cloudworkflow.WaitCommand(ctx, m.ssh, sshArgs, host, cloudPreflightCommandFor(backends), m.timeout, m.pollInterval); err != nil {
 		return err
 	}
 	ready := m.now().UTC()

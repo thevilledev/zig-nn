@@ -12,19 +12,22 @@ import (
 
 	"github.com/spf13/cobra"
 
+	cloudcore "nnctl/internal/cloud"
+	"nnctl/internal/cloud/verda"
 	learninglab "nnctl/internal/lab"
 	"nnctl/internal/localhttp"
 )
 
 type labOptions struct {
-	mode         string
-	host         string
-	port         int
-	assets       string
-	apiOnly      bool
-	cloud        bool
-	cloudBaseURL string
-	stateDB      string
+	mode           string
+	host           string
+	port           int
+	assets         string
+	apiOnly        bool
+	cloud          bool
+	cloudProviders []string
+	cloudBaseURL   string
+	stateDB        string
 }
 
 func defaultLabOptions() labOptions {
@@ -51,7 +54,8 @@ func (a *app) newLabCommand(withRepo repoRunner) *cobra.Command {
 	cmd.Flags().IntVar(&opts.port, "port", opts.port, "learning lab bind port")
 	cmd.Flags().StringVar(&opts.assets, "assets", opts.assets, "built frontend directory (default: web/dist)")
 	cmd.Flags().BoolVar(&opts.apiOnly, "api-only", opts.apiOnly, "serve only the API for Vite development")
-	cmd.Flags().BoolVar(&opts.cloud, "cloud", opts.cloud, "enable local Verda worker deployment and remote experiment execution")
+	cmd.Flags().BoolVar(&opts.cloud, "cloud", opts.cloud, "enable Verda cloud workers (compatibility shorthand)")
+	cmd.Flags().StringSliceVar(&opts.cloudProviders, "cloud-provider", opts.cloudProviders, "enable a cloud provider (repeatable)")
 	cmd.Flags().StringVar(&opts.cloudBaseURL, "cloud-base-url", opts.cloudBaseURL, "Verda API base URL")
 	cmd.Flags().StringVar(&opts.stateDB, "state-db", opts.stateDB, "SQLite lab state database path")
 	cmd.Flags().SortFlags = false
@@ -79,18 +83,36 @@ func (a *app) runLab(ctx context.Context, opts labOptions) (runErr error) {
 	}
 	var cloud *learninglab.CloudManager
 	var executor learninglab.Executor = localExecutor
-	if opts.cloud {
+	providerNames := sortUniqueStrings(opts.cloudProviders)
+	if opts.cloud && len(providerNames) == 0 {
+		providerNames = []string{verda.ProviderName}
+	}
+	if len(providerNames) > 0 {
 		stateDB := opts.stateDB
 		if stateDB != "" && !filepath.IsAbs(stateDB) {
 			stateDB = filepath.Join(a.repoRoot, stateDB)
 		}
 		var err error
+		providerConfigs := make([]learninglab.CloudProviderConfig, 0, len(providerNames))
+		for _, name := range providerNames {
+			factory, factoryErr := a.cloudProviderFactory(name)
+			if factoryErr != nil {
+				return factoryErr
+			}
+			configuration := cloudcore.Configuration{UserAgent: "nnctl-lab"}
+			if factory.Descriptor().Name == verda.ProviderName {
+				configuration.BaseURL = opts.cloudBaseURL
+			}
+			providerConfigs = append(providerConfigs, learninglab.CloudProviderConfig{
+				Factory: factory, Configuration: configuration,
+			})
+		}
 		cloud, err = learninglab.NewCloudManager(learninglab.CloudManagerOptions{
 			Parent:       ctx,
 			RepoRoot:     a.repoRoot,
-			BaseURL:      opts.cloudBaseURL,
 			Mode:         opts.mode,
 			DatabasePath: stateDB,
+			Providers:    providerConfigs,
 		})
 		if err != nil {
 			return err

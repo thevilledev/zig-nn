@@ -4,6 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+
+	cloudcore "nnctl/internal/cloud"
+	"nnctl/internal/cloud/verda"
 )
 
 func (m *CloudManager) failWorker(workerID string, err error) {
@@ -94,7 +97,36 @@ func (m *CloudManager) mutateWorker(
 
 func cloneManagedCloudWorker(worker managedCloudWorker) managedCloudWorker {
 	worker.Backends = append([]string(nil), worker.Backends...)
+	worker.Resources = cloneResourceRefs(worker.Resources)
 	return worker
+}
+
+func cloneResourceRefs(resources []cloudcore.ResourceRef) []cloudcore.ResourceRef {
+	cloned := make([]cloudcore.ResourceRef, len(resources))
+	for index, resource := range resources {
+		cloned[index] = resource
+		if resource.Metadata != nil {
+			cloned[index].Metadata = make(map[string]string, len(resource.Metadata))
+			for key, value := range resource.Metadata {
+				cloned[index].Metadata[key] = value
+			}
+		}
+	}
+	return cloned
+}
+
+func legacyVerdaResourceIDs(resources []cloudcore.ResourceRef) (sourceID, cloneID string) {
+	for _, resource := range resources {
+		if resource.Kind != verda.ResourceOSVolume {
+			continue
+		}
+		if resource.Preserve {
+			sourceID = resource.ID
+		} else if cloneID == "" {
+			cloneID = resource.ID
+		}
+	}
+	return sourceID, cloneID
 }
 
 func (m *CloudManager) managedWorker(workerID string) (managedCloudWorker, bool) {
