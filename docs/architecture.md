@@ -90,11 +90,23 @@ Both sessions own their selected device and expose execution/backend counters.
 `GenerationOptions` makes the seed, token limit, temperature, top-k, and top-p
 explicit; `GenerationStats` returns the backend, token counts, elapsed time,
 and runtime snapshot. Only automatic device selection can fall back to CPU.
+`SessionOptions.cpu_output_tiles` optionally divides wide CPU projections into
+independent output-column tiles; one tile remains the predictable default.
+
+CPU sessions prepack immutable affine weights into vector-width-padded rows and
+retain a bounded pool of intermediate matrix storage. After the session has
+warmed through context rollover, cached decoding reuses that storage without
+new physical allocations. The original row-major weights and scalar TinyGPT
+path remain the numerical references, with logits checked to `1e-4`.
 
 The library detects existing ZNN and TGPT headers without introducing another
 container format. ZNN and TGPT versions 1–3 remain readable. `InferenceService`,
 `run_serving`, and `run_tiny_gpt_openai` are compatibility entry points backed
 by the session implementation during the transition.
+
+This remains an educational single-session serving vertical. Mixed precision,
+GGUF or ONNX import, fused attention kernels, and production multi-tenant
+request scheduling remain intentionally outside the current scope.
 
 ### Backends
 

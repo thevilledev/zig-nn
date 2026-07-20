@@ -81,8 +81,9 @@ workflow, backend contract, and event protocol.
 - [Containers](docs/containers.md) — minimal CPU and CUDA benchmark job images
 - [Development Environment](docs/development.md) — pinned tools, hooks, and
   repository-wide checks
-- [Roadmap](docs/roadmap.md) — the confidence, inference, and steady-state
-  performance release gates
+- [TinyGPT](experiments/tiny_gpt/README.md) and
+  [Serving](experiments/serving/README.md) — the persistent inference path,
+  streaming text API, and bounded dense prediction service
 - [Real-Time Learning Lab](docs/learning-lab.md) — live browser experiments,
   controls, and the structured event protocol
 

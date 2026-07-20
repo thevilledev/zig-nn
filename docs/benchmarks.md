@@ -125,7 +125,9 @@ v0.0.6 reference and v0.0.7 optimized path. On the controlled 8-core, 16 GiB
 host, the largest TinyGPT cached-decode row improved from 109,568 ns to 52,018
 ns (2.11x). No unaffected row regressed by more than 5%, and checksum error
 remained within `1e-4`. The regression test also requires stable live-buffer
-counts through 1,000 decode steps.
+counts through 1,000 decode steps. The CPU acceptance test warms through a KV
+context rollover and then requires both live buffers and physical workspace
+allocation counts to remain unchanged for the next 1,000 steps.
 
 Paid CUDA and ROCm timing runs are manual release gates. They are not started
 by pull-request CI; release measurements must use the clean-snapshot workflow

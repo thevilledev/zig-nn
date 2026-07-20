@@ -72,8 +72,11 @@ session validates that each batch has the model's input width:
 
 ```bash
 nnctl predict --model xor_model.bin --input '[0,1]' --gpu auto
-nnctl predict --model dense.bin --input-file samples.json --batch-size 32
+nnctl predict --model dense.bin --input '[0,1,1,0]' --batch-size 2
 ```
+
+`--input` accepts the complete flat JSON array; its length must equal
+`batch-size * model-input-size`.
 
 Serve either checkpoint type with one command:
 
@@ -86,6 +89,11 @@ nnctl serve --model tiny-gpt.bin --gpu auto
 requires CPU, while `metal`, `cuda`, and `rocm` fail if the selected backend is
 not compiled or available. `nnctl chat --model tiny-gpt.bin --gpu auto` starts
 the same TinyGPT serving path with the local chat client.
+
+TinyGPT `stream: true` requests emit an SSE event for each generated character,
+then a finish event and `[DONE]`. The educational v1 server processes one
+generation at a time, caps request bodies at 64 KiB and `max_tokens` at 4096,
+and stops generation when the streaming client disconnects.
 
 ## Cloud GPU Workers
 

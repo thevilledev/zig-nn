@@ -102,7 +102,8 @@ curl http://127.0.0.1:8080/v1/chat/completions \
   -d '{"model":"tiny-gpt-zig","messages":[{"role":"user","content":"to be"}],"max_tokens":80}'
 ```
 
-`stream: true` returns an SSE-framed completion followed by `[DONE]`:
+`stream: true` emits one OpenAI-compatible SSE chunk per generated character,
+then a finish chunk and `[DONE]`:
 
 ```bash
 curl -N http://127.0.0.1:8080/v1/completions \
@@ -110,10 +111,11 @@ curl -N http://127.0.0.1:8080/v1/completions \
   -d '{"model":"tiny-gpt-zig","prompt":"to be","max_tokens":80,"stream":true}'
 ```
 
-The v1 educational server handles one active generation at a time and bounds
-request bodies. It completes generation before writing the single SSE payload,
-so this protocol form is useful for client compatibility but is not yet
-incremental token streaming or production multi-tenant serving.
+The v1 educational server handles one active generation at a time, limits
+request bodies to 64 KiB, and rejects `max_tokens` above 4096. It flushes each
+chunk as generation proceeds, withholds partial stop-sequence matches, and
+cancels generation when the client writer disconnects. It is deliberately not
+a production multi-tenant scheduler.
 
 Prepare the sourced corpora with:
 
@@ -169,7 +171,7 @@ Implemented pieces:
 - deterministic JSON run summaries for experiment comparison
 - fast demo-corpus output-head training
 - seeded random-window mini-batch training with averaged/clipped gradients
-- OpenAI-compatible non-streaming and SSE-framed `/v1/chat/completions`,
+- OpenAI-compatible non-streaming and incremental SSE `/v1/chat/completions`,
   `/v1/completions`, and `/v1/models` serving
 - readable sampling with a tiny character backoff prior
 
@@ -179,7 +181,8 @@ context windows, and keeps the model character-level and small enough to inspect
 The serving path accepts common OpenAI request fields and returns explicit JSON
 errors for `n > 1`, token-array prompts, and multimodal message content. It
 reuses one loaded `TextSession`, including device weights, KV cache, and
-sampling workspaces, for sequential requests.
+sampling workspaces, for sequential requests. CPU inference additionally
+reuses bounded intermediate matrix storage and packed affine weights.
 
 See [data/README.md](data/README.md) for source links, dataset notes, and the
 intended story arc for improving the model over time.

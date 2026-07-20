@@ -90,11 +90,14 @@ With `--no-corpus-prior`, backend-selected generation uses per-layer KV caches.
 The cache appends projected keys and values in place and replays the current
 window only when context rollover is required.
 
-The CPU backend uses persistent contiguous inference weights, vectorized f32
-linear accumulation, and a fused linear-plus-bias-plus-GELU operation. The
-readable unfused composition remains covered by numerical parity tests. Live
-backend-buffer accounting and transfer, kernel, GEMM, and synchronization
-counters make steady-state allocation or host-boundary regressions testable.
+The CPU backend packs persistent inference weights into vector-width-padded
+rows, reuses a bounded intermediate-matrix workspace, vectorizes f32 linear
+accumulation, and fuses linear-plus-bias-plus-GELU. Wide layers can opt into
+deterministic parallel output-column tiles with
+`SessionOptions.cpu_output_tiles`; the default is one. The readable scalar and
+unfused paths remain numerical references. Live-buffer, physical-storage,
+transfer, kernel, GEMM, and synchronization assertions make steady-state
+allocation or host-boundary regressions testable.
 
 Use the same selection rules through the CLI:
 

@@ -81,6 +81,15 @@ curl -X POST http://localhost:8080/predict \
      -d '{"input": [0.0, 1.0], "batch_size": 1}'
 ```
 
+Validated batches from 1 through 1024 are accepted. For a two-input model, a
+two-sample request is a flat array:
+
+```bash
+curl -X POST http://localhost:8080/predict \
+     -H "Content-Type: application/json" \
+     -d '{"input": [0.0, 1.0, 1.0, 0.0], "batch_size": 2}'
+```
+
 ## Testing
 
 Run the tests with:
@@ -94,6 +103,7 @@ zig build test-serving
 - The server expects the model file to be named `xor_model.bin` by default
 - It listens on 127.0.0.1:8080 by default
 - Input dimensions must match the model's expected input size
+- `batch_size` must be between 1 and 1024
 - Batches must contain exactly `batch_size * input_size` values
 - The confidence value is currently derived from the first prediction value
 - Error responses use a JSON `error` object with an HTTP status code
