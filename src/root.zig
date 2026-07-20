@@ -12,6 +12,7 @@ const layer_mod = @import("layer.zig");
 const layer_norm_mod = @import("layer_norm.zig");
 const network_mod = @import("network.zig");
 const inference_service_mod = @import("inference_service.zig");
+const inference_mod = @import("inference.zig");
 const visualiser_mod = @import("visualiser.zig");
 const backend_mod = @import("backend.zig");
 const cpu_backend_mod = @import("cpu_backend.zig");
@@ -37,6 +38,7 @@ const decoding_mod = @import("decoding.zig");
 const retrieval_mod = @import("retrieval.zig");
 const audio_mod = @import("audio.zig");
 const spectral_mod = @import("spectral.zig");
+const tiny_gpt_mod = @import("tiny_gpt.zig");
 
 /// Library usage example:
 ///
@@ -78,6 +80,7 @@ pub const LayerType = network_mod.LayerType;
 pub const LayerVariant = network_mod.LayerVariant;
 pub const LossFunction = network_mod.LossFunction;
 pub const InferenceService = inference_service_mod.InferenceService;
+pub const Inference = inference_mod;
 pub const visualiseNetwork = visualiser_mod.visualiseNetwork;
 pub const Quantization = quantization_mod;
 pub const Tensor = tensor_mod.Tensor;
@@ -106,6 +109,7 @@ pub const Decoding = decoding_mod;
 pub const Retrieval = retrieval_mod;
 pub const Audio = audio_mod;
 pub const Spectral = spectral_mod;
+pub const TinyGPT = tiny_gpt_mod;
 
 // Export backend interface types
 pub const BackendMatrix = backend_mod.Matrix;

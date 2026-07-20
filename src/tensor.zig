@@ -116,6 +116,13 @@ pub const Device = struct {
         return self.instance.getBackendType();
     }
 
+    /// Returns the exact backend instance owned by this device. This is used
+    /// by long-lived inference sessions to upload parameters once and retain
+    /// the resulting backend-side model snapshot.
+    pub fn backendInstance(self: Device) BackendInstance {
+        return self.instance;
+    }
+
     pub fn runtimeStats(self: Device) backend_mod.RuntimeStats {
         return self.instance.runtimeStats();
     }
@@ -879,6 +886,10 @@ pub const ExecutionContext = struct {
     pub fn resetStats(self: *ExecutionContext) void {
         self.stats = .{};
         self.device.resetRuntimeStats();
+    }
+
+    pub fn executionStats(self: ExecutionContext) ExecutionStats {
+        return self.stats;
     }
 
     pub fn backendStats(self: ExecutionContext) backend_mod.RuntimeStats {

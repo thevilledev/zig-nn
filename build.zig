@@ -52,6 +52,7 @@ const experiments = [_]Experiment{
     .{ .name = "turboquant", .src = "experiments/quantization/turboquant.zig", .description = "Run the TurboQuant paper lab experiment" },
     .{ .name = "tiny_gpt", .src = "experiments/tiny_gpt/tiny_gpt.zig", .description = "Run the tiny GPT decoder-only Transformer experiment" },
     .{ .name = "tiny_gpt_openai", .src = "experiments/tiny_gpt/openai_server.zig", .description = "Run the Tiny GPT OpenAI-compatible inference server" },
+    .{ .name = "inference_predict", .src = "experiments/inference/predict.zig", .description = "Run one dense inference request" },
 };
 
 const SourceTest = struct {
@@ -86,6 +87,8 @@ const source_tests = [_]SourceTest{
     .{ .name = "layer_norm", .src = "src/layer_norm.zig" },
     .{ .name = "network", .src = "src/network.zig" },
     .{ .name = "inference_service", .src = "src/inference_service.zig" },
+    .{ .name = "inference", .src = "src/inference.zig" },
+    .{ .name = "tiny_gpt_model", .src = "src/tiny_gpt.zig" },
     .{ .name = "visualiser", .src = "src/visualiser.zig" },
     .{ .name = "quantization", .src = "src/quantization.zig" },
     .{ .name = "backend", .src = "src/backend.zig" },

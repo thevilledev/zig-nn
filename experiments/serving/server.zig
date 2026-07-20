@@ -1,7 +1,7 @@
 const std = @import("std");
 const nn = @import("nn");
 
-const InferenceService = nn.InferenceService;
+const DenseSession = nn.Inference.DenseSession;
 const http = std.http;
 const json = std.json;
 const net = std.Io.net;
@@ -13,16 +13,17 @@ const ServerOptions = struct {
     host: []const u8 = "127.0.0.1",
     port: u16 = 8080,
     model_path: []const u8 = "xor_model.bin",
+    backend: nn.DevicePreference = .auto,
 };
 
 const Request = struct {
-    input: []f64,
+    input: []f32,
     batch_size: u32 = 1,
 };
 
 const Response = struct {
-    prediction: []const f64,
-    confidence: f64,
+    prediction: []const f32,
+    confidence: f32,
 
     pub fn writeJson(self: Response, writer: anytype) !void {
         try writer.writeAll("{\"prediction\":[");
@@ -60,7 +61,7 @@ pub fn main(init: std.process.Init) !void {
         return err;
     };
 
-    var inference = try InferenceService.init(allocator, options.model_path);
+    var inference = try DenseSession.init(allocator, options.model_path, .{ .device = options.backend });
     defer inference.deinit();
 
     const address = try net.IpAddress.parse(options.host, options.port);
@@ -69,6 +70,7 @@ pub fn main(init: std.process.Init) !void {
 
     try stdout.print("Server listening on http://{s}:{}\n", .{ options.host, options.port });
     try stdout.print("Model: {s}\n", .{options.model_path});
+    try stdout.print("Backend: {s}\n", .{@tagName(inference.backendType())});
     try stdout.flush();
 
     while (true) {
@@ -107,6 +109,10 @@ fn parseArgs(args: []const []const u8) !ServerOptions {
             options.port = try std.fmt.parseInt(u16, args[i], 10);
         } else if (std.mem.startsWith(u8, arg, "--port=")) {
             options.port = try std.fmt.parseInt(u16, arg["--port=".len..], 10);
+        } else if (std.mem.eql(u8, arg, "--backend")) {
+            i += 1;
+            if (i >= args.len) return error.MissingArgument;
+            options.backend = try parseBackend(args[i]);
         } else {
             return error.UnknownArgument;
         }
@@ -123,13 +129,14 @@ fn printUsage(writer: anytype) !void {
         \\  --model <path>   Model file to load (default: xor_model.bin)
         \\  --host <host>    Host to bind (default: 127.0.0.1)
         \\  --port <port>    Port to bind (default: 8080)
+        \\  --backend <name> cpu, auto, metal, cuda, or rocm
         \\
     );
 }
 
 fn handleConnection(
     allocator: std.mem.Allocator,
-    inference: *InferenceService,
+    inference: *DenseSession,
     stream: anytype,
 ) !void {
     const io = std.Options.debug_io;
@@ -213,11 +220,11 @@ fn readBody(request: *http.Server.Request, body_buf: []u8) ![]const u8 {
     return reader.take(@intCast(content_length));
 }
 
-fn predictionResponse(allocator: std.mem.Allocator, inference: *InferenceService, request: Request) ![]u8 {
+fn predictionResponse(allocator: std.mem.Allocator, inference: *DenseSession, request: Request) ![]u8 {
     if (request.batch_size != 1) return error.UnsupportedBatchSize;
-    if (request.input.len != try inference.getInputSize()) return error.InvalidInputDimensions;
+    if (request.input.len != inference.inputSize()) return error.InvalidInputDimensions;
 
-    const prediction = try inference.predict(request.input);
+    const prediction = try inference.predictAlloc(request.input, 1);
     defer allocator.free(prediction);
 
     var body: std.Io.Writer.Allocating = .init(allocator);
@@ -228,6 +235,15 @@ fn predictionResponse(allocator: std.mem.Allocator, inference: *InferenceService
     };
     try response.writeJson(&body.writer);
     return body.toOwnedSlice();
+}
+
+fn parseBackend(value: []const u8) !nn.DevicePreference {
+    if (std.mem.eql(u8, value, "none") or std.mem.eql(u8, value, "cpu")) return .cpu;
+    if (std.mem.eql(u8, value, "auto")) return .auto;
+    if (std.mem.eql(u8, value, "metal")) return .metal;
+    if (std.mem.eql(u8, value, "cuda")) return .cuda;
+    if (std.mem.eql(u8, value, "rocm")) return .rocm;
+    return error.InvalidBackend;
 }
 
 fn pathOnly(target: []const u8) []const u8 {
@@ -280,8 +296,8 @@ test "request parsing" {
     const request = parsed.value;
 
     try testing.expectEqual(@as(usize, 2), request.input.len);
-    try testing.expectEqual(@as(f64, 0.0), request.input[0]);
-    try testing.expectEqual(@as(f64, 1.0), request.input[1]);
+    try testing.expectEqual(@as(f32, 0.0), request.input[0]);
+    try testing.expectEqual(@as(f32, 1.0), request.input[1]);
     try testing.expectEqual(@as(u32, 1), request.batch_size);
 }
 
@@ -299,7 +315,7 @@ test "request parsing defaults batch size" {
 }
 
 test "response formatting" {
-    const prediction = [_]f64{0.95};
+    const prediction = [_]f32{0.95};
 
     const response_data = Response{
         .prediction = &prediction,
@@ -320,17 +336,18 @@ test "response formatting" {
     defer parsed.deinit();
 
     try testing.expectEqual(@as(usize, 1), parsed.value.prediction.len);
-    try testing.expectApproxEqAbs(@as(f64, 0.95), parsed.value.prediction[0], 0.000001);
-    try testing.expectApproxEqAbs(@as(f64, 0.95), parsed.value.confidence, 0.000001);
+    try testing.expectApproxEqAbs(@as(f32, 0.95), parsed.value.prediction[0], 0.000001);
+    try testing.expectApproxEqAbs(@as(f32, 0.95), parsed.value.confidence, 0.000001);
 }
 
-test "argument parsing supports model host and port" {
-    const args = [_][]const u8{ "--model", "model.bin", "--host=0.0.0.0", "--port", "9000" };
+test "argument parsing supports model host port and backend" {
+    const args = [_][]const u8{ "--model", "model.bin", "--host=0.0.0.0", "--port", "9000", "--backend", "cpu" };
     const options = try parseArgs(args[0..]);
 
     try testing.expectEqualStrings("model.bin", options.model_path);
     try testing.expectEqualStrings("0.0.0.0", options.host);
     try testing.expectEqual(@as(u16, 9000), options.port);
+    try testing.expectEqual(nn.DevicePreference.cpu, options.backend);
 }
 
 test "pathOnly strips query strings" {

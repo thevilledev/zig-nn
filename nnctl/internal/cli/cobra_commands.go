@@ -156,6 +156,72 @@ Use --corpus-path to train on any local UTF-8 text file instead of a preset.`,
 	return cmd
 }
 
+func (a *app) newModelCommand(withRepo repoRunner) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "model",
+		Short: "Inspect model checkpoints",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmd.Help()
+		},
+	}
+	opts := modelInspectOptions{}
+	inspect := &cobra.Command{
+		Use:   "inspect CHECKPOINT",
+		Short: "Show checkpoint type, version, and dimensions",
+		Args:  cobra.ExactArgs(1),
+		RunE: withRepo(func(ctx context.Context, cmd *cobra.Command, args []string) error {
+			return a.runModelInspect(args[0], opts)
+		}),
+	}
+	inspect.Flags().BoolVar(&opts.json, "json", opts.json, "print machine-readable JSON")
+	cmd.AddCommand(inspect)
+	return cmd
+}
+
+func (a *app) newPredictCommand(withRepo repoRunner) *cobra.Command {
+	opts := defaultPredictOptions()
+	cmd := &cobra.Command{
+		Use:   "predict",
+		Short: "Run dense checkpoint inference",
+		Example: `  nnctl predict --model xor_model.bin --input '[0,1]'
+  nnctl predict --model classifier.bin --input '[1,2,3,4]' --batch-size 2 --gpu cpu`,
+		Args: cobra.NoArgs,
+		RunE: withRepo(func(ctx context.Context, cmd *cobra.Command, args []string) error {
+			return a.runPredict(ctx, opts)
+		}),
+	}
+	addModeFlags(cmd, &opts.mode)
+	addGPUFlag(cmd, &opts.backend)
+	cmd.Flags().StringVar(&opts.modelPath, "model", opts.modelPath, "ZNN checkpoint to load")
+	cmd.Flags().StringVar(&opts.inputJSON, "input", opts.inputJSON, "flat JSON number array")
+	cmd.Flags().IntVar(&opts.batchSize, "batch-size", opts.batchSize, "number of input rows")
+	cmd.Flags().SortFlags = false
+	return cmd
+}
+
+func (a *app) newServeCommand(withRepo repoRunner) *cobra.Command {
+	opts := defaultServeOptions()
+	cmd := &cobra.Command{
+		Use:   "serve",
+		Short: "Serve a ZNN or TinyGPT checkpoint",
+		Long:  "Detects the checkpoint format and starts the matching persistent inference service on a loopback address.",
+		Example: `  nnctl serve --model xor_model.bin
+  nnctl serve --model tiny-gpt.bin --gpu auto --port 8080`,
+		Args: cobra.NoArgs,
+		RunE: withRepo(func(ctx context.Context, cmd *cobra.Command, args []string) error {
+			return a.runServe(ctx, opts)
+		}),
+	}
+	addModeFlags(cmd, &opts.mode)
+	addGPUFlag(cmd, &opts.backend)
+	cmd.Flags().StringVar(&opts.modelPath, "model", opts.modelPath, "ZNN or TinyGPT checkpoint to serve")
+	cmd.Flags().StringVar(&opts.modelName, "model-name", opts.modelName, "OpenAI-compatible TinyGPT model id")
+	cmd.Flags().StringVar(&opts.host, "host", opts.host, "loopback bind host")
+	cmd.Flags().IntVar(&opts.port, "port", opts.port, "bind port")
+	cmd.Flags().SortFlags = false
+	return cmd
+}
+
 func (a *app) newChatCommand(withRepo repoRunner) *cobra.Command {
 	opts := defaultChatOptions()
 	cmd := &cobra.Command{
@@ -170,6 +236,7 @@ func (a *app) newChatCommand(withRepo repoRunner) *cobra.Command {
 		}),
 	}
 	addModeFlags(cmd, &opts.mode)
+	addGPUFlag(cmd, &opts.backend)
 	cmd.Flags().StringVar(&opts.host, "host", opts.host, "chat app bind host")
 	cmd.Flags().IntVar(&opts.port, "port", opts.port, "chat app bind port")
 	cmd.Flags().StringVar(&opts.apiHost, "api-host", opts.apiHost, "TinyGPT inference bind host")

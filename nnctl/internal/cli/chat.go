@@ -30,6 +30,7 @@ const (
 
 type chatOptions struct {
 	mode             string
+	backend          string
 	host             string
 	port             int
 	apiHost          string
@@ -46,6 +47,7 @@ type chatOptions struct {
 func defaultChatOptions() chatOptions {
 	return chatOptions{
 		mode:             getenvDefault("NNCTL_OPTIMIZE", getenvDefault("BUILD_MODE", defaultBuildMode)),
+		backend:          "auto",
 		host:             "127.0.0.1",
 		port:             8090,
 		apiHost:          "127.0.0.1",
@@ -72,6 +74,7 @@ func (a *app) runChat(ctx context.Context, opts chatOptions) error {
 		"--max-tokens", strconv.Itoa(opts.maxTokens),
 		"--temperature", strconv.FormatFloat(opts.temperature, 'f', -1, 64),
 		"--top-k", strconv.Itoa(opts.topK),
+		"--backend", runtimeBackend(opts.backend),
 	}
 	if opts.modelPath != "" {
 		serverArgs = append(serverArgs, "--model", opts.modelPath)
@@ -79,7 +82,7 @@ func (a *app) runChat(ctx context.Context, opts chatOptions) error {
 		serverArgs = append(serverArgs, "--allow-untrained")
 	}
 
-	runArgs := zig.RunArgs("run_tiny_gpt_openai", zig.Options{Optimize: opts.mode}, serverArgs)
+	runArgs := zig.RunArgs("run_tiny_gpt_openai", zig.Options{Optimize: opts.mode, GPU: buildBackend(opts.backend)}, serverArgs)
 	if _, err := fmt.Fprintf(a.stderr(), "==> %s\n", zig.CommandString(a.zig, runArgs)); err != nil {
 		return fmt.Errorf("write inference command: %w", err)
 	}
@@ -157,6 +160,9 @@ func (a *app) runChat(ctx context.Context, opts chatOptions) error {
 }
 
 func validateChatOptions(opts chatOptions) (time.Duration, error) {
+	if err := validateInferenceBackend(opts.backend); err != nil {
+		return 0, err
+	}
 	if opts.modelPath == "" && !opts.allowUntrained {
 		return 0, fmt.Errorf("chat requires --model <checkpoint> or --allow-untrained")
 	}
@@ -175,14 +181,8 @@ func validateChatOptions(opts chatOptions) (time.Duration, error) {
 	if strings.TrimSpace(opts.modelName) == "" {
 		return 0, fmt.Errorf("--model-name must not be empty")
 	}
-	if opts.maxTokens < 0 || opts.maxTokens > chatMaxTokens {
-		return 0, fmt.Errorf("--max-tokens must be between 0 and %d", chatMaxTokens)
-	}
-	if math.IsNaN(opts.temperature) || math.IsInf(opts.temperature, 0) || opts.temperature < 0 || opts.temperature > chatMaxTemperature {
-		return 0, fmt.Errorf("--temperature must be between 0 and %g", chatMaxTemperature)
-	}
-	if opts.topK < 0 || opts.topK > 65536 {
-		return 0, fmt.Errorf("--top-k must be between 0 and 65536")
+	if err := validateChatSamplingOptions(opts); err != nil {
+		return 0, err
 	}
 
 	readyTimeout, err := time.ParseDuration(opts.readyTimeoutText)
@@ -193,6 +193,19 @@ func validateChatOptions(opts chatOptions) (time.Duration, error) {
 		return 0, fmt.Errorf("--ready-timeout must be positive")
 	}
 	return readyTimeout, nil
+}
+
+func validateChatSamplingOptions(opts chatOptions) error {
+	if opts.maxTokens < 0 || opts.maxTokens > chatMaxTokens {
+		return fmt.Errorf("--max-tokens must be between 0 and %d", chatMaxTokens)
+	}
+	if math.IsNaN(opts.temperature) || math.IsInf(opts.temperature, 0) || opts.temperature < 0 || opts.temperature > chatMaxTemperature {
+		return fmt.Errorf("--temperature must be between 0 and %g", chatMaxTemperature)
+	}
+	if opts.topK < 0 || opts.topK > 65536 {
+		return fmt.Errorf("--top-k must be between 0 and 65536")
+	}
+	return nil
 }
 
 func shutdownHTTPServer(parent context.Context, server *http.Server) error {

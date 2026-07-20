@@ -193,6 +193,22 @@ pub fn distribution(
     if (logits.len == 0) return error.EmptyVocabulary;
     const candidates = try allocator.alloc(Candidate, logits.len);
     errdefer allocator.free(candidates);
+    const retained = try distributionInto(candidates, logits, recent_tokens, config);
+    return allocator.realloc(candidates, retained.len);
+}
+
+/// Allocation-free distribution construction for persistent inference
+/// sessions. The caller supplies one candidate slot per vocabulary entry.
+pub fn distributionInto(
+    workspace: []Candidate,
+    logits: []const f64,
+    recent_tokens: []const usize,
+    config: SamplingConfig,
+) ![]Candidate {
+    try config.validate();
+    if (logits.len == 0) return error.EmptyVocabulary;
+    if (workspace.len < logits.len) return error.InsufficientWorkspace;
+    const candidates = workspace[0..logits.len];
     for (logits, candidates, 0..) |logit, *candidate, token| {
         if (!std.math.isFinite(logit)) return error.InvalidLogit;
         var adjusted = applyRepetitionPenalty(logit, token, recent_tokens, config.repetition_penalty);
@@ -202,8 +218,7 @@ pub fn distribution(
     sortDescending(candidates);
     if (config.temperature == 0) {
         candidates[0].probability = 1;
-        const greedy = try allocator.realloc(candidates, 1);
-        return greedy;
+        return candidates[0..1];
     }
 
     var retained = if (config.top_k == 0) candidates.len else @min(config.top_k, candidates.len);
@@ -229,7 +244,7 @@ pub fn distribution(
     total = 0;
     for (candidates[0..retained]) |candidate| total += candidate.probability;
     for (candidates[0..retained]) |*candidate| candidate.probability /= total;
-    return allocator.realloc(candidates, retained);
+    return candidates[0..retained];
 }
 
 pub fn sample(
@@ -241,6 +256,24 @@ pub fn sample(
 ) !usize {
     const candidates = try distribution(allocator, logits, recent_tokens, config);
     defer allocator.free(candidates);
+    const draw = random.float(f64);
+    var cumulative: f64 = 0;
+    for (candidates) |candidate| {
+        cumulative += candidate.probability;
+        if (draw <= cumulative) return candidate.token;
+    }
+    return candidates[candidates.len - 1].token;
+}
+
+/// Allocation-free sampling counterpart to `sample`.
+pub fn sampleWithWorkspace(
+    random: std.Random,
+    logits: []const f64,
+    recent_tokens: []const usize,
+    config: SamplingConfig,
+    workspace: []Candidate,
+) !usize {
+    const candidates = try distributionInto(workspace, logits, recent_tokens, config);
     const draw = random.float(f64);
     var cumulative: f64 = 0;
     for (candidates) |candidate| {
@@ -278,6 +311,14 @@ test "zero temperature is greedy after repetition penalty" {
     try std.testing.expectEqual(@as(usize, 1), candidates.len);
     try std.testing.expectEqual(@as(usize, 1), candidates[0].token);
     try std.testing.expectEqual(@as(f64, 1), candidates[0].probability);
+}
+
+test "sampling workspace matches allocating distribution" {
+    var workspace: [4]Candidate = undefined;
+    const retained = try distributionInto(&workspace, &.{ 4, 3, 2, 1 }, &.{}, .{ .top_k = 3, .top_p = 0.8 });
+    try std.testing.expectEqual(@as(usize, 2), retained.len);
+    try std.testing.expectEqual(@as(usize, 0), retained[0].token);
+    try std.testing.expectEqual(@as(usize, 1), retained[1].token);
 }
 
 test "seeded nucleus samples never escape retained candidates" {

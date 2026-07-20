@@ -56,6 +56,7 @@ var experiments = []Experiment{
 	{Name: "turboquant", Step: "run_turboquant", Description: "Run TurboQuant paper lab", Quick: true},
 	{Name: "tiny-gpt", Step: "run_tiny_gpt", Description: "Run tiny GPT decoder-only Transformer", Quick: true},
 	{Name: "tiny-gpt-openai", Step: "run_tiny_gpt_openai", Description: "Run Tiny GPT OpenAI-compatible server"},
+	{Name: "inference-predict", Step: "run_inference_predict", Description: "Run one dense inference request", Hidden: true},
 }
 
 var tests = []string{

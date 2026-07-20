@@ -1,8 +1,10 @@
 const std = @import("std");
+const nn = @import("nn");
 const http = std.http;
 const json = std.json;
 const net = std.Io.net;
 const tiny = @import("tiny_gpt.zig");
+const TextSession = nn.Inference.TextSession;
 
 const max_body_bytes = 64 * 1024;
 const system_fingerprint = "zig-nn-tiny-gpt";
@@ -18,6 +20,7 @@ const ServerOptions = struct {
     top_k: usize = 8,
     top_p: f64 = 1.0,
     allow_untrained: bool = false,
+    backend: nn.DevicePreference = .auto,
 };
 
 const ApiError = struct {
@@ -33,6 +36,8 @@ const RequestSettings = struct {
     temperature: f64,
     top_k: usize,
     top_p: f64,
+    seed: u64,
+    stream: bool,
     stop_sequences: []const []const u8 = &.{},
     owns_stop_sequences: bool = false,
 
@@ -85,17 +90,19 @@ pub fn main(init: std.process.Init) !void {
         return error.MissingModel;
     }
 
-    var model = if (options.model_path) |path|
+    const model = if (options.model_path) |path|
         try tiny.TinyGPT.loadFromFile(allocator, path)
     else
         try tiny.TinyGPT.init(allocator, .{}, options.seed);
-    defer model.deinit();
+    var inference = try TextSession.initModel(allocator, model, .{ .device = options.backend });
+    defer inference.deinit();
 
     const address = try net.IpAddress.parse(options.host, options.port);
     var server = try address.listen(io, .{ .reuse_address = true });
     defer server.deinit(io);
 
     try stdout.print("Tiny GPT OpenAI-compatible server listening on http://{s}:{}\n", .{ options.host, options.port });
+    try stdout.print("Backend: {s}\n", .{@tagName(inference.backendType())});
     if (options.model_path) |path| {
         try stdout.print("Model: {s} ({s})\n", .{ options.model_name, path });
     } else {
@@ -108,7 +115,7 @@ pub fn main(init: std.process.Init) !void {
             const stream = try server.accept(io);
             defer stream.close(io);
 
-            handleConnection(allocator, &model, options, stream) catch |err| {
+            handleConnection(allocator, &inference, options, stream) catch |err| {
                 std.debug.print("request failed: {}\n", .{err});
             };
         }
@@ -117,7 +124,7 @@ pub fn main(init: std.process.Init) !void {
 
 fn handleConnection(
     allocator: std.mem.Allocator,
-    model: *tiny.TinyGPT,
+    model: *TextSession,
     options: ServerOptions,
     stream: anytype,
 ) !void {
@@ -192,11 +199,13 @@ fn handleConnection(
     defer parsed.deinit();
 
     var api_error: ?ApiError = null;
+    const stream_response = wantsStream(parsed.value);
     if (std.mem.eql(u8, path, "/v1/chat/completions")) {
         const response = chatCompletionResponse(allocator, model, options, parsed.value, &api_error) catch |err| {
             return respondApiError(&request, api_error orelse fallbackApiError(err));
         };
         defer allocator.free(response);
+        if (stream_response) return respondEventStream(allocator, &request, response);
         return respondJson(&request, response, .ok);
     }
 
@@ -204,6 +213,7 @@ fn handleConnection(
         return respondApiError(&request, api_error orelse fallbackApiError(err));
     };
     defer allocator.free(response);
+    if (stream_response) return respondEventStream(allocator, &request, response);
     return respondJson(&request, response, .ok);
 }
 
@@ -217,7 +227,7 @@ fn readBody(request: *http.Server.Request, body_buf: []u8) ![]const u8 {
 
 fn completionResponse(
     allocator: std.mem.Allocator,
-    model: *tiny.TinyGPT,
+    model: *TextSession,
     options: ServerOptions,
     request_value: json.Value,
     api_error: *?ApiError,
@@ -285,7 +295,7 @@ fn completionResponse(
 
 fn chatCompletionResponse(
     allocator: std.mem.Allocator,
-    model: *tiny.TinyGPT,
+    model: *TextSession,
     options: ServerOptions,
     request_value: json.Value,
     api_error: *?ApiError,
@@ -383,19 +393,15 @@ fn parseRequestSettings(
         .temperature = temperature,
         .top_k = top_k,
         .top_p = top_p,
+        .seed = options.seed,
+        .stream = boolField(object, "stream") orelse false,
         .stop_sequences = stop_sequences,
         .owns_stop_sequences = true,
     };
 }
 
 fn rejectUnsupportedSettings(object: json.ObjectMap, api_error: *?ApiError) !void {
-    if (boolField(object, "stream")) |stream| {
-        if (stream) return requestFail(api_error, .{
-            .code = "unsupported_parameter",
-            .message = "stream=true is not supported by this server.",
-            .param = "stream",
-        });
-    } else if (object.get("stream")) |_| {
+    if (object.get("stream") != null and boolField(object, "stream") == null) {
         return requestFail(api_error, .{
             .code = "invalid_type",
             .message = "stream must be a boolean.",
@@ -424,6 +430,11 @@ fn rejectUnsupportedSettings(object: json.ObjectMap, api_error: *?ApiError) !voi
             .param = "user",
         });
     }
+}
+
+fn wantsStream(value: json.Value) bool {
+    if (value != .object) return false;
+    return boolField(value.object, "stream") orelse false;
 }
 
 fn parseStopSequences(
@@ -527,27 +538,22 @@ fn parseCompletionPrompts(
 
 fn generateCompletion(
     allocator: std.mem.Allocator,
-    model: *tiny.TinyGPT,
+    model: *TextSession,
     prompt: []const u8,
     settings: RequestSettings,
 ) !GeneratedText {
-    const generated_tokens = try model.generateTokens(
-        allocator,
-        prompt,
-        settings.max_tokens,
-        settings.temperature,
-        settings.top_k,
-        settings.top_p,
-    );
-    defer allocator.free(generated_tokens);
+    var generated = try model.generateAlloc(prompt, .{
+        .max_tokens = settings.max_tokens,
+        .temperature = settings.temperature,
+        .top_k = settings.top_k,
+        .top_p = settings.top_p,
+        .seed = settings.seed,
+    });
+    defer generated.deinit();
 
-    const prompt_token_count = if (prompt.len == 0) 1 else prompt.len;
-    const raw = try tiny.Tokenizer.decode(allocator, generated_tokens[prompt_token_count..]);
-    defer allocator.free(raw);
-
-    const stop_index = firstStopIndex(raw, settings.stop_sequences);
-    const end = stop_index orelse raw.len;
-    const text = try allocator.dupe(u8, raw[0..end]);
+    const stop_index = firstStopIndex(generated.text, settings.stop_sequences);
+    const end = stop_index orelse generated.text.len;
+    const text = try allocator.dupe(u8, generated.text[0..end]);
     return .{
         .text = text,
         .finish_reason = if (stop_index != null) "stop" else "length",
@@ -716,6 +722,22 @@ fn respondJson(request: *http.Server.Request, body: []const u8, status: http.Sta
     });
 }
 
+fn respondEventStream(allocator: std.mem.Allocator, request: *http.Server.Request, response: []const u8) !void {
+    var body: std.Io.Writer.Allocating = .init(allocator);
+    defer body.deinit();
+    try body.writer.writeAll("data: ");
+    try body.writer.writeAll(response);
+    try body.writer.writeAll("\n\ndata: [DONE]\n\n");
+    try request.respond(body.writer.buffered(), .{
+        .status = .ok,
+        .extra_headers = &[_]http.Header{
+            .{ .name = "Content-Type", .value = "text/event-stream" },
+            .{ .name = "Cache-Control", .value = "no-cache" },
+            .{ .name = "Access-Control-Allow-Origin", .value = "*" },
+        },
+    });
+}
+
 fn respondApiError(request: *http.Server.Request, err: ApiError) !void {
     var out: std.Io.Writer.Allocating = .init(std.heap.smp_allocator);
     defer out.deinit();
@@ -796,6 +818,10 @@ fn parseArgs(args: []const [:0]const u8) !ServerOptions {
             if (!std.math.isFinite(options.top_p) or options.top_p <= 0 or options.top_p > 1) return error.InvalidTopP;
         } else if (std.mem.eql(u8, arg, "--allow-untrained")) {
             options.allow_untrained = true;
+        } else if (std.mem.eql(u8, arg, "--backend")) {
+            i += 1;
+            if (i >= args.len) return error.MissingArgument;
+            options.backend = try parseBackend(args[i]);
         } else if (std.mem.eql(u8, arg, "--help")) {
             return error.HelpRequested;
         } else {
@@ -818,6 +844,7 @@ fn printUsage(writer: anytype) !void {
         \\  --temperature <f>    Default sampling temperature (default: 1.0)
         \\  --top-k <n>          Default top-k sampler cutoff (default: 8)
         \\  --top-p <f>          Default nucleus probability mass (default: 1.0)
+        \\  --backend <name>     cpu, auto, metal, cuda, or rocm
         \\  --allow-untrained    Serve a seeded untrained model when --model is omitted
         \\
         \\Endpoints:
@@ -826,6 +853,15 @@ fn printUsage(writer: anytype) !void {
         \\  POST /v1/chat/completions
         \\
     );
+}
+
+fn parseBackend(value: []const u8) !nn.DevicePreference {
+    if (std.mem.eql(u8, value, "none") or std.mem.eql(u8, value, "cpu")) return .cpu;
+    if (std.mem.eql(u8, value, "auto")) return .auto;
+    if (std.mem.eql(u8, value, "metal")) return .metal;
+    if (std.mem.eql(u8, value, "cuda")) return .cuda;
+    if (std.mem.eql(u8, value, "rocm")) return .rocm;
+    return error.InvalidBackend;
 }
 
 test "chat prompt builder formats supported roles and text parts" {
@@ -897,7 +933,6 @@ test "request settings reject unsupported compatibility fields" {
         body: []const u8,
         param: []const u8,
     }{
-        .{ .body = "{\"stream\":true}", .param = "stream" },
         .{ .body = "{\"n\":2}", .param = "n" },
     };
 
@@ -912,6 +947,20 @@ test "request settings reject unsupported compatibility fields" {
         );
         try std.testing.expectEqualStrings(case.param, api_error.?.param.?);
     }
+}
+
+test "request settings accept streaming and reject non-boolean streaming" {
+    const allocator = std.testing.allocator;
+    const accepted = try json.parseFromSlice(json.Value, allocator, "{\"stream\":true}", .{});
+    defer accepted.deinit();
+    var api_error: ?ApiError = null;
+    var settings = try parseRequestSettings(allocator, accepted.value.object, .{}, &api_error);
+    defer settings.deinit(allocator);
+    try std.testing.expect(settings.stream);
+
+    const rejected = try json.parseFromSlice(json.Value, allocator, "{\"stream\":1}", .{});
+    defer rejected.deinit();
+    try std.testing.expectError(error.OpenAIRequestError, parseRequestSettings(allocator, rejected.value.object, .{}, &api_error));
 }
 
 test "request settings accept nucleus sampling" {
@@ -959,7 +1008,8 @@ test "models response has OpenAI-compatible list shape" {
 
 test "chat completion response includes fingerprint and finish reason" {
     const allocator = std.testing.allocator;
-    var model = try tiny.TinyGPT.init(allocator, .{ .block_size = 4, .n_layer = 1, .n_head = 2, .n_embd = 8 }, 123);
+    const source = try tiny.TinyGPT.init(allocator, .{ .block_size = 4, .n_layer = 1, .n_head = 2, .n_embd = 8 }, 123);
+    var model = try TextSession.initModel(allocator, source, .{ .device = .cpu });
     defer model.deinit();
 
     const body =
