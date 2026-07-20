@@ -66,9 +66,12 @@ operations backend-neutral; it does not by itself prove that a GPU was selected.
 
 ## TinyGPT On A Device
 
-The existing checkpoint and server format remains CPU `Matrix`-based. TinyGPT
-splits its combined QKV checkpoint weights into the public device decoder, runs
-the selected path, then merges weights back before saving or serving.
+TinyGPT checkpoint/config/model logic now lives in the reusable library, while
+the experiment paths remain compatibility adapters. `Inference.TextSession`
+loads existing TGPT v1–v3 files, splits their combined QKV weights into a
+device decoder once, and keeps that decoder, its KV cache, and sampling buffers
+alive across generation calls. Serving does not rebuild or re-upload the model
+for each request.
 
 Run full-model SGD training on the automatically selected backend:
 
@@ -86,6 +89,22 @@ device batches remain on the CPU educational trainer for now.
 With `--no-corpus-prior`, backend-selected generation uses per-layer KV caches.
 The cache appends projected keys and values in place and replays the current
 window only when context rollover is required.
+
+The CPU backend uses persistent contiguous inference weights, vectorized f32
+linear accumulation, and a fused linear-plus-bias-plus-GELU operation. The
+readable unfused composition remains covered by numerical parity tests. Live
+backend-buffer accounting and transfer, kernel, GEMM, and synchronization
+counters make steady-state allocation or host-boundary regressions testable.
+
+Use the same selection rules through the CLI:
+
+```bash
+nnctl serve --model tiny-gpt.bin --gpu auto
+nnctl chat --model tiny-gpt.bin --gpu metal
+```
+
+An explicit accelerator must be both compiled and available; it never silently
+becomes CPU. Only `auto` permits that fallback.
 
 ## Metal Verification
 

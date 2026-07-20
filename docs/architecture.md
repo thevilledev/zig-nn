@@ -74,6 +74,28 @@ Try them in [Optimizer Lab](../experiments/optimizer_lab/optimizer_lab.zig),
 [Padding Masks](../experiments/padding_masks/padding_masks.zig), and
 [Autoencoder](../experiments/autoencoder/autoencoder.zig).
 
+### [Inference Sessions](../src/inference.zig)
+
+Inference deliberately has two type-safe session contracts instead of one
+generic model interface:
+
+- `DenseSession` loads a ZNN network, selects one device, uploads a persistent
+  backend snapshot, and exposes `predictInto` and `predictAlloc` for validated
+  batches.
+- `TextSession` loads a TGPT TinyGPT model, keeps its decoder, execution
+  context, KV cache, logits, and sampling workspace alive, and exposes
+  `prefill`, `decodeNext`, writer-based `generate`, and `generateAlloc`.
+
+Both sessions own their selected device and expose execution/backend counters.
+`GenerationOptions` makes the seed, token limit, temperature, top-k, and top-p
+explicit; `GenerationStats` returns the backend, token counts, elapsed time,
+and runtime snapshot. Only automatic device selection can fall back to CPU.
+
+The library detects existing ZNN and TGPT headers without introducing another
+container format. ZNN and TGPT versions 1–3 remain readable. `InferenceService`,
+`run_serving`, and `run_tiny_gpt_openai` are compatibility entry points backed
+by the session implementation during the transition.
+
 ### Backends
 
 Implementations: [abstraction](../src/backend.zig), [CPU](../src/cpu_backend.zig),

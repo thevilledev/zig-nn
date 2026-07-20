@@ -6,7 +6,7 @@
 building and running the pieces directly. It favors small, inspectable
 implementations and experiments whose output shows whether an idea works.
 
-There are two complementary paths through the code:
+There are three complementary paths through the code:
 
 - The CPU fundamentals in [`src/matrix.zig`](src/matrix.zig),
   [`src/layer.zig`](src/layer.zig), and [`src/network.zig`](src/network.zig)
@@ -15,6 +15,9 @@ There are two complementary paths through the code:
   [`src/modules.zig`](src/modules.zig), and training tools in
   [`src/training.zig`](src/training.zig) support the later CPU, Metal, CUDA, and
   ROCm experiments without hiding device boundaries.
+- The type-safe sessions in [`src/inference.zig`](src/inference.zig) turn saved
+  ZNN networks and TGPT TinyGPT checkpoints into persistent dense or text
+  inference without exposing the experiment adapters.
 
 The reusable mechanics live in `src/`. The runnable programs in
 [`experiments/`](experiments/README.md) connect those mechanics to a concrete
@@ -34,6 +37,16 @@ Continue with `nnctl run quick`, or choose a topic from the
 [experiment guide](experiments/README.md). The complete setup, direct Zig
 commands, data requirements, and full validation workflow are in
 [Getting Started](docs/getting-started.md).
+
+Once you have a checkpoint, the same CLI can inspect it, run it, or serve it:
+
+```bash
+nnctl model inspect tiny-gpt.bin
+nnctl serve --model tiny-gpt.bin --gpu auto
+```
+
+Only `auto` may fall back to CPU. An explicit `metal`, `cuda`, or `rocm`
+selection fails when that accelerator is unavailable.
 
 For a guided browser view of live training, run:
 
@@ -68,6 +81,8 @@ workflow, backend contract, and event protocol.
 - [Containers](docs/containers.md) — minimal CPU and CUDA benchmark job images
 - [Development Environment](docs/development.md) — pinned tools, hooks, and
   repository-wide checks
+- [Roadmap](docs/roadmap.md) — the confidence, inference, and steady-state
+  performance release gates
 - [Real-Time Learning Lab](docs/learning-lab.md) — live browser experiments,
   controls, and the structured event protocol
 

@@ -19,8 +19,22 @@ zig build run_xor_training -- --output=xor_model.bin
 
 ## Building and Running
 
+Inspect the ZNN header and start the unified server:
+
 ```bash
-# Run the server
+nnctl model inspect xor_model.bin
+nnctl serve --model xor_model.bin --gpu auto
+```
+
+For one prediction without an HTTP server:
+
+```bash
+nnctl predict --model xor_model.bin --input '[0,1]' --gpu auto
+```
+
+The original experiment command remains available as a compatibility path:
+
+```bash
 zig build run_serving
 Server listening on http://127.0.0.1:8080
 ```
@@ -28,8 +42,14 @@ Server listening on http://127.0.0.1:8080
 You can override the model, host, or port:
 
 ```bash
-zig build run_serving -- --model=xor_model.bin --host=127.0.0.1 --port=8080
+zig build run_serving -- \
+  --model=xor_model.bin --host=127.0.0.1 --port=8080 --backend=auto
 ```
+
+Both commands load one persistent `nn.Inference.DenseSession`: the selected
+device, execution context, uploaded network snapshot, and runtime counters are
+reused across requests. Only `auto` may fall back to CPU; explicitly selected
+Metal, CUDA, or ROCm backends fail if unavailable.
 
 ## API Usage
 
@@ -74,5 +94,6 @@ zig build test-serving
 - The server expects the model file to be named `xor_model.bin` by default
 - It listens on 127.0.0.1:8080 by default
 - Input dimensions must match the model's expected input size
+- Batches must contain exactly `batch_size * input_size` values
 - The confidence value is currently derived from the first prediction value
 - Error responses use a JSON `error` object with an HTTP status code

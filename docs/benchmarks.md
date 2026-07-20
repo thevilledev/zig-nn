@@ -1,8 +1,10 @@
 # Benchmarks
 
-The benchmark suite is meant for optimization work, not pass/fail testing. It
-prints CSV with fixed input shapes, fixed seeds, warmups excluded from timing,
-and a checksum so obviously-elided work is visible.
+The benchmark suite uses fixed input shapes, fixed seeds, warmups excluded from
+timing, and a checksum so obviously-elided work is visible. Wall-clock results
+are informational on ordinary CI. Controlled release hardware applies the
+committed inference regression gates; deterministic allocation, buffer,
+transfer, and synchronization assertions remain blocking everywhere.
 
 ## Commands
 
@@ -99,8 +101,35 @@ zig build benchmark -- --filter gpu_peak
 zig build benchmark -- --filter layer_norm
 zig build benchmark -- --filter training
 zig build benchmark -- --filter tiny_gpt
+zig build benchmark -- --filter inference
 zig build benchmark -- --filter quantization
 ```
+
+The CSV reader remains backward compatible. Historical rows have 12 columns;
+14-column rows add `work_units` and `work_unit`; current 21-column rows also
+report allocations, live backend buffers, host-to-device and device-to-host
+transfers, kernel launches, vendor GEMM launches, and synchronizations.
+`nnctl benchmark` derives samples/second or tokens/second from declared work
+units without changing old baselines.
+
+## Inference Release Baseline
+
+The `inference` suite measures the complete steady-state surfaces:
+
+- dense prediction at batch sizes 1 and 32;
+- TinyGPT cold load and 16-token prompt prefill;
+- cached single-token decode and 32-token generation.
+
+The committed Apple M1 baselines in `benchmarks/baselines/` record the local
+v0.0.6 reference and v0.0.7 optimized path. On the controlled 8-core, 16 GiB
+host, the largest TinyGPT cached-decode row improved from 109,568 ns to 52,018
+ns (2.11x). No unaffected row regressed by more than 5%, and checksum error
+remained within `1e-4`. The regression test also requires stable live-buffer
+counts through 1,000 decode steps.
+
+Paid CUDA and ROCm timing runs are manual release gates. They are not started
+by pull-request CI; release measurements must use the clean-snapshot workflow
+below and retain the raw CSV and machine metadata.
 
 ## Remote GPU Benchmark Workflow
 
@@ -323,11 +352,11 @@ should use backend absolute timings for cross-GPU comparisons.
   comparisons are omitted, and quick mode skips the suite.
 - `training`: CPU `Network.trainBatch` loops plus `Network.trainBatchBackend`
   rows for Metal, CUDA, and ROCm when those backends are available.
-- `tiny_gpt`: legacy CPU TinyGPT forward passes through the experiment model, with
-  a larger four-layer decoder row in the default suite. The device decoder is
-  covered by transfer/kernel/synchronization assertions and deterministic
-  parity tests; add dedicated training and cached-generation timing rows before
-  using this suite for end-to-end GPU claims.
+- `tiny_gpt`: legacy experiment-model forward passes retained for historical
+  comparison.
+- `inference`: end-to-end dense prediction, TinyGPT loading, prompt prefill,
+  persistent cached decode, and multi-token generation, including work units
+  and runtime telemetry.
 - `quantization`: CPU uniform scalar quantization and TurboQuant encode,
   decode, error measurement, and KV-cache-shaped TurboQuant loops over
   per-head key/value vectors, including larger flat-vector and KV-cache rows.

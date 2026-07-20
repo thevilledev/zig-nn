@@ -48,11 +48,44 @@ nnctl run quick
 nnctl data tiny-gpt
 nnctl data speech-commands
 nnctl train speech-commands --output speech-commands.bin
+nnctl model inspect CHECKPOINT
+nnctl predict --model xor_model.bin --input '[0,1]' --gpu auto
+nnctl serve --model CHECKPOINT --gpu auto
 nnctl release
 nnctl fmt
 nnctl clean
 nnctl help
 ```
+
+## Inference From A Checkpoint
+
+`nnctl` recognizes existing ZNN network and TGPT TinyGPT magic headers. Inspect
+a checkpoint before running it:
+
+```bash
+nnctl model inspect xor_model.bin
+nnctl model inspect tiny-gpt.bin --json
+```
+
+Dense checkpoints accept a flat JSON array plus an optional batch size. The
+session validates that each batch has the model's input width:
+
+```bash
+nnctl predict --model xor_model.bin --input '[0,1]' --gpu auto
+nnctl predict --model dense.bin --input-file samples.json --batch-size 32
+```
+
+Serve either checkpoint type with one command:
+
+```bash
+nnctl serve --model xor_model.bin --gpu auto
+nnctl serve --model tiny-gpt.bin --gpu auto
+```
+
+`--gpu auto` is the only selection allowed to fall back to CPU. `--gpu none`
+requires CPU, while `metal`, `cuda`, and `rocm` fail if the selected backend is
+not compiled or available. `nnctl chat --model tiny-gpt.bin --gpu auto` starts
+the same TinyGPT serving path with the local chat client.
 
 ## Cloud GPU Workers
 
@@ -171,6 +204,8 @@ zig build test-transformer
 zig build test-layer
 zig build test-network
 zig build test-inference_service
+zig build test-inference
+zig build test-tiny_gpt_model
 zig build test-visualiser
 zig build test-quantization
 zig build test-backend
@@ -186,11 +221,13 @@ Most experiments are self-contained. Some workflows use local data or checkpoint
 
 - MNIST expects the dataset files. Use `nnctl data mnist`, then run
   `nnctl run mnist`.
-- Serving expects a saved model named `xor_model.bin` by default. Create one
-  with `nnctl run xor-training -- --output=xor_model.bin`, then run
-  `nnctl run serving`.
+- Dense serving uses a ZNN checkpoint. Create one with
+  `nnctl run xor-training -- --output=xor_model.bin`, then run
+  `nnctl serve --model xor_model.bin`.
 - Tiny GPT falls back to the checked-in toy corpus by default. To use sourced
-  Tiny Shakespeare or TinyStories corpora, run `nnctl data tiny-gpt`.
+  Tiny Shakespeare or TinyStories corpora, run `nnctl data tiny-gpt`. Train a
+  TGPT checkpoint with `nnctl train tiny-gpt --output tiny-gpt.bin`, inspect it,
+  then serve it with `nnctl serve --model tiny-gpt.bin`.
 - Speech Commands needs the external Mini Speech Commands WAV dataset and a
   locally trained checkpoint. Run `nnctl data speech-commands`, then
   `nnctl train speech-commands --output speech-commands.bin`.

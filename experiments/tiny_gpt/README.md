@@ -1,9 +1,10 @@
 # TinyGPT Experiment
 
 This experiment is a tiny, readable decoder-only Transformer in the style of
-Karpathy's minGPT and nanoGPT demos. The original `nn.Matrix` implementation
-remains the checkpoint and server compatibility path; a bidirectional adapter
-also runs the public `nn.Transformer.Decoder` on CPU, Metal, or CUDA.
+Karpathy's minGPT and nanoGPT demos. Its checkpoint/config/model implementation
+lives in `src/tiny_gpt`, and `nn.Inference.TextSession` runs the reusable device
+decoder on CPU, Metal, CUDA, or ROCm. Experiment imports and commands remain as
+compatibility paths.
 
 Run it with:
 
@@ -69,28 +70,50 @@ supports SGD with one context window per update and no weight decay. The legacy
 trainer continues to provide AdamW, gradient clipping, and averaged
 mini-batches.
 
-Run the OpenAI-compatible inference service:
+Inspect and serve a trained checkpoint through the unified inference path:
 
 ```bash
-nnctl run tiny-gpt-openai -- --model tiny-gpt.bin --port 8080
+nnctl model inspect tiny-gpt.bin
+nnctl serve --model tiny-gpt.bin --gpu auto --port 8080
 ```
 
-The server requires `--model` by default. For quick protocol testing with a
-seeded untrained model, pass `--allow-untrained`.
+The compatibility spelling remains available:
+
+```bash
+nnctl run tiny-gpt-openai -- --model tiny-gpt.bin --backend auto --port 8080
+```
+
+The server requires `--model` by default. The compatibility command accepts
+`--allow-untrained` for quick protocol testing with a seeded untrained model.
+Only `auto` can fall back to CPU; explicit accelerator selection fails when it
+is unavailable.
 
 Or run the inference server and a small local browser chat app together:
 
 ```bash
-nnctl chat --model tiny-gpt.bin
+nnctl chat --model tiny-gpt.bin --gpu auto
 ```
 
-Then call it with an OpenAI-style non-streaming request:
+Then call it with an OpenAI-style request:
 
 ```bash
 curl http://127.0.0.1:8080/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -d '{"model":"tiny-gpt-zig","messages":[{"role":"user","content":"to be"}],"max_tokens":80}'
 ```
+
+`stream: true` returns an SSE-framed completion followed by `[DONE]`:
+
+```bash
+curl -N http://127.0.0.1:8080/v1/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"tiny-gpt-zig","prompt":"to be","max_tokens":80,"stream":true}'
+```
+
+The v1 educational server handles one active generation at a time and bounds
+request bodies. It completes generation before writing the single SSE payload,
+so this protocol form is useful for client compatibility but is not yet
+incremental token streaming or production multi-tenant serving.
 
 Prepare the sourced corpora with:
 
@@ -146,16 +169,17 @@ Implemented pieces:
 - deterministic JSON run summaries for experiment comparison
 - fast demo-corpus output-head training
 - seeded random-window mini-batch training with averaged/clipped gradients
-- OpenAI-compatible non-streaming `/v1/chat/completions`, `/v1/completions`,
-  and `/v1/models` serving experiment
+- OpenAI-compatible non-streaming and SSE-framed `/v1/chat/completions`,
+  `/v1/completions`, and `/v1/models` serving
 - readable sampling with a tiny character backoff prior
 
 The full-training path is intentionally educational rather than high-throughput:
 it uses explicit backward passes in the experiment files, trains small batches of
 context windows, and keeps the model character-level and small enough to inspect.
 The serving path accepts common OpenAI request fields and returns explicit JSON
-errors for unsupported streaming, `n > 1`, token-array prompts, and multimodal
-message content.
+errors for `n > 1`, token-array prompts, and multimodal message content. It
+reuses one loaded `TextSession`, including device weights, KV cache, and
+sampling workspaces, for sequential requests.
 
 See [data/README.md](data/README.md) for source links, dataset notes, and the
 intended story arc for improving the model over time.
