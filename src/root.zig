@@ -223,6 +223,25 @@ pub const BackendInstance = union(BackendType) {
         }
     }
 
+    /// Configures CPU output-column parallelism. Accelerator backends already
+    /// control their own launch geometry and accept only the default value.
+    pub fn configureCpuOutputTiles(self: BackendInstance, count: usize) !void {
+        switch (self) {
+            .CPU => |ptr| try CPUBackend.configureOutputTiles(ptr, count),
+            else => if (count != 1) return error.UnsupportedBackendOption,
+        }
+    }
+
+    /// Prepares an immutable inference weight. CPU creates a packed copy;
+    /// accelerator matrices are already persistent in device-native storage.
+    pub fn prepareInferenceWeight(self: BackendInstance, matrix: *BackendMatrix) !void {
+        try self.requireMatrices(&.{matrix});
+        switch (self) {
+            .CPU => |ptr| try CPUBackend.prepareInferenceWeight(ptr, matrix),
+            else => {},
+        }
+    }
+
     pub fn deinitMatrix(self: BackendInstance, matrix: *BackendMatrix) void {
         switch (self) {
             .CPU => |ptr| CPUBackend.deinitMatrix(ptr, matrix),

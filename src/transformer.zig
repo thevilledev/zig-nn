@@ -246,6 +246,13 @@ pub const CausalSelfAttention = struct {
         self.* = undefined;
     }
 
+    pub fn prepareInference(self: *CausalSelfAttention) !void {
+        try self.query.prepareInference();
+        try self.key.prepareInference();
+        try self.value.prepareInference();
+        try self.output.prepareInference();
+    }
+
     pub fn forward(self: *const CausalSelfAttention, context: *ExecutionContext, input: Tensor) !Tensor {
         if (input.shape.rank != 2 or input.shape.dims[1] != self.channels) return error.DimensionMismatch;
         var query = try self.query.forward(context, input);
@@ -1067,6 +1074,11 @@ pub const FeedForward = struct {
         self.* = undefined;
     }
 
+    pub fn prepareInference(self: *FeedForward) !void {
+        try self.expand.prepareInference();
+        try self.project.prepareInference();
+    }
+
     pub fn forward(self: *const FeedForward, context: *ExecutionContext, input: Tensor) !Tensor {
         if (input.shape.rank != 2 or input.shape.dims[1] != self.channels) return error.DimensionMismatch;
         var activated = try context.linearGelu(input, self.expand.weights, self.expand.bias);
@@ -1549,6 +1561,11 @@ pub const Block = struct {
         self.* = undefined;
     }
 
+    pub fn prepareInference(self: *Block) !void {
+        try self.attention.prepareInference();
+        try self.feed_forward.prepareInference();
+    }
+
     pub fn forward(self: *const Block, context: *ExecutionContext, input: Tensor) !Tensor {
         if (input.shape.rank != 2 or input.shape.dims[1] != self.channels) return error.DimensionMismatch;
         var normalized_attention = try self.attention_norm.forward(context, input);
@@ -1715,6 +1732,13 @@ pub const Decoder = struct {
         self.final_norm.deinit();
         self.language_model_head.deinit();
         self.* = undefined;
+    }
+
+    /// Packs every affine weight used by steady-state decoder inference.
+    /// Embedding tables remain in their lookup-friendly row-major layout.
+    pub fn prepareInference(self: *Decoder) !void {
+        for (self.blocks) |*block| try block.prepareInference();
+        try self.language_model_head.prepareInference();
     }
 
     pub fn forward(self: *const Decoder, context: *ExecutionContext, tokens: Tensor, positions: Tensor) !Tensor {

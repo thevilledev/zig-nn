@@ -42,6 +42,10 @@ pub const Linear = struct {
         self.* = undefined;
     }
 
+    pub fn prepareInference(self: *Linear) !void {
+        try self.weights.prepareInferenceWeight();
+    }
+
     pub fn forward(self: *const Linear, context: *ExecutionContext, input: Tensor) !Tensor {
         return context.linear(input, self.weights, self.bias);
     }

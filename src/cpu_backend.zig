@@ -6,9 +6,19 @@ const Matrix = backend.Matrix;
 const randomSeed = @import("matrix.zig").randomSeed;
 const dimensions = @import("dimensions.zig");
 
+const vector_width = 8;
+pub const max_output_tiles = 64;
+const max_workspace_buffers = 256;
+
+const PackedMatrix = struct {
+    data: []f32,
+    stride: usize,
+};
+
 /// CPU-specific implementation of a matrix
 const CPUMatrix = struct {
     data: []f32,
+    packed_weight: ?PackedMatrix = null,
     allocator: Allocator,
     owner: *CPUBackend,
 };
@@ -17,6 +27,11 @@ const CPUMatrix = struct {
 pub const CPUBackend = struct {
     allocator: Allocator,
     stats: backend.RuntimeStats,
+    output_tiles: usize,
+    workspace_buffers: [max_workspace_buffers][]f32,
+    workspace_buffer_count: usize,
+    storage_allocations: usize,
+    workspace_reuses: usize,
 
     /// Initialize a new CPU backend
     pub fn init(allocator: Allocator) !*CPUBackend {
@@ -24,12 +39,21 @@ pub const CPUBackend = struct {
         cpu_backend.* = CPUBackend{
             .allocator = allocator,
             .stats = .{},
+            .output_tiles = 1,
+            .workspace_buffers = undefined,
+            .workspace_buffer_count = 0,
+            .storage_allocations = 0,
+            .workspace_reuses = 0,
         };
         return cpu_backend;
     }
 
     /// Free all resources used by the CPU backend
     pub fn deinit(self: *CPUBackend) void {
+        std.debug.assert(self.stats.live_buffers == 0);
+        for (self.workspace_buffers[0..self.workspace_buffer_count]) |buffer| {
+            self.allocator.free(buffer);
+        }
         self.allocator.destroy(self);
     }
 
@@ -46,7 +70,10 @@ pub const CPUBackend = struct {
         // Allocate the data array
         const element_count = dimensions.elementCount(rows, cols) catch
             return error.OutOfMemory;
-        const data = try allocator.alloc(f32, element_count);
+        const data = self.takeWorkspaceBuffer(allocator, element_count) orelse blk: {
+            self.storage_allocations += 1;
+            break :blk try allocator.alloc(f32, element_count);
+        };
         errdefer allocator.free(data);
 
         // Initialize with zeros
@@ -89,14 +116,45 @@ pub const CPUBackend = struct {
 
     pub fn synchronize(_: *anyopaque) !void {}
 
+    /// Configures independent output-column tiles for CPU matrix products.
+    /// One tile is deterministic and avoids thread startup overhead for small
+    /// educational models; callers can opt into more tiles for wider layers.
+    pub fn configureOutputTiles(ptr: *anyopaque, count: usize) !void {
+        if (count == 0 or count > max_output_tiles) return error.InvalidOutputTileCount;
+        const self = @as(*CPUBackend, @ptrCast(@alignCast(ptr)));
+        self.output_tiles = count;
+    }
+
+    /// Stores an immutable, vector-width-padded copy of a matrix used as the
+    /// right-hand side of inference matmuls. Mutations discard the copy so the
+    /// readable row-major matrix always remains the source of truth.
+    pub fn prepareInferenceWeight(_: *anyopaque, matrix: *Matrix) error{OutOfMemory}!void {
+        const cpu_data = @as(*CPUMatrix, @ptrCast(@alignCast(matrix.impl_data)));
+        if (cpu_data.packed_weight != null) return;
+        const stride = std.mem.alignForward(usize, matrix.cols, vector_width);
+        const element_count = dimensions.elementCount(matrix.rows, stride) catch return error.OutOfMemory;
+        const data = try cpu_data.allocator.alloc(f32, element_count);
+        errdefer cpu_data.allocator.free(data);
+        @memset(data, 0);
+        for (0..matrix.rows) |row| {
+            @memcpy(
+                data[row * stride ..][0..matrix.cols],
+                cpu_data.data[row * matrix.cols ..][0..matrix.cols],
+            );
+        }
+        cpu_data.packed_weight = .{ .data = data, .stride = stride };
+    }
+
     pub fn deinitMatrix(_: *anyopaque, matrix: *Matrix) void {
         // First, cast to get the CPU-specific data
         const cpu_data = @as(*CPUMatrix, @ptrCast(@alignCast(matrix.impl_data)));
         const allocator = cpu_data.allocator;
         const owner = cpu_data.owner;
 
+        invalidatePacked(cpu_data);
+
         // Free the data array
-        allocator.free(cpu_data.data);
+        owner.releaseWorkspaceBuffer(allocator, cpu_data.data);
 
         // Free the CPU matrix data
         allocator.destroy(cpu_data);
@@ -105,6 +163,29 @@ pub const CPUBackend = struct {
         allocator.destroy(matrix);
         std.debug.assert(owner.stats.live_buffers > 0);
         owner.stats.live_buffers -= 1;
+    }
+
+    fn takeWorkspaceBuffer(self: *CPUBackend, allocator: Allocator, element_count: usize) ?[]f32 {
+        if (!sameAllocator(allocator, self.allocator)) return null;
+        for (self.workspace_buffers[0..self.workspace_buffer_count], 0..) |buffer, index| {
+            if (buffer.len != element_count) continue;
+            self.workspace_buffer_count -= 1;
+            self.workspace_buffers[index] = self.workspace_buffers[self.workspace_buffer_count];
+            self.workspace_reuses += 1;
+            return buffer;
+        }
+        return null;
+    }
+
+    fn releaseWorkspaceBuffer(self: *CPUBackend, allocator: Allocator, buffer: []f32) void {
+        if (buffer.len > 0 and sameAllocator(allocator, self.allocator) and
+            self.workspace_buffer_count < self.workspace_buffers.len)
+        {
+            self.workspace_buffers[self.workspace_buffer_count] = buffer;
+            self.workspace_buffer_count += 1;
+        } else {
+            allocator.free(buffer);
+        }
     }
 
     pub fn getMatrixElement(_: *anyopaque, matrix: *const Matrix, row: usize, col: usize) f64 {
@@ -119,6 +200,7 @@ pub const CPUBackend = struct {
     pub fn writeMatrixF32(_: *anyopaque, matrix: *Matrix, values: []const f32) bool {
         const cpu_data = @as(*CPUMatrix, @ptrCast(@alignCast(matrix.impl_data)));
         if (values.len != cpu_data.data.len) return false;
+        invalidatePacked(cpu_data);
         @memcpy(cpu_data.data, values);
         return true;
     }
@@ -136,11 +218,13 @@ pub const CPUBackend = struct {
         }
 
         const cpu_data = @as(*CPUMatrix, @ptrCast(@alignCast(matrix.impl_data)));
+        invalidatePacked(cpu_data);
         cpu_data.data[row * matrix.cols + col] = @floatCast(value);
     }
 
     pub fn fillMatrix(_: *anyopaque, matrix: *Matrix, value: f64) void {
         const cpu_data = @as(*CPUMatrix, @ptrCast(@alignCast(matrix.impl_data)));
+        invalidatePacked(cpu_data);
         @memset(cpu_data.data, @as(f32, @floatCast(value)));
     }
 
@@ -164,7 +248,7 @@ pub const CPUBackend = struct {
             return error.DimensionMismatch;
         }
 
-        _ = @as(*CPUBackend, @ptrCast(@alignCast(ptr)));
+        const self = @as(*CPUBackend, @ptrCast(@alignCast(ptr)));
 
         const result = try initMatrix(ptr, allocator, a.rows, b.cols);
         errdefer deinitMatrix(undefined, result);
@@ -173,14 +257,18 @@ pub const CPUBackend = struct {
         const b_cpu = @as(*const CPUMatrix, @ptrCast(@alignCast(b.impl_data)));
         const result_cpu = @as(*CPUMatrix, @ptrCast(@alignCast(result.impl_data)));
 
-        for (0..a.rows) |i| {
-            const output = result_cpu.data[i * b.cols ..][0..b.cols];
-            for (0..a.cols) |k| {
-                const left = a_cpu.data[i * a.cols + k];
-                const right = b_cpu.data[k * b.cols ..][0..b.cols];
-                accumulateScaled(output, right, left);
-            }
-        }
+        runMatmulTiles(
+            self.output_tiles,
+            a_cpu.data,
+            a.rows,
+            a.cols,
+            weightValues(b_cpu),
+            weightStride(b_cpu, b.cols),
+            b.cols,
+            null,
+            false,
+            result_cpu.data,
+        );
 
         return result;
     }
@@ -362,18 +450,19 @@ pub const CPUBackend = struct {
         const bias_data = @as(*const CPUMatrix, @ptrCast(@alignCast(bias.impl_data)));
         const result_data = @as(*CPUMatrix, @ptrCast(@alignCast(result.impl_data)));
 
-        for (0..input.rows) |row| {
-            const output = result_data.data[row * weights.cols ..][0..weights.cols];
-            @memcpy(output, bias_data.data);
-            for (0..input.cols) |inner| {
-                const left = input_data.data[row * input.cols + inner];
-                const right = weight_data.data[inner * weights.cols ..][0..weights.cols];
-                accumulateScaled(output, right, left);
-            }
-            for (output) |*value| {
-                value.* = @floatCast(@import("activation.zig").Activation.gelu(value.*));
-            }
-        }
+        const self = @as(*CPUBackend, @ptrCast(@alignCast(ptr)));
+        runMatmulTiles(
+            self.output_tiles,
+            input_data.data,
+            input.rows,
+            input.cols,
+            weightValues(weight_data),
+            weightStride(weight_data, weights.cols),
+            weights.cols,
+            bias_data.data,
+            true,
+            result_data.data,
+        );
         return result;
     }
 
@@ -457,6 +546,7 @@ pub const CPUBackend = struct {
         const first_moment_data = @as(*CPUMatrix, @ptrCast(@alignCast(first_moment.impl_data)));
         const second_moment_data = @as(*CPUMatrix, @ptrCast(@alignCast(second_moment.impl_data)));
         const total_squares_data = @as(*const CPUMatrix, @ptrCast(@alignCast(total_squares.impl_data)));
+        invalidatePacked(parameter_data);
         backend.applyOptimizerUpdate(
             parameter_data.data,
             gradient_data.data,
@@ -530,6 +620,7 @@ pub const CPUBackend = struct {
         const rand = prng.random();
 
         const matrix_cpu = @as(*CPUMatrix, @ptrCast(@alignCast(matrix.impl_data)));
+        invalidatePacked(matrix_cpu);
 
         for (0..matrix_cpu.data.len) |i| {
             const rand_float = rand.float(f64);
@@ -922,6 +1013,167 @@ pub const CPUBackend = struct {
     }
 };
 
+const MatmulTile = struct {
+    input: []const f32,
+    input_rows: usize,
+    input_cols: usize,
+    weights: []const f32,
+    weight_stride: usize,
+    output_cols: usize,
+    bias: ?[]const f32,
+    apply_gelu: bool,
+    output: []f32,
+    column_start: usize,
+    column_end: usize,
+};
+
+fn sameAllocator(left: Allocator, right: Allocator) bool {
+    return left.ptr == right.ptr and left.vtable == right.vtable;
+}
+
+fn invalidatePacked(matrix: *CPUMatrix) void {
+    if (matrix.packed_weight) |packed_weight| {
+        matrix.allocator.free(packed_weight.data);
+        matrix.packed_weight = null;
+    }
+}
+
+fn weightValues(matrix: *const CPUMatrix) []const f32 {
+    return if (matrix.packed_weight) |packed_weight| packed_weight.data else matrix.data;
+}
+
+fn weightStride(matrix: *const CPUMatrix, original_stride: usize) usize {
+    return if (matrix.packed_weight) |packed_weight| packed_weight.stride else original_stride;
+}
+
+fn runMatmulTiles(
+    requested_tiles: usize,
+    input: []const f32,
+    input_rows: usize,
+    input_cols: usize,
+    weights: []const f32,
+    weight_stride: usize,
+    output_cols: usize,
+    bias: ?[]const f32,
+    apply_gelu: bool,
+    output: []f32,
+) void {
+    if (input_rows == 0 or output_cols == 0) return;
+    const tile_count = @min(@max(requested_tiles, 1), output_cols);
+    if (tile_count == 1) {
+        executeMatmulTile(&.{
+            .input = input,
+            .input_rows = input_rows,
+            .input_cols = input_cols,
+            .weights = weights,
+            .weight_stride = weight_stride,
+            .output_cols = output_cols,
+            .bias = bias,
+            .apply_gelu = apply_gelu,
+            .output = output,
+            .column_start = 0,
+            .column_end = output_cols,
+        });
+        return;
+    }
+
+    var tasks: [max_output_tiles]MatmulTile = undefined;
+    const columns_per_tile = std.math.divCeil(usize, output_cols, tile_count) catch unreachable;
+    var actual_tiles: usize = 0;
+    for (0..tile_count) |index| {
+        const column_start = index * columns_per_tile;
+        if (column_start >= output_cols) break;
+        tasks[actual_tiles] = .{
+            .input = input,
+            .input_rows = input_rows,
+            .input_cols = input_cols,
+            .weights = weights,
+            .weight_stride = weight_stride,
+            .output_cols = output_cols,
+            .bias = bias,
+            .apply_gelu = apply_gelu,
+            .output = output,
+            .column_start = column_start,
+            .column_end = @min(column_start + columns_per_tile, output_cols),
+        };
+        actual_tiles += 1;
+    }
+
+    var threads: [max_output_tiles - 1]std.Thread = undefined;
+    var spawned: usize = 0;
+    var spawn_failed = false;
+    for (1..actual_tiles) |index| {
+        threads[spawned] = std.Thread.spawn(.{}, executeMatmulTile, .{&tasks[index]}) catch {
+            spawn_failed = true;
+            break;
+        };
+        spawned += 1;
+    }
+    if (spawn_failed) {
+        for (threads[0..spawned]) |thread| thread.join();
+        @memset(output, 0);
+        executeMatmulTile(&.{
+            .input = input,
+            .input_rows = input_rows,
+            .input_cols = input_cols,
+            .weights = weights,
+            .weight_stride = weight_stride,
+            .output_cols = output_cols,
+            .bias = bias,
+            .apply_gelu = apply_gelu,
+            .output = output,
+            .column_start = 0,
+            .column_end = output_cols,
+        });
+        return;
+    }
+
+    executeMatmulTile(&tasks[0]);
+    for (threads[0..spawned]) |thread| thread.join();
+}
+
+fn executeMatmulTile(task: *const MatmulTile) void {
+    for (0..task.input_rows) |row| {
+        const output = task.output[row * task.output_cols + task.column_start .. row * task.output_cols + task.column_end];
+        if (task.bias) |bias| {
+            @memcpy(output, bias[task.column_start..task.column_end]);
+        } else {
+            @memset(output, 0);
+        }
+        for (0..task.input_cols) |inner| {
+            const left = task.input[row * task.input_cols + inner];
+            const right = task.weights[inner * task.weight_stride + task.column_start .. inner * task.weight_stride + task.column_end];
+            accumulateScaled(output, right, left);
+        }
+        if (task.apply_gelu) {
+            for (output) |*value| {
+                value.* = @floatCast(@import("activation.zig").Activation.gelu(value.*));
+            }
+        }
+    }
+}
+
+/// Readable scalar matmul used by parity tests for the packed/vectorized path.
+fn matmulScalarReference(
+    input: []const f32,
+    input_rows: usize,
+    input_cols: usize,
+    weights: []const f32,
+    output_cols: usize,
+    output: []f32,
+) void {
+    @memset(output, 0);
+    for (0..input_rows) |row| {
+        for (0..output_cols) |column| {
+            var sum: f32 = 0;
+            for (0..input_cols) |inner| {
+                sum += input[row * input_cols + inner] * weights[inner * output_cols + column];
+            }
+            output[row * output_cols + column] = sum;
+        }
+    }
+}
+
 // Helper activation functions needed for GLU and SwiGLU
 fn sigmoid(x: f64) f64 {
     return 1.0 / (1.0 + std.math.exp(-x));
@@ -931,17 +1183,16 @@ fn sigmoid(x: f64) f64 {
 /// contiguous row-major layout while making the packed CPU path explicit. The
 /// scalar tail is also the readable reference for narrow matrices.
 fn accumulateScaled(output: []f32, right: []const f32, left: f32) void {
-    const width = 8;
-    const Vector = @Vector(width, f32);
+    const Vector = @Vector(vector_width, f32);
     const scale: Vector = @splat(left);
     var column: usize = 0;
-    while (column + width <= output.len) : (column += width) {
-        const output_array: [width]f32 = output[column..][0..width].*;
-        const right_array: [width]f32 = right[column..][0..width].*;
+    while (column + vector_width <= output.len) : (column += vector_width) {
+        const output_array: [vector_width]f32 = output[column..][0..vector_width].*;
+        const right_array: [vector_width]f32 = right[column..][0..vector_width].*;
         var output_vector: Vector = output_array;
         const right_vector: Vector = right_array;
         output_vector += scale * right_vector;
-        output[column..][0..width].* = @as([width]f32, output_vector);
+        output[column..][0..vector_width].* = @as([vector_width]f32, output_vector);
     }
     for (output[column..], right[column..]) |*value, factor| value.* += left * factor;
 }
@@ -953,6 +1204,75 @@ test "vectorized accumulation preserves scalar tails" {
     for (output, right) |actual, expected| {
         try std.testing.expectApproxEqAbs(expected * 0.5, actual, 0.000001);
     }
+}
+
+test "packed parallel matmul matches the scalar reference" {
+    const allocator = std.testing.allocator;
+    const cpu = try CPUBackend.init(allocator);
+    defer cpu.deinit();
+    const ptr: *anyopaque = @ptrCast(cpu);
+    const input_values = [_]f32{ 1, 2, 3, -2, 0.5, 4 };
+    const weight_values = [_]f32{
+        1,  2, 3, 4,  5,  6,  7,  8,  9,  10, 11,
+        -1, 0, 1, 2,  3,  4,  5,  6,  7,  8,  9,
+        2,  1, 0, -1, -2, -3, -4, -5, -6, -7, -8,
+    };
+    const input = try CPUBackend.initMatrix(ptr, allocator, 2, 3);
+    defer CPUBackend.deinitMatrix(ptr, input);
+    const weights = try CPUBackend.initMatrix(ptr, allocator, 3, 11);
+    defer CPUBackend.deinitMatrix(ptr, weights);
+    try std.testing.expect(CPUBackend.writeMatrixF32(ptr, input, &input_values));
+    try std.testing.expect(CPUBackend.writeMatrixF32(ptr, weights, &weight_values));
+
+    try CPUBackend.prepareInferenceWeight(ptr, weights);
+    const cpu_weights = @as(*const CPUMatrix, @ptrCast(@alignCast(weights.impl_data)));
+    try std.testing.expectEqual(@as(usize, 16), cpu_weights.packed_weight.?.stride);
+    try CPUBackend.configureOutputTiles(ptr, 4);
+    const result = try CPUBackend.dotProduct(ptr, input, weights, allocator);
+    defer CPUBackend.deinitMatrix(ptr, result);
+
+    var expected: [22]f32 = undefined;
+    matmulScalarReference(&input_values, 2, 3, &weight_values, 11, &expected);
+    var actual: [22]f32 = undefined;
+    try std.testing.expect(CPUBackend.readMatrixF32(ptr, result, &actual));
+    for (expected, actual) |reference, optimized| {
+        try std.testing.expectApproxEqAbs(reference, optimized, 1e-4);
+    }
+}
+
+test "mutating a packed weight invalidates its inference copy" {
+    const allocator = std.testing.allocator;
+    const cpu = try CPUBackend.init(allocator);
+    defer cpu.deinit();
+    const ptr: *anyopaque = @ptrCast(cpu);
+    const weights = try CPUBackend.initMatrix(ptr, allocator, 2, 3);
+    defer CPUBackend.deinitMatrix(ptr, weights);
+
+    try CPUBackend.prepareInferenceWeight(ptr, weights);
+    const cpu_weights = @as(*CPUMatrix, @ptrCast(@alignCast(weights.impl_data)));
+    try std.testing.expect(cpu_weights.packed_weight != null);
+    CPUBackend.setMatrixElement(ptr, weights, 0, 0, 2);
+    try std.testing.expect(cpu_weights.packed_weight == null);
+    try CPUBackend.prepareInferenceWeight(ptr, weights);
+    try std.testing.expect(cpu_weights.packed_weight != null);
+}
+
+test "CPU workspace reuses intermediate matrix storage" {
+    const allocator = std.testing.allocator;
+    const cpu = try CPUBackend.init(allocator);
+    defer cpu.deinit();
+    const ptr: *anyopaque = @ptrCast(cpu);
+
+    const first = try CPUBackend.initMatrix(ptr, allocator, 3, 5);
+    const first_data = @as(*CPUMatrix, @ptrCast(@alignCast(first.impl_data))).data.ptr;
+    CPUBackend.deinitMatrix(ptr, first);
+    const second = try CPUBackend.initMatrix(ptr, allocator, 3, 5);
+    defer CPUBackend.deinitMatrix(ptr, second);
+    const second_data = @as(*CPUMatrix, @ptrCast(@alignCast(second.impl_data))).data.ptr;
+
+    try std.testing.expectEqual(first_data, second_data);
+    try std.testing.expectEqual(@as(usize, 1), cpu.storage_allocations);
+    try std.testing.expectEqual(@as(usize, 1), cpu.workspace_reuses);
 }
 
 fn swish(x: f64) f64 {

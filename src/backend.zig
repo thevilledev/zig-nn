@@ -114,6 +114,14 @@ pub const Matrix = struct {
         return result;
     }
 
+    /// Copies a CPU matrix and prepares it for repeated inference matmuls.
+    pub fn fromInferenceWeights(backend_instance: BackendInstance, source: CpuMatrix, allocator: Allocator) !*Matrix {
+        const result = try Matrix.fromMatrix(backend_instance, source, allocator);
+        errdefer result.deinit();
+        try result.prepareInferenceWeight();
+        return result;
+    }
+
     /// Copies this backend-aware matrix into the CPU Matrix representation.
     pub fn toMatrix(self: *const Matrix, allocator: Allocator) !CpuMatrix {
         var result = try CpuMatrix.init(allocator, self.rows, self.cols);
@@ -161,6 +169,13 @@ pub const Matrix = struct {
             return error.DimensionMismatch;
         }
         if (!self.backend.writeMatrixF32(self, values)) return error.DataTransferFailed;
+    }
+
+    /// Marks this matrix as immutable inference weight storage. CPU backends
+    /// build a vector-width-padded packed copy; GPU backends keep their
+    /// already-uploaded representation.
+    pub fn prepareInferenceWeight(self: *Matrix) !void {
+        try self.backend.prepareInferenceWeight(self);
     }
 
     /// Reads all matrix values into a contiguous f32 slice.

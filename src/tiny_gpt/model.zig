@@ -532,6 +532,7 @@ pub const TinyGPT = struct {
         try matrixToTensor(self.allocator, self.ln_f.weight, &decoder.final_norm.gamma);
         try matrixToTensor(self.allocator, self.ln_f.bias, &decoder.final_norm.beta);
         try linearToDevice(self.allocator, self.lm_head, &decoder.language_model_head);
+        try decoder.prepareInference();
         return decoder;
     }
 

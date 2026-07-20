@@ -6,6 +6,7 @@
 
 const std = @import("std");
 const backend_mod = @import("backend.zig");
+const cpu_backend_mod = @import("cpu_backend.zig");
 const decoding = @import("decoding.zig");
 const network_mod = @import("network.zig");
 const tensor_mod = @import("tensor.zig");
@@ -19,6 +20,9 @@ const Tensor = tensor_mod.Tensor;
 
 pub const SessionOptions = struct {
     device: tensor_mod.DevicePreference = .auto,
+    /// Number of independent CPU output-column tiles used by inference
+    /// matmuls. The default avoids thread overhead for small models.
+    cpu_output_tiles: usize = 1,
 };
 
 pub const ModelKind = enum {
@@ -60,6 +64,7 @@ pub const DenseSession = struct {
         errdefer allocator.destroy(device);
         device.* = try Device.init(allocator, options.device);
         errdefer device.deinit();
+        try device.configureCpuOutputTiles(options.cpu_output_tiles);
 
         var snapshot = try network.backendSnapshot(device.backendInstance());
         errdefer snapshot.deinit();
@@ -200,6 +205,7 @@ pub const TextSession = struct {
         errdefer allocator.destroy(device);
         device.* = try Device.init(allocator, options.device);
         errdefer device.deinit();
+        try device.configureCpuOutputTiles(options.cpu_output_tiles);
 
         var context = ExecutionContext.init(device);
         var decoder_model = try owned_model.toDeviceDecoder(&context);
@@ -501,6 +507,40 @@ test "dense session predicts into caller storage and reports CPU telemetry" {
     try std.testing.expectError(error.InvalidOutputDimensions, session.predictInto(&.{ 1, 2 }, 1, output[0..0]));
 }
 
+test "dense sessions validate CPU output tiling and preserve predictions" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try temporaryModelPath(allocator, &tmp, "dense-tiles.znn");
+    defer allocator.free(path);
+
+    var network = network_mod.Network.init(allocator, 0.1, .MeanSquaredError);
+    defer network.deinit();
+    try network.addLayer(2, 11, @import("activation.zig").Activation.linear, @import("activation.zig").Activation.linear_derivative);
+    try network.saveToFile(path);
+
+    try std.testing.expectError(
+        error.InvalidOutputTileCount,
+        DenseSession.init(allocator, path, .{ .device = .cpu, .cpu_output_tiles = 0 }),
+    );
+    try std.testing.expectError(
+        error.InvalidOutputTileCount,
+        DenseSession.init(allocator, path, .{ .device = .cpu, .cpu_output_tiles = 65 }),
+    );
+
+    var reference = try DenseSession.init(allocator, path, .{ .device = .cpu });
+    defer reference.deinit();
+    var parallel = try DenseSession.init(allocator, path, .{ .device = .cpu, .cpu_output_tiles = 4 });
+    defer parallel.deinit();
+    const expected = try reference.predictAlloc(&.{ 0.25, -0.5 }, 1);
+    defer allocator.free(expected);
+    const actual = try parallel.predictAlloc(&.{ 0.25, -0.5 }, 1);
+    defer allocator.free(actual);
+    for (expected, actual) |reference_value, parallel_value| {
+        try std.testing.expectApproxEqAbs(reference_value, parallel_value, 1e-4);
+    }
+}
+
 test "text session reuses a loaded decoder and deterministic greedy generation" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
@@ -523,18 +563,50 @@ test "text session reuses a loaded decoder and deterministic greedy generation" 
     try std.testing.expect(second.stats.runtime.execution.readbacks >= 3);
 }
 
+test "packed decoder logits match the scalar TinyGPT reference" {
+    const allocator = std.testing.allocator;
+    const config: tiny.Config = .{ .block_size = 4, .n_layer = 1, .n_head = 2, .n_embd = 8 };
+    var reference_model = try tiny.Model.init(allocator, config, 321);
+    defer reference_model.deinit();
+    const device_model = try tiny.Model.init(allocator, config, 321);
+    const tokens = [_]usize{ tiny.Tokenizer.encodeChar('a'), tiny.Tokenizer.encodeChar('b') };
+    var reference_logits = try reference_model.forward(&tokens);
+    defer reference_logits.deinit();
+
+    var session = try TextSession.initModel(allocator, device_model, .{
+        .device = .cpu,
+        .cpu_output_tiles = 3,
+    });
+    defer session.deinit();
+    _ = try session.prefill("ab", 42, 0);
+    try session.context.readback(session.current_logits.?, session.logits);
+
+    const reference_row = reference_logits.rows - 1;
+    for (session.logits, 0..) |actual, token| {
+        const expected: f32 = @floatCast(try reference_logits.get(reference_row, token));
+        try std.testing.expectApproxEqAbs(expected, actual, 1e-4);
+    }
+}
+
 test "text session keeps buffers and workspaces bounded for 1000 decode steps" {
     const allocator = std.testing.allocator;
     const model = try tiny.Model.init(allocator, .{ .block_size = 8, .n_layer = 1, .n_head = 1, .n_embd = 4 }, 99);
     var session = try TextSession.initModel(allocator, model, .{ .device = .cpu });
     defer session.deinit();
 
-    _ = try session.prefill("a", 42, 1000);
+    _ = try session.prefill("a", 42, 1016);
+    for (0..16) |_| _ = try session.decodeNext(.{ .temperature = 0 });
     const live_buffers = session.runtimeStats().backend.live_buffers;
+    const cpu = switch (session.device.backendInstance()) {
+        .CPU => |ptr| @as(*cpu_backend_mod.CPUBackend, @ptrCast(@alignCast(ptr))),
+        else => unreachable,
+    };
+    const storage_allocations = cpu.storage_allocations;
     const token_capacity = session.token_buffer.capacity;
     for (0..1000) |_| {
         _ = try session.decodeNext(.{ .temperature = 0 });
         try std.testing.expectEqual(live_buffers, session.runtimeStats().backend.live_buffers);
+        try std.testing.expectEqual(storage_allocations, cpu.storage_allocations);
         try std.testing.expect(session.cache.position <= session.model.config.block_size);
     }
     try std.testing.expectEqual(token_capacity, session.token_buffer.capacity);

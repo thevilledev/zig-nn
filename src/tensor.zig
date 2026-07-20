@@ -123,6 +123,10 @@ pub const Device = struct {
         return self.instance;
     }
 
+    pub fn configureCpuOutputTiles(self: *Device, count: usize) !void {
+        try self.instance.configureCpuOutputTiles(count);
+    }
+
     pub fn runtimeStats(self: Device) backend_mod.RuntimeStats {
         return self.instance.runtimeStats();
     }
@@ -199,6 +203,10 @@ pub const Tensor = struct {
 
     pub fn writeF32(self: *Tensor, values: []const f32) !void {
         try self.matrix.writeF32(values);
+    }
+
+    pub fn prepareInferenceWeight(self: *Tensor) !void {
+        try self.matrix.prepareInferenceWeight();
     }
 
     pub fn readF32(self: Tensor, values: []f32) !void {

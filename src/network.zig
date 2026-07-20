@@ -399,7 +399,7 @@ const BackendStandardLayer = struct {
     activation_fn: *const fn (f64) f64,
 
     fn init(allocator: Allocator, source: *const Layer, backend_instance: anytype) !BackendStandardLayer {
-        const weights = try BackendMatrix.fromMatrix(backend_instance, source.weights, allocator);
+        const weights = try BackendMatrix.fromInferenceWeights(backend_instance, source.weights, allocator);
         errdefer weights.deinit();
         const bias = try BackendMatrix.fromMatrix(backend_instance, source.bias, allocator);
         errdefer bias.deinit();
@@ -446,11 +446,11 @@ const BackendGatedLayer = struct {
     use_swiglu: bool,
 
     fn init(allocator: Allocator, source: *const GatedLayer, backend_instance: anytype) !BackendGatedLayer {
-        const linear_weights = try BackendMatrix.fromMatrix(backend_instance, source.linear_weights, allocator);
+        const linear_weights = try BackendMatrix.fromInferenceWeights(backend_instance, source.linear_weights, allocator);
         errdefer linear_weights.deinit();
         const linear_bias = try BackendMatrix.fromMatrix(backend_instance, source.linear_bias, allocator);
         errdefer linear_bias.deinit();
-        const gate_weights = try BackendMatrix.fromMatrix(backend_instance, source.gate_weights, allocator);
+        const gate_weights = try BackendMatrix.fromInferenceWeights(backend_instance, source.gate_weights, allocator);
         errdefer gate_weights.deinit();
         const gate_bias = try BackendMatrix.fromMatrix(backend_instance, source.gate_bias, allocator);
         errdefer gate_bias.deinit();
