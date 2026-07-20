@@ -355,6 +355,29 @@ pub const BackendInstance = union(BackendType) {
         return self.attachBackend(result);
     }
 
+    pub fn linearBiasGelu(
+        self: BackendInstance,
+        input: *const BackendMatrix,
+        weights: *const BackendMatrix,
+        bias: *const BackendMatrix,
+        allocator: std.mem.Allocator,
+    ) !*BackendMatrix {
+        try self.requireMatrices(&.{ input, weights, bias });
+        switch (self) {
+            .CPU => |ptr| {
+                const result = try CPUBackend.linearBiasGelu(ptr, input, weights, bias, allocator);
+                return self.attachBackend(result);
+            },
+            else => {},
+        }
+
+        const projected = try self.dotProduct(input, weights, allocator);
+        defer projected.deinit();
+        const biased = try self.addRowBias(projected, bias, allocator);
+        defer biased.deinit();
+        return self.applyActivation(biased, activation_mod.Activation.gelu, allocator);
+    }
+
     pub fn subtract(self: BackendInstance, a: *const BackendMatrix, b: *const BackendMatrix, allocator: std.mem.Allocator) !*BackendMatrix {
         try self.requireMatrices(&.{ a, b });
         const matrix = try switch (self) {

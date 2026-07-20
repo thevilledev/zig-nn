@@ -568,6 +568,23 @@ pub const ExecutionContext = struct {
         return self.addRowBias(projected, bias);
     }
 
+    pub fn linearGelu(self: *ExecutionContext, input: Tensor, weights: Tensor, bias: Tensor) !Tensor {
+        try self.requireOwned(&.{ input, weights, bias });
+        if (input.shape.rank != 2 or weights.shape.rank != 2 or bias.shape.rank != 2) return error.InvalidRank;
+        if (input.shape.dims[1] != weights.shape.dims[0] or
+            bias.shape.dims[0] != 1 or bias.shape.dims[1] != weights.shape.dims[1])
+        {
+            return error.DimensionMismatch;
+        }
+        const matrix = try input.matrix.linearBiasGelu(weights.matrix, bias.matrix, self.device.allocator);
+        self.stats.kernels += 1;
+        return .{
+            .matrix = matrix,
+            .shape = try Shape.init(&.{ input.shape.dims[0], weights.shape.dims[1] }),
+            .allocator = self.device.allocator,
+        };
+    }
+
     pub fn activate(self: *ExecutionContext, input: Tensor, kind: ActivationKind) !Tensor {
         try self.requireOwned(&.{input});
         const function = activationFunction(kind);
@@ -1370,6 +1387,14 @@ test "transformer tensor primitives match expected values" {
     var projected_values: [4]f32 = undefined;
     try context.readback(projected, &projected_values);
     try testing.expectEqualSlices(f32, &.{ 1.5, 1.5, 3.5, 3.5 }, &projected_values);
+
+    var fused = try context.linearGelu(input, weights, bias);
+    defer fused.deinit();
+    var fused_values: [4]f32 = undefined;
+    try context.readback(fused, &fused_values);
+    for (fused_values, projected_values) |actual, affine| {
+        try testing.expectApproxEqAbs(@as(f32, @floatCast(Activation.gelu(affine))), actual, 1e-4);
+    }
 
     var gamma = try context.upload(&.{ 1, 2 }, &.{ 1, 1 });
     defer gamma.deinit();

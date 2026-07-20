@@ -1,0 +1,11 @@
+# zig-nn v0.0.6 inference baseline
+# host=Apple M1 cpu_cores=8 memory_gib=16 os=macOS
+# mode=ReleaseFast quick=false recorded=2026-07-20
+# Wall-clock rows are informational outside controlled release hardware.
+suite,case,backend,mode,warmups,iterations,avg_ns,min_ns,max_ns,checksum,sample_error,work_units,work_unit,status
+inference,dense_batch1_32_64_16,cpu,ReleaseFast,1,5,2758,2625,3000,0.298002455,0.000000000,1.000,sample,ok
+inference,dense_batch32_32_64_16,cpu,ReleaseFast,1,5,71342,70166,72792,0.298002455,0.000000000,32.000,sample,ok
+inference,tiny_cold_load_l4_h4_c64,cpu,ReleaseFast,1,5,9502842,7644792,11785125,1082720.000000000,0.000000000,1.000,model,ok
+inference,tiny_prefill_16,cpu,ReleaseFast,1,5,1688167,1627667,1723667,80.000000000,0.000000000,16.000,token,ok
+inference,tiny_cached_decode,cpu,ReleaseFast,1,16,109568,107042,111417,1394.000000000,0.000000000,1.000,token,ok
+inference,tiny_generate_32,cpu,ReleaseFast,1,5,3843058,3811459,3932375,320.000000000,0.000000000,32.000,token,ok

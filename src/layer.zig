@@ -17,20 +17,7 @@ fn standardNormal(random: std.Random) f64 {
 }
 
 fn addBackendBias(weighted_sum: *const BackendMatrix, bias: *const BackendMatrix, allocator: std.mem.Allocator) !*BackendMatrix {
-    if (bias.rows != 1 or bias.cols != weighted_sum.cols) {
-        return error.DimensionMismatch;
-    }
-
-    const broadcast_bias = try BackendMatrix.init(weighted_sum.backend, allocator, weighted_sum.rows, weighted_sum.cols);
-    defer broadcast_bias.deinit();
-
-    for (0..weighted_sum.rows) |row| {
-        for (0..weighted_sum.cols) |col| {
-            broadcast_bias.set(row, col, bias.get(0, col));
-        }
-    }
-
-    return weighted_sum.add(broadcast_bias, allocator);
+    return weighted_sum.addRowBias(bias, allocator);
 }
 
 fn replaceCpuMatrixFromBackend(target: *Matrix, source: *const BackendMatrix, allocator: std.mem.Allocator) !void {

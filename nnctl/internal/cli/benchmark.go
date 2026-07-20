@@ -27,18 +27,27 @@ type benchmarkOptions struct {
 }
 
 type benchmarkRow struct {
-	Suite       string
-	Case        string
-	Backend     string
-	Mode        string
-	Warmups     int
-	Iterations  int
-	AverageNS   float64
-	MinNS       float64
-	MaxNS       float64
-	Checksum    float64
-	SampleError float64
-	Status      string
+	Suite              string
+	Case               string
+	Backend            string
+	Mode               string
+	Warmups            int
+	Iterations         int
+	AverageNS          float64
+	MinNS              float64
+	MaxNS              float64
+	Checksum           float64
+	SampleError        float64
+	WorkUnits          float64
+	WorkUnit           string
+	Allocations        int
+	LiveBuffers        int
+	H2DTransfers       int
+	D2HTransfers       int
+	KernelLaunches     int
+	VendorGEMMLaunches int
+	Synchronizations   int
+	Status             string
 }
 
 func defaultBenchmarkOptions() benchmarkOptions {
@@ -162,8 +171,8 @@ func parseBenchmarkCSV(output []byte) ([]benchmarkRow, error) {
 }
 
 func parseBenchmarkRecord(record []string) (benchmarkRow, error) {
-	if len(record) != 12 {
-		return benchmarkRow{}, fmt.Errorf("expected 12 fields, got %d", len(record))
+	if len(record) != 12 && len(record) != 14 && len(record) != 21 {
+		return benchmarkRow{}, fmt.Errorf("expected 12, 14, or 21 fields, got %d", len(record))
 	}
 
 	warmups, err := strconv.Atoi(record[4])
@@ -195,19 +204,52 @@ func parseBenchmarkRecord(record []string) (benchmarkRow, error) {
 		return benchmarkRow{}, fmt.Errorf("sample_error: %w", err)
 	}
 
+	workUnits := 0.0
+	workUnit := ""
+	metrics := [7]int{}
+	statusIndex := 11
+	if len(record) >= 14 {
+		if record[11] != "" {
+			workUnits, err = strconv.ParseFloat(record[11], 64)
+			if err != nil {
+				return benchmarkRow{}, fmt.Errorf("work_units: %w", err)
+			}
+		}
+		workUnit = record[12]
+		statusIndex = 13
+	}
+	if len(record) == 21 {
+		for index := range metrics {
+			metrics[index], err = strconv.Atoi(record[13+index])
+			if err != nil {
+				return benchmarkRow{}, fmt.Errorf("runtime metric %d: %w", index+1, err)
+			}
+		}
+		statusIndex = 20
+	}
+
 	return benchmarkRow{
-		Suite:       record[0],
-		Case:        record[1],
-		Backend:     record[2],
-		Mode:        record[3],
-		Warmups:     warmups,
-		Iterations:  iterations,
-		AverageNS:   averageNS,
-		MinNS:       minNS,
-		MaxNS:       maxNS,
-		Checksum:    checksum,
-		SampleError: sampleError,
-		Status:      record[11],
+		Suite:              record[0],
+		Case:               record[1],
+		Backend:            record[2],
+		Mode:               record[3],
+		Warmups:            warmups,
+		Iterations:         iterations,
+		AverageNS:          averageNS,
+		MinNS:              minNS,
+		MaxNS:              maxNS,
+		Checksum:           checksum,
+		SampleError:        sampleError,
+		WorkUnits:          workUnits,
+		WorkUnit:           workUnit,
+		Allocations:        metrics[0],
+		LiveBuffers:        metrics[1],
+		H2DTransfers:       metrics[2],
+		D2HTransfers:       metrics[3],
+		KernelLaunches:     metrics[4],
+		VendorGEMMLaunches: metrics[5],
+		Synchronizations:   metrics[6],
+		Status:             record[statusIndex],
 	}, nil
 }
 
@@ -258,11 +300,11 @@ func printBenchmarkReport(dst io.Writer, rows []benchmarkRow) error {
 		var table bytes.Buffer
 		tw := tabwriter.NewWriter(&table, 0, 0, 2, ' ', 0)
 		tableOutput := newErrorWriter(tw)
-		tableOutput.printf("case\tcpu avg\tmetal avg\tmetal diff\tmetal speedup\tcuda avg\tcuda diff\tcuda speedup\trocm avg\trocm diff\trocm speedup\terror\tstatus\n")
+		tableOutput.printf("case\tcpu avg\tmetal avg\tmetal diff\tmetal speedup\tcuda avg\tcuda diff\tcuda speedup\trocm avg\trocm diff\trocm speedup\terror\ttelemetry\tstatus\n")
 		for _, caseName := range caseOrder[suite] {
 			pair := pairs[suite][caseName]
 			tableOutput.printf(
-				"%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				"%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 				caseName,
 				formatBenchmarkTime(pair.cpu),
 				formatBenchmarkTime(pair.metal),
@@ -275,6 +317,7 @@ func printBenchmarkReport(dst io.Writer, rows []benchmarkRow) error {
 				formatBenchmarkDiff(pair.cpu, pair.rocm),
 				formatBenchmarkSpeedup(pair.cpu, pair.rocm),
 				formatBenchmarkErrors(pair.metal, pair.cuda, pair.rocm),
+				formatBenchmarkTelemetry(pair.cpu),
 				formatBenchmarkStatus(pair.cpu, pair.metal, pair.cuda, pair.rocm),
 			)
 		}
@@ -292,11 +335,29 @@ func printBenchmarkReport(dst io.Writer, rows []benchmarkRow) error {
 	return nil
 }
 
+func formatBenchmarkTelemetry(row *benchmarkRow) string {
+	if row == nil || row.Status != "ok" {
+		return "-"
+	}
+	if row.Allocations == 0 && row.LiveBuffers == 0 && row.H2DTransfers == 0 && row.D2HTransfers == 0 &&
+		row.KernelLaunches == 0 && row.VendorGEMMLaunches == 0 && row.Synchronizations == 0 {
+		return "-"
+	}
+	return fmt.Sprintf("alloc=%d live=%d h2d=%d d2h=%d kernels=%d gemm=%d sync=%d",
+		row.Allocations, row.LiveBuffers, row.H2DTransfers, row.D2HTransfers,
+		row.KernelLaunches, row.VendorGEMMLaunches, row.Synchronizations)
+}
+
 func formatBenchmarkTime(row *benchmarkRow) string {
 	if row == nil || row.Status != "ok" {
 		return "-"
 	}
-	return formatDurationNS(row.AverageNS)
+	formatted := formatDurationNS(row.AverageNS)
+	if row.WorkUnits > 0 && row.WorkUnit != "" && row.AverageNS > 0 {
+		rate := row.WorkUnits / (row.AverageNS / 1_000_000_000)
+		return fmt.Sprintf("%s (%.1f %s/s)", formatted, rate, row.WorkUnit)
+	}
+	return formatted
 }
 
 func formatBenchmarkDiff(cpu, metal *benchmarkRow) string {

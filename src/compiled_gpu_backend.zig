@@ -55,13 +55,17 @@ pub fn Implementation(comptime Config: type) type {
                     .gpu_dirty = false,
                 };
                 owner.stats.buffer_allocations += 1;
+                owner.stats.live_buffers += 1;
                 return gpu_matrix;
             }
 
             pub fn deinit(self: *GpuMatrix) void {
                 Driver.destroyBuffer(self.backend, self.buffer);
                 self.allocator.free(self.host_data);
+                const owner = self.owner;
                 self.allocator.destroy(self);
+                std.debug.assert(owner.stats.live_buffers > 0);
+                owner.stats.live_buffers -= 1;
             }
 
             pub fn syncToGPU(self: *GpuMatrix) bool {
@@ -164,7 +168,8 @@ pub fn Implementation(comptime Config: type) type {
 
             pub fn resetRuntimeStats(ptr: *anyopaque) void {
                 const self = @as(*GpuBackend, @ptrCast(@alignCast(ptr)));
-                self.stats = .{};
+                const live_buffers = self.stats.live_buffers;
+                self.stats = .{ .live_buffers = live_buffers };
                 self.synchronized_kernel_count = 0;
             }
 

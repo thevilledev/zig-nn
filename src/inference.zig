@@ -489,6 +489,23 @@ test "text session reuses a loaded decoder and deterministic greedy generation" 
     try std.testing.expect(second.stats.runtime.execution.readbacks >= 3);
 }
 
+test "text session keeps buffers and workspaces bounded for 1000 decode steps" {
+    const allocator = std.testing.allocator;
+    const model = try tiny.Model.init(allocator, .{ .block_size = 8, .n_layer = 1, .n_head = 1, .n_embd = 4 }, 99);
+    var session = try TextSession.initModel(allocator, model, .{ .device = .cpu });
+    defer session.deinit();
+
+    _ = try session.prefill("a", 42, 1000);
+    const live_buffers = session.runtimeStats().backend.live_buffers;
+    const token_capacity = session.token_buffer.capacity;
+    for (0..1000) |_| {
+        _ = try session.decodeNext(.{ .temperature = 0 });
+        try std.testing.expectEqual(live_buffers, session.runtimeStats().backend.live_buffers);
+        try std.testing.expect(session.cache.position <= session.model.config.block_size);
+    }
+    try std.testing.expectEqual(token_capacity, session.token_buffer.capacity);
+}
+
 test "model inspection rejects malformed and incompatible headers" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});

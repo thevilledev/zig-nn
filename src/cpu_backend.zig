@@ -10,6 +10,7 @@ const dimensions = @import("dimensions.zig");
 const CPUMatrix = struct {
     data: []f32,
     allocator: Allocator,
+    owner: *CPUBackend,
 };
 
 /// CPU backend implementation
@@ -55,6 +56,7 @@ pub const CPUBackend = struct {
         cpu_data.* = .{
             .data = data,
             .allocator = allocator,
+            .owner = self,
         };
 
         // Set up the matrix
@@ -65,6 +67,7 @@ pub const CPUBackend = struct {
             .impl_data = cpu_data,
         };
         self.stats.buffer_allocations += 1;
+        self.stats.live_buffers += 1;
 
         return matrix;
     }
@@ -76,7 +79,8 @@ pub const CPUBackend = struct {
 
     pub fn resetRuntimeStats(ptr: *anyopaque) void {
         const self = @as(*CPUBackend, @ptrCast(@alignCast(ptr)));
-        self.stats = .{};
+        const live_buffers = self.stats.live_buffers;
+        self.stats = .{ .live_buffers = live_buffers };
     }
 
     pub fn beginBatch(_: *anyopaque) !void {}
@@ -89,6 +93,7 @@ pub const CPUBackend = struct {
         // First, cast to get the CPU-specific data
         const cpu_data = @as(*CPUMatrix, @ptrCast(@alignCast(matrix.impl_data)));
         const allocator = cpu_data.allocator;
+        const owner = cpu_data.owner;
 
         // Free the data array
         allocator.free(cpu_data.data);
@@ -98,6 +103,8 @@ pub const CPUBackend = struct {
 
         // Free the matrix wrapper
         allocator.destroy(matrix);
+        std.debug.assert(owner.stats.live_buffers > 0);
+        owner.stats.live_buffers -= 1;
     }
 
     pub fn getMatrixElement(_: *anyopaque, matrix: *const Matrix, row: usize, col: usize) f64 {
@@ -171,9 +178,7 @@ pub const CPUBackend = struct {
             for (0..a.cols) |k| {
                 const left = a_cpu.data[i * a.cols + k];
                 const right = b_cpu.data[k * b.cols ..][0..b.cols];
-                for (output, right) |*value, factor| {
-                    value.* += left * factor;
-                }
+                accumulateScaled(output, right, left);
             }
         }
 
@@ -334,6 +339,39 @@ pub const CPUBackend = struct {
             for (0..matrix.cols) |col| {
                 const index = row * matrix.cols + col;
                 result_data.data[index] = input_data.data[index] + bias_data.data[col];
+            }
+        }
+        return result;
+    }
+
+    pub fn linearBiasGelu(
+        ptr: *anyopaque,
+        input: *const Matrix,
+        weights: *const Matrix,
+        bias: *const Matrix,
+        allocator: Allocator,
+    ) error{ OutOfMemory, DimensionMismatch }!*Matrix {
+        if (input.cols != weights.rows or bias.rows != 1 or bias.cols != weights.cols) {
+            return error.DimensionMismatch;
+        }
+
+        const result = try initMatrix(ptr, allocator, input.rows, weights.cols);
+        errdefer deinitMatrix(undefined, result);
+        const input_data = @as(*const CPUMatrix, @ptrCast(@alignCast(input.impl_data)));
+        const weight_data = @as(*const CPUMatrix, @ptrCast(@alignCast(weights.impl_data)));
+        const bias_data = @as(*const CPUMatrix, @ptrCast(@alignCast(bias.impl_data)));
+        const result_data = @as(*CPUMatrix, @ptrCast(@alignCast(result.impl_data)));
+
+        for (0..input.rows) |row| {
+            const output = result_data.data[row * weights.cols ..][0..weights.cols];
+            @memcpy(output, bias_data.data);
+            for (0..input.cols) |inner| {
+                const left = input_data.data[row * input.cols + inner];
+                const right = weight_data.data[inner * weights.cols ..][0..weights.cols];
+                accumulateScaled(output, right, left);
+            }
+            for (output) |*value| {
+                value.* = @floatCast(@import("activation.zig").Activation.gelu(value.*));
             }
         }
         return result;
@@ -887,6 +925,34 @@ pub const CPUBackend = struct {
 // Helper activation functions needed for GLU and SwiGLU
 fn sigmoid(x: f64) f64 {
     return 1.0 / (1.0 + std.math.exp(-x));
+}
+
+/// Vector-width output tiling keeps inference weights in their existing
+/// contiguous row-major layout while making the packed CPU path explicit. The
+/// scalar tail is also the readable reference for narrow matrices.
+fn accumulateScaled(output: []f32, right: []const f32, left: f32) void {
+    const width = 8;
+    const Vector = @Vector(width, f32);
+    const scale: Vector = @splat(left);
+    var column: usize = 0;
+    while (column + width <= output.len) : (column += width) {
+        const output_array: [width]f32 = output[column..][0..width].*;
+        const right_array: [width]f32 = right[column..][0..width].*;
+        var output_vector: Vector = output_array;
+        const right_vector: Vector = right_array;
+        output_vector += scale * right_vector;
+        output[column..][0..width].* = @as([width]f32, output_vector);
+    }
+    for (output[column..], right[column..]) |*value, factor| value.* += left * factor;
+}
+
+test "vectorized accumulation preserves scalar tails" {
+    var output = [_]f32{0} ** 11;
+    const right = [_]f32{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 };
+    accumulateScaled(&output, &right, 0.5);
+    for (output, right) |actual, expected| {
+        try std.testing.expectApproxEqAbs(expected * 0.5, actual, 0.000001);
+    }
 }
 
 fn swish(x: f64) f64 {

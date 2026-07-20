@@ -43,6 +43,7 @@ pub const OptimizerUpdateConfig = struct {
 /// point where buffers, transfers, kernels, and synchronization actually occur.
 pub const RuntimeStats = struct {
     buffer_allocations: usize = 0,
+    live_buffers: usize = 0,
     host_to_device_transfers: usize = 0,
     host_to_device_bytes: usize = 0,
     device_to_host_transfers: usize = 0,
@@ -242,6 +243,12 @@ pub const Matrix = struct {
     /// Broadcasts a 1 x cols bias across every matrix row.
     pub fn addRowBias(self: *const Matrix, bias: *const Matrix, allocator: Allocator) !*Matrix {
         return self.backend.addRowBias(self, bias, allocator);
+    }
+
+    /// Computes GELU(input * weights + bias). CPU uses one fused output
+    /// buffer; accelerator backends retain the readable composed path.
+    pub fn linearBiasGelu(self: *const Matrix, weights: *const Matrix, bias: *const Matrix, allocator: Allocator) !*Matrix {
+        return self.backend.linearBiasGelu(self, weights, bias, allocator);
     }
 
     /// Performs element-wise matrix subtraction: C = A - B

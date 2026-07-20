@@ -1,0 +1,11 @@
+# zig-nn v0.0.7 optimized inference baseline
+# host=Apple M1 cpu_cores=8 memory_gib=16 os=macOS
+# mode=ReleaseFast quick=false recorded=2026-07-20
+# v0.0.6 cached decode: 109568 ns; v0.0.7: 52018 ns (2.11x).
+suite,case,backend,mode,warmups,iterations,avg_ns,min_ns,max_ns,checksum,sample_error,work_units,work_unit,allocations,live_buffers,h2d_transfers,d2h_transfers,kernel_launches,vendor_gemm_launches,synchronizations,status
+inference,dense_batch1_32_64_16,cpu,ReleaseFast,1,5,1533,1458,1625,0.298002455,0.000000000,1.000,sample,9,6,0,0,0,0,0,ok
+inference,dense_batch32_32_64_16,cpu,ReleaseFast,1,5,71641,70416,75583,0.298002455,0.000000000,32.000,sample,9,6,0,0,0,0,0,ok
+inference,tiny_cold_load_l4_h4_c64,cpu,ReleaseFast,1,5,8684950,7016958,10680791,1082720.000000000,0.000000000,1.000,model,78,78,0,0,0,0,0,ok
+inference,tiny_prefill_16,cpu,ReleaseFast,1,5,758433,737958,793333,80.000000000,0.000000000,16.000,token,1152,79,0,0,0,0,0,ok
+inference,tiny_cached_decode,cpu,ReleaseFast,1,16,52018,49583,53875,1394.000000000,0.000000000,1.000,token,72,79,0,0,0,0,0,ok
+inference,tiny_generate_32,cpu,ReleaseFast,1,5,1870558,1787750,2009042,320.000000000,0.000000000,32.000,token,2592,79,0,0,0,0,0,ok

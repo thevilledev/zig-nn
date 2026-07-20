@@ -3,6 +3,9 @@ package cli
 import (
 	"bytes"
 	"errors"
+	"math"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -26,6 +29,88 @@ training,batch,rocm,ReleaseFast,1,1,0,0,0,0,0,skipped_cpu_only_path
 	if rows[1].Backend != "metal" || rows[1].AverageNS != 500000 || rows[1].SampleError == 0 {
 		t.Fatalf("unexpected parsed metal row: %#v", rows[1])
 	}
+}
+
+func TestParseBenchmarkCSVAcceptsWorkUnitsAndLegacyRows(t *testing.T) {
+	rows, err := parseBenchmarkCSV([]byte(`suite,case,backend,mode,warmups,iterations,avg_ns,min_ns,max_ns,checksum,sample_error,work_units,work_unit,status
+inference,tiny_decode,cpu,ReleaseFast,1,2,500000000,490000000,510000000,1,0,32,token,ok
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].WorkUnits != 32 || rows[0].WorkUnit != "token" {
+		t.Fatalf("unexpected work-unit row: %#v", rows)
+	}
+	if got := formatBenchmarkTime(&rows[0]); !strings.Contains(got, "64.0 token/s") {
+		t.Fatalf("formatBenchmarkTime() = %q", got)
+	}
+}
+
+func TestParseBenchmarkCSVAcceptsInferenceTelemetry(t *testing.T) {
+	rows, err := parseBenchmarkCSV([]byte(`suite,case,backend,mode,warmups,iterations,avg_ns,min_ns,max_ns,checksum,sample_error,work_units,work_unit,allocations,live_buffers,h2d_transfers,d2h_transfers,kernel_launches,vendor_gemm_launches,synchronizations,status
+inference,tiny_decode,cuda,ReleaseFast,1,2,500000,490000,510000,1,0,1,token,8,42,0,1,20,7,1,ok
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Allocations != 8 || rows[0].LiveBuffers != 42 || rows[0].VendorGEMMLaunches != 7 || rows[0].Synchronizations != 1 {
+		t.Fatalf("unexpected telemetry row: %#v", rows)
+	}
+	if got := formatBenchmarkTelemetry(&rows[0]); !strings.Contains(got, "gemm=7") {
+		t.Fatalf("formatBenchmarkTelemetry() = %q", got)
+	}
+}
+
+func TestCommittedInferenceBaselinesMeetReleaseGate(t *testing.T) {
+	root := filepath.Join("..", "..", "..")
+	baseline := readBenchmarkFixture(t, filepath.Join(root, "benchmarks", "baselines", "inference-apple-m1-v0.0.6.csv"))
+	optimized := readBenchmarkFixture(t, filepath.Join(root, "benchmarks", "baselines", "inference-apple-m1-v0.0.7.csv"))
+	baselineByKey := make(map[string]benchmarkRow, len(baseline))
+	for _, row := range baseline {
+		baselineByKey[benchmarkRowKey(row)] = row
+	}
+
+	for _, current := range optimized {
+		previous, ok := baselineByKey[benchmarkRowKey(current)]
+		if !ok {
+			t.Fatalf("optimized row has no baseline: %s", benchmarkRowKey(current))
+		}
+		if current.AverageNS > previous.AverageNS*1.05 {
+			t.Errorf("%s regressed by more than 5%%: %.0f -> %.0f ns", current.Case, previous.AverageNS, current.AverageNS)
+		}
+		if math.Abs(current.Checksum-previous.Checksum) > 1e-4 {
+			t.Errorf("%s checksum changed beyond f32 tolerance", current.Case)
+		}
+		if current.LiveBuffers <= 0 {
+			t.Errorf("%s does not record live-buffer telemetry", current.Case)
+		}
+	}
+
+	decodeKey := benchmarkRowKey(benchmarkRow{Suite: "inference", Case: "tiny_cached_decode", Backend: "cpu", Mode: "ReleaseFast"})
+	previous := baselineByKey[decodeKey]
+	var current benchmarkRow
+	for _, row := range optimized {
+		if benchmarkRowKey(row) == decodeKey {
+			current = row
+			break
+		}
+	}
+	if speedup := previous.AverageNS / current.AverageNS; speedup < 1.5 {
+		t.Fatalf("cached decode speedup = %.2fx, want at least 1.50x", speedup)
+	}
+}
+
+func readBenchmarkFixture(t *testing.T, path string) []benchmarkRow {
+	t.Helper()
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := parseBenchmarkCSV(contents)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rows
 }
 
 func TestPrintBenchmarkReportShowsDiffsAndSkips(t *testing.T) {

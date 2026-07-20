@@ -20,6 +20,22 @@ const Timing = struct {
     min_ns: f64,
     max_ns: f64,
     checksum: f64,
+    metrics: InferenceMetrics = .{},
+};
+
+const InferenceMetrics = struct {
+    allocations: usize = 0,
+    live_buffers: usize = 0,
+    host_to_device_transfers: usize = 0,
+    device_to_host_transfers: usize = 0,
+    kernel_launches: usize = 0,
+    vendor_gemm_launches: usize = 0,
+    synchronizations: usize = 0,
+};
+
+const InferenceSample = struct {
+    checksum: f64,
+    metrics: InferenceMetrics,
 };
 
 const BackendOp = enum {
@@ -88,6 +104,9 @@ pub fn main(init: std.process.Init) !void {
     if (shouldRun(options, "tiny_gpt")) {
         try benchmarkTinyGpt(allocator, options);
     }
+    if (shouldRun(options, "inference")) {
+        try benchmarkInference(allocator, metal != null, cuda != null, rocm != null, options);
+    }
     if (shouldRun(options, "quantization")) {
         try benchmarkQuantization(allocator, options);
     }
@@ -129,6 +148,7 @@ fn printHelp() void {
         \\  training      CPU Network.trainBatch loops
         \\  training_epoch  shuffled Network.train epochs with mini-batches
         \\  tiny_gpt      CPU TinyGPT forward passes
+        \\  inference     persistent dense prediction and TinyGPT generation
         \\  quantization  CPU uniform, TurboQuant, and KV-cache-shaped quantization loops
         \\
     , .{});
@@ -164,7 +184,7 @@ fn printHeader(options: Options, metal_available: bool, cuda_available: bool, ro
     std.debug.print("# mode={s} quick={} metal_available={} cuda_available={} rocm_available={}\n", .{ modeName(), options.quick, metal_available, cuda_available, rocm_available });
     std.debug.print("# repeatability: fixed shapes, fixed seeds, deterministic data, warmups excluded\n", .{});
     std.debug.print(
-        "suite,case,backend,mode,warmups,iterations,avg_ns,min_ns,max_ns,checksum,sample_error,status\n",
+        "suite,case,backend,mode,warmups,iterations,avg_ns,min_ns,max_ns,checksum,sample_error,work_units,work_unit,allocations,live_buffers,h2d_transfers,d2h_transfers,kernel_launches,vendor_gemm_launches,synchronizations,status\n",
         .{},
     );
 }
@@ -1180,6 +1200,237 @@ fn timeTinyGptForward(
     };
 }
 
+fn benchmarkInference(
+    allocator: Allocator,
+    metal_available: bool,
+    cuda_available: bool,
+    rocm_available: bool,
+    options: Options,
+) !void {
+    const dense_path = ".zig-cache/benchmark-inference.znn";
+    const text_path = ".zig-cache/benchmark-inference.tgpt";
+    const io = std.Options.debug_io;
+    defer std.Io.Dir.cwd().deleteFile(io, dense_path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(io, text_path) catch {};
+
+    var network = nn.Network.init(allocator, 0.01, .MeanSquaredError);
+    defer network.deinit();
+    var random_source = std.Random.DefaultPrng.init(0x1234_5678);
+    try network.addLayerWithRandom(32, 64, nn.Activation.relu, nn.Activation.relu_derivative, random_source.random());
+    try network.addLayerWithRandom(64, 16, nn.Activation.linear, nn.Activation.linear_derivative, random_source.random());
+    try network.saveToFile(dense_path);
+
+    var text_model = try tiny_gpt.TinyGPT.init(allocator, .{
+        .block_size = 64,
+        .n_layer = 4,
+        .n_head = 4,
+        .n_embd = 64,
+    }, 0x9e37_79b9);
+    defer text_model.deinit();
+    try text_model.saveToFile(text_path);
+
+    try benchmarkInferenceBackend(allocator, dense_path, text_path, .cpu, "cpu", options);
+    if (metal_available) {
+        try benchmarkInferenceBackend(allocator, dense_path, text_path, .metal, "metal", options);
+    } else {
+        printInferenceSkipped("metal", options, "skipped_metal_unavailable");
+    }
+    if (cuda_available) {
+        try benchmarkInferenceBackend(allocator, dense_path, text_path, .cuda, "cuda", options);
+    } else {
+        printInferenceSkipped("cuda", options, "skipped_cuda_unavailable");
+    }
+    if (rocm_available) {
+        try benchmarkInferenceBackend(allocator, dense_path, text_path, .rocm, "rocm", options);
+    } else {
+        printInferenceSkipped("rocm", options, "skipped_rocm_unavailable");
+    }
+}
+
+fn benchmarkInferenceBackend(
+    allocator: Allocator,
+    dense_path: []const u8,
+    text_path: []const u8,
+    preference: nn.DevicePreference,
+    backend_name: []const u8,
+    options: Options,
+) !void {
+    const warmups = quickCount(options, 1);
+    const iterations = quickCount(options, if (options.quick) 1 else 5);
+
+    var dense = try nn.Inference.DenseSession.init(allocator, dense_path, .{ .device = preference });
+    defer dense.deinit();
+    var dense_input: [32 * 32]f32 = undefined;
+    for (&dense_input, 0..) |*value, index| value.* = @as(f32, @floatFromInt(index % 17)) / 17.0;
+    var dense_output: [32 * 16]f32 = undefined;
+
+    var dense_one = DenseInferenceOperation{
+        .session = &dense,
+        .input = dense_input[0..32],
+        .output = dense_output[0..16],
+        .batch_size = 1,
+    };
+    const dense_one_timing = try timeInferenceOperation(&dense_one, DenseInferenceOperation.run, warmups, iterations);
+    printWorkResult("inference", "dense_batch1_32_64_16", backend_name, dense_one_timing, 0, 1, "sample", "ok");
+
+    var dense_batch = DenseInferenceOperation{
+        .session = &dense,
+        .input = &dense_input,
+        .output = &dense_output,
+        .batch_size = 32,
+    };
+    const dense_batch_timing = try timeInferenceOperation(&dense_batch, DenseInferenceOperation.run, warmups, iterations);
+    printWorkResult("inference", "dense_batch32_32_64_16", backend_name, dense_batch_timing, 0, 32, "sample", "ok");
+
+    var cold = ColdLoadOperation{ .allocator = allocator, .path = text_path, .preference = preference };
+    const cold_timing = try timeInferenceOperation(&cold, ColdLoadOperation.run, warmups, iterations);
+    printWorkResult("inference", "tiny_cold_load_l4_h4_c64", backend_name, cold_timing, 0, 1, "model", "ok");
+
+    var text = try nn.Inference.TextSession.init(allocator, text_path, .{ .device = preference });
+    defer text.deinit();
+    var prefill = TextPrefillOperation{ .session = &text, .prompt = "to be, or not to" };
+    const prefill_timing = try timeInferenceOperation(&prefill, TextPrefillOperation.run, warmups, iterations);
+    printWorkResult("inference", "tiny_prefill_16", backend_name, prefill_timing, 0, 16, "token", "ok");
+
+    _ = try text.prefill("to be, or not to", 42, 64);
+    var decode = TextDecodeOperation{ .session = &text };
+    const decode_timing = try timeInferenceOperation(&decode, TextDecodeOperation.run, warmups, if (options.quick) 1 else 16);
+    printWorkResult("inference", "tiny_cached_decode", backend_name, decode_timing, 0, 1, "token", "ok");
+
+    var generation = TextGenerationOperation{ .session = &text, .tokens = if (options.quick) 2 else 32 };
+    const generation_timing = try timeInferenceOperation(&generation, TextGenerationOperation.run, warmups, iterations);
+    printWorkResult("inference", "tiny_generate_32", backend_name, generation_timing, 0, @floatFromInt(generation.tokens), "token", "ok");
+}
+
+const DenseInferenceOperation = struct {
+    session: *nn.Inference.DenseSession,
+    input: []const f32,
+    output: []f32,
+    batch_size: usize,
+
+    fn run(self: *DenseInferenceOperation) !InferenceSample {
+        const stats = try self.session.predictInto(self.input, self.batch_size, self.output);
+        return .{ .checksum = self.output[0], .metrics = inferenceMetrics(stats) };
+    }
+};
+
+const ColdLoadOperation = struct {
+    allocator: Allocator,
+    path: []const u8,
+    preference: nn.DevicePreference,
+
+    fn run(self: *ColdLoadOperation) !InferenceSample {
+        var session = try nn.Inference.TextSession.init(self.allocator, self.path, .{ .device = self.preference });
+        defer session.deinit();
+        return .{
+            .checksum = @floatFromInt(session.model.parameterCount()),
+            .metrics = inferenceMetrics(session.runtimeStats()),
+        };
+    }
+};
+
+const TextPrefillOperation = struct {
+    session: *nn.Inference.TextSession,
+    prompt: []const u8,
+
+    fn run(self: *TextPrefillOperation) !InferenceSample {
+        const tokens = try self.session.prefill(self.prompt, 42, 32);
+        return .{ .checksum = @floatFromInt(tokens), .metrics = inferenceMetrics(self.session.runtimeStats()) };
+    }
+};
+
+const TextDecodeOperation = struct {
+    session: *nn.Inference.TextSession,
+
+    fn run(self: *TextDecodeOperation) !InferenceSample {
+        const before = inferenceMetrics(self.session.runtimeStats());
+        const token = try self.session.decodeNext(.{ .temperature = 0 });
+        const after = inferenceMetrics(self.session.runtimeStats());
+        return .{ .checksum = @floatFromInt(token), .metrics = subtractInferenceMetrics(after, before) };
+    }
+};
+
+const TextGenerationOperation = struct {
+    session: *nn.Inference.TextSession,
+    tokens: usize,
+
+    fn run(self: *TextGenerationOperation) !InferenceSample {
+        var storage: [128]u8 = undefined;
+        var writer: std.Io.Writer = .fixed(&storage);
+        const stats = try self.session.generate("to be", .{ .max_tokens = self.tokens, .temperature = 0 }, &writer);
+        return .{
+            .checksum = @floatFromInt(stats.generated_tokens + writer.buffered().len),
+            .metrics = inferenceMetrics(stats.runtime),
+        };
+    }
+};
+
+fn timeInferenceOperation(context: anytype, operation: anytype, warmups: usize, iterations: usize) !Timing {
+    for (0..warmups) |_| _ = try operation(context);
+    var total_ns: f64 = 0;
+    var min_ns = std.math.inf(f64);
+    var max_ns: f64 = 0;
+    var checksum: f64 = 0;
+    var metrics: ?InferenceMetrics = null;
+    for (0..iterations) |_| {
+        const start = nowNs();
+        const sample = try operation(context);
+        checksum += sample.checksum;
+        if (metrics) |expected| {
+            if (!std.meta.eql(expected, sample.metrics)) return error.UnstableInferenceCounters;
+        } else {
+            metrics = sample.metrics;
+        }
+        const elapsed: f64 = @floatFromInt(nowNs() - start);
+        total_ns += elapsed;
+        min_ns = @min(min_ns, elapsed);
+        max_ns = @max(max_ns, elapsed);
+    }
+    return .{
+        .warmups = warmups,
+        .iterations = iterations,
+        .average_ns = total_ns / @as(f64, @floatFromInt(iterations)),
+        .min_ns = min_ns,
+        .max_ns = max_ns,
+        .checksum = checksum,
+        .metrics = metrics orelse .{},
+    };
+}
+
+fn inferenceMetrics(snapshot: nn.Inference.RuntimeSnapshot) InferenceMetrics {
+    return .{
+        .allocations = snapshot.backend.buffer_allocations,
+        .live_buffers = snapshot.backend.live_buffers,
+        .host_to_device_transfers = snapshot.backend.host_to_device_transfers,
+        .device_to_host_transfers = snapshot.backend.device_to_host_transfers,
+        .kernel_launches = snapshot.backend.kernel_launches,
+        .vendor_gemm_launches = snapshot.backend.vendor_gemm_launches,
+        .synchronizations = snapshot.backend.synchronizations,
+    };
+}
+
+fn subtractInferenceMetrics(after: InferenceMetrics, before: InferenceMetrics) InferenceMetrics {
+    return .{
+        .allocations = after.allocations - before.allocations,
+        .live_buffers = after.live_buffers,
+        .host_to_device_transfers = after.host_to_device_transfers - before.host_to_device_transfers,
+        .device_to_host_transfers = after.device_to_host_transfers - before.device_to_host_transfers,
+        .kernel_launches = after.kernel_launches - before.kernel_launches,
+        .vendor_gemm_launches = after.vendor_gemm_launches - before.vendor_gemm_launches,
+        .synchronizations = after.synchronizations - before.synchronizations,
+    };
+}
+
+fn printInferenceSkipped(backend_name: []const u8, options: Options, status: []const u8) void {
+    const count = quickCount(options, 1);
+    printSkipped("inference", "dense_batch1_32_64_16", backend_name, count, count, status);
+    printSkipped("inference", "dense_batch32_32_64_16", backend_name, count, count, status);
+    printSkipped("inference", "tiny_cold_load_l4_h4_c64", backend_name, count, count, status);
+    printSkipped("inference", "tiny_prefill_16", backend_name, count, count, status);
+    printSkipped("inference", "tiny_cached_decode", backend_name, count, count, status);
+    printSkipped("inference", "tiny_generate_32", backend_name, count, count, status);
+}
+
 fn benchmarkQuantization(allocator: Allocator, options: Options) !void {
     const vector_cases = [_]struct {
         name: []const u8,
@@ -1514,7 +1765,7 @@ fn printResult(
     status: []const u8,
 ) void {
     std.debug.print(
-        "{s},{s},{s},{s},{d},{d},{d:.0},{d:.0},{d:.0},{d:.9},{d:.9},{s}\n",
+        "{s},{s},{s},{s},{d},{d},{d:.0},{d:.0},{d:.0},{d:.9},{d:.9},0,,{d},{d},{d},{d},{d},{d},{d},{s}\n",
         .{
             suite,
             case_name,
@@ -1527,6 +1778,51 @@ fn printResult(
             timing.max_ns,
             timing.checksum,
             sample_error,
+            timing.metrics.allocations,
+            timing.metrics.live_buffers,
+            timing.metrics.host_to_device_transfers,
+            timing.metrics.device_to_host_transfers,
+            timing.metrics.kernel_launches,
+            timing.metrics.vendor_gemm_launches,
+            timing.metrics.synchronizations,
+            status,
+        },
+    );
+}
+
+fn printWorkResult(
+    suite: []const u8,
+    case_name: []const u8,
+    backend: []const u8,
+    timing: Timing,
+    sample_error: f64,
+    work_units: f64,
+    work_unit: []const u8,
+    status: []const u8,
+) void {
+    std.debug.print(
+        "{s},{s},{s},{s},{d},{d},{d:.0},{d:.0},{d:.0},{d:.9},{d:.9},{d:.3},{s},{d},{d},{d},{d},{d},{d},{d},{s}\n",
+        .{
+            suite,
+            case_name,
+            backend,
+            modeName(),
+            timing.warmups,
+            timing.iterations,
+            timing.average_ns,
+            timing.min_ns,
+            timing.max_ns,
+            timing.checksum,
+            sample_error,
+            work_units,
+            work_unit,
+            timing.metrics.allocations,
+            timing.metrics.live_buffers,
+            timing.metrics.host_to_device_transfers,
+            timing.metrics.device_to_host_transfers,
+            timing.metrics.kernel_launches,
+            timing.metrics.vendor_gemm_launches,
+            timing.metrics.synchronizations,
             status,
         },
     );
@@ -1541,7 +1837,7 @@ fn printSkipped(
     status: []const u8,
 ) void {
     std.debug.print(
-        "{s},{s},{s},{s},{d},{d},0,0,0,0,0,{s}\n",
+        "{s},{s},{s},{s},{d},{d},0,0,0,0,0,0,,0,0,0,0,0,0,0,{s}\n",
         .{ suite, case_name, backend, modeName(), warmups, iterations, status },
     );
 }

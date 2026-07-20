@@ -272,6 +272,7 @@ const MetalMatrix = struct {
             .gpu_dirty = false,
         };
         owner.stats.buffer_allocations += 1;
+        owner.stats.live_buffers += 1;
 
         return metal_matrix;
     }
@@ -282,7 +283,10 @@ const MetalMatrix = struct {
         // Free CPU memory
         self.allocator.free(self.host_data);
 
+        const owner = self.owner;
         self.allocator.destroy(self);
+        std.debug.assert(owner.stats.live_buffers > 0);
+        owner.stats.live_buffers -= 1;
     }
 
     // Sync CPU data to GPU if needed
@@ -554,7 +558,8 @@ pub const MetalBackend = struct {
 
     pub fn resetRuntimeStats(ptr: *anyopaque) void {
         const self = @as(*MetalBackend, @ptrCast(@alignCast(ptr)));
-        self.stats = .{};
+        const live_buffers = self.stats.live_buffers;
+        self.stats = .{ .live_buffers = live_buffers };
         self.synchronized_kernel_count = 0;
     }
 

@@ -1069,9 +1069,7 @@ pub const FeedForward = struct {
 
     pub fn forward(self: *const FeedForward, context: *ExecutionContext, input: Tensor) !Tensor {
         if (input.shape.rank != 2 or input.shape.dims[1] != self.channels) return error.DimensionMismatch;
-        var expanded = try self.expand.forward(context, input);
-        defer expanded.deinit();
-        var activated = try context.gelu(expanded);
+        var activated = try context.linearGelu(input, self.expand.weights, self.expand.bias);
         defer activated.deinit();
         return self.project.forward(context, activated);
     }
@@ -2286,7 +2284,7 @@ test "decoder block runs a finite device-resident forward pass" {
     try context.readback(output, &values);
     for (values) |value| try testing.expect(std.math.isFinite(value));
     try testing.expectEqualSlices(usize, &.{ 3, 4 }, output.shape.slice());
-    try testing.expectEqual(@as(usize, 18), context.stats.kernels);
+    try testing.expectEqual(@as(usize, 16), context.stats.kernels);
 
     const runtime_stats = context.backendStats();
     if (device.backendType() == .CPU) {
