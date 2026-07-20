@@ -68,3 +68,27 @@ pub const LearningRateSchedule = enum {
     linear,
     cosine,
 };
+
+fn fuzzTokenizer(_: void, smith: *std.testing.Smith) !void {
+    @disableInstrumentation();
+    var buffer: [256]u8 = undefined;
+    const len = smith.sliceWeightedBytes(&buffer, &.{
+        .rangeAtMost(u8, 0, 255, 1),
+        .rangeAtMost(u8, ' ', '~', 4),
+        .value(u8, '\n', 1),
+    });
+    const input = buffer[0..len];
+    const tokens = try Tokenizer.encode(std.testing.allocator, input);
+    defer std.testing.allocator.free(tokens);
+    const decoded = try Tokenizer.decode(std.testing.allocator, tokens);
+    defer std.testing.allocator.free(decoded);
+    try std.testing.expectEqual(input.len, decoded.len);
+    for (input, decoded) |source, result| {
+        const expected = if (std.mem.indexOfScalar(u8, Tokenizer.vocab, source) != null) source else ' ';
+        try std.testing.expectEqual(expected, result);
+    }
+}
+
+test "tokenizer accepts fuzzed byte input" {
+    try std.testing.fuzz({}, fuzzTokenizer, .{ .corpus = &.{ "", "hello", "\x00\xff", Tokenizer.vocab } });
+}

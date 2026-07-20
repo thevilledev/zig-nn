@@ -3,6 +3,8 @@ zig-out
 bin/
 node_modules/
 web/dist/
+coverage/
+web/coverage/
 packer-manifest.json
 plan.md
 .cursor

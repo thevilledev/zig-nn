@@ -35,6 +35,16 @@ description = "Run nnctl Go tests with the race detector"
 dir = "nnctl"
 run = "go test -race ./..."
 
+[tasks."go:coverage"]
+description = "Measure nnctl Go coverage"
+dir = "nnctl"
+run = """
+mkdir -p ../coverage
+go test -covermode=atomic -coverprofile=../coverage/go.out ./...
+go tool cover -func=../coverage/go.out | tee ../coverage/go.txt
+awk '$1 == "total:" { value = $3; sub(/%$/, "", value); found = 1; if (value + 0 < 59.0) exit 1 } END { if (!found) exit 2 }' ../coverage/go.txt
+"""
+
 [tasks."go:lint"]
 description = "Run golangci-lint for nnctl"
 dir = "nnctl"
@@ -89,6 +99,16 @@ depends = ["web:install"]
 dir = "web"
 run = "npm test"
 
+[tasks."web:coverage"]
+description = "Measure Svelte learning lab coverage"
+depends = ["web:install"]
+dir = "web"
+run = "npm run test:coverage"
+
+[tasks.coverage]
+description = "Measure Go and web coverage"
+depends = ["go:coverage", "web:coverage"]
+
 [tasks."web:build"]
 description = "Build the Svelte learning lab"
 depends = ["web:install"]
@@ -128,6 +148,7 @@ depends = [
   "zig:test",
   "zig:test-acceptance",
   "go:test-race",
+  "go:coverage",
   "go:lint",
   "go:vuln",
   "packer:validate",
@@ -136,5 +157,6 @@ depends = [
   "web:check",
   "web:lint",
   "web:test",
+  "web:coverage",
   "web:build",
 ]

@@ -31,5 +31,7 @@ jobs:
         run: npm run check
       - name: Run unit and component tests
         run: npm test
+      - name: Measure coverage
+        run: npm run test:coverage
       - name: Build production bundle
         run: npm run build

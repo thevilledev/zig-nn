@@ -1036,3 +1036,32 @@ test "pathOnly removes query string" {
     try std.testing.expectEqualStrings("/v1/models", pathOnly("/v1/models?x=1"));
     try std.testing.expectEqualStrings("/v1/completions", pathOnly("/v1/completions"));
 }
+
+fn fuzzRequestParsing(_: void, smith: *std.testing.Smith) !void {
+    @disableInstrumentation();
+    var buffer: [1024]u8 = undefined;
+    const len = smith.sliceWeightedBytes(&buffer, &.{
+        .rangeAtMost(u8, 0, 255, 1),
+        .rangeAtMost(u8, ' ', '~', 4),
+        .value(u8, '{', 2),
+        .value(u8, '}', 2),
+    });
+    const parsed = json.parseFromSlice(json.Value, std.testing.allocator, buffer[0..len], .{}) catch return;
+    defer parsed.deinit();
+    switch (parsed.value) {
+        .object => |object| {
+            var api_error: ?ApiError = null;
+            if (parseRequestSettings(std.testing.allocator, object, .{}, &api_error)) |settings_value| {
+                var settings = settings_value;
+                settings.deinit(std.testing.allocator);
+            } else |_| {}
+        },
+        else => {},
+    }
+}
+
+test "OpenAI request parser accepts fuzzed bodies" {
+    try std.testing.fuzz({}, fuzzRequestParsing, .{
+        .corpus = &.{ "{}", "null", "{\"stream\":true}", "{\"max_tokens\":8}" },
+    });
+}

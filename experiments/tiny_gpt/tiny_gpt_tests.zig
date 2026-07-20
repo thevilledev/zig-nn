@@ -23,6 +23,28 @@ const resolvedEvalChars = cli.resolvedEvalChars;
 const trainingCorpus = cli.trainingCorpus;
 const validationCorpus = cli.validationCorpus;
 
+fn writeCheckpointBytes(path: []const u8, bytes: []const u8) !void {
+    const io = std.Options.debug_io;
+    const file = try std.Io.Dir.cwd().createFile(io, path, .{});
+    defer file.close(io);
+    try file.writeStreamingAll(io, bytes);
+}
+
+fn writeLegacyCheckpoint(allocator: std.mem.Allocator, source_path: []const u8, target_path: []const u8, version: u32) !void {
+    const io = std.Options.debug_io;
+    const source = try std.Io.Dir.cwd().readFileAlloc(io, source_path, allocator, .limited(8 * 1024 * 1024));
+    defer allocator.free(source);
+    const header_without_fingerprint = 4 + 4 + 5 * 4;
+    const body_offset = header_without_fingerprint + 8;
+    const footer_size: usize = if (version == 1) 4 else 0;
+    const legacy = try allocator.alloc(u8, source.len - 8 - footer_size);
+    defer allocator.free(legacy);
+    @memcpy(legacy[0..header_without_fingerprint], source[0..header_without_fingerprint]);
+    std.mem.writeInt(u32, legacy[4..8], version, .little);
+    @memcpy(legacy[header_without_fingerprint..], source[body_offset .. source.len - footer_size]);
+    try writeCheckpointBytes(target_path, legacy);
+}
+
 test "tokenizer encode decode round trip" {
     const allocator = testing.allocator;
     const text = "to be, or not!";
@@ -157,6 +179,56 @@ test "tiny gpt checkpoint round trip preserves logits" {
     try testing.expectEqual(original_logits.cols, loaded_logits.cols);
     for (original_logits.data, 0..) |value, idx| {
         try testing.expectApproxEqAbs(value, loaded_logits.data[idx], 1e-12);
+    }
+}
+
+test "tiny gpt loads checkpoint versions one through three" {
+    const allocator = testing.allocator;
+    var model = try TinyGPT.init(allocator, .{ .block_size = 8, .n_layer = 1, .n_head = 2, .n_embd = 8 }, 17);
+    defer model.deinit();
+    const current_path = "test_tiny_gpt_v3.bin";
+    defer std.Io.Dir.cwd().deleteFile(std.Options.debug_io, current_path) catch {};
+    try model.saveToFile(current_path);
+
+    const tokens = [_]usize{ Tokenizer.encodeChar('o'), Tokenizer.encodeChar('k') };
+    var expected = try model.forward(&tokens);
+    defer expected.deinit();
+    for (1..4) |version| {
+        const path = switch (version) {
+            1 => "test_tiny_gpt_v1.bin",
+            2 => "test_tiny_gpt_v2.bin",
+            3 => current_path,
+            else => unreachable,
+        };
+        if (version < 3) try writeLegacyCheckpoint(allocator, current_path, path, @intCast(version));
+        defer if (version < 3) std.Io.Dir.cwd().deleteFile(std.Options.debug_io, path) catch {};
+        var loaded = try TinyGPT.loadFromFile(allocator, path);
+        defer loaded.deinit();
+        var actual = try loaded.forward(&tokens);
+        defer actual.deinit();
+        for (expected.data, actual.data) |want, got| try testing.expectApproxEqAbs(want, got, 1e-12);
+    }
+}
+
+test "tiny gpt rejects truncated checkpoints" {
+    const allocator = testing.allocator;
+    var model = try TinyGPT.init(allocator, .{ .block_size = 4, .n_layer = 1, .n_head = 1, .n_embd = 4 }, 18);
+    defer model.deinit();
+    const source_path = "test_tiny_gpt_truncation_source.bin";
+    const truncated_path = "test_tiny_gpt_truncated.bin";
+    defer std.Io.Dir.cwd().deleteFile(std.Options.debug_io, source_path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(std.Options.debug_io, truncated_path) catch {};
+    try model.saveToFile(source_path);
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(std.Options.debug_io, source_path, allocator, .limited(8 * 1024 * 1024));
+    defer allocator.free(bytes);
+
+    for ([_]usize{ 0, 3, 8, 28, bytes.len - 1 }) |length| {
+        try writeCheckpointBytes(truncated_path, bytes[0..length]);
+        if (TinyGPT.loadFromFile(allocator, truncated_path)) |loaded_value| {
+            var loaded = loaded_value;
+            loaded.deinit();
+            return error.ExpectedTruncatedCheckpointFailure;
+        } else |_| {}
     }
 }
 

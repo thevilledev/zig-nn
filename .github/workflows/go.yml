@@ -28,6 +28,11 @@ jobs:
           cache: true
           cache-dependency-path: nnctl/go.mod
       - run: go test -race ./...
+      - name: Measure coverage
+        run: |
+          go test -covermode=atomic -coverprofile=coverage.out ./...
+          go tool cover -func=coverage.out | tee coverage.txt
+          awk '$1 == "total:" { value = $3; sub(/%$/, "", value); found = 1; if (value + 0 < 59.0) exit 1 } END { if (!found) exit 2 }' coverage.txt
       - run: go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${GOLANGCI_LINT_VERSION} run --config ../.golangci.yml ./...
       - run: |
           mkdir -p ../bin
