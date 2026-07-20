@@ -263,7 +263,12 @@ pub const TextSession = struct {
         if (options.max_tokens == 0) return self.generationStats(prompt_tokens, 0, started);
         for (0..options.max_tokens) |generated| {
             const next = try self.decode(options, generated + 1 < options.max_tokens);
-            try writer.writeByte(next);
+            writer.writeByte(next) catch |err| {
+                if (err == error.StopGeneration) {
+                    return self.generationStats(prompt_tokens, generated + 1, started);
+                }
+                return err;
+            };
         }
         return self.generationStats(prompt_tokens, options.max_tokens, started);
     }
@@ -618,6 +623,30 @@ test "seeded dense and text inference match every available backend" {
         defer text_actual.deinit();
         try std.testing.expectEqualStrings(text_expected.text, text_actual.text);
     }
+}
+
+test "text generation stops when the token sink disconnects" {
+    const DisconnectingWriter = struct {
+        written: usize = 0,
+
+        pub fn writeByte(self: *@This(), _: u8) !void {
+            if (self.written == 1) return error.ClientDisconnected;
+            self.written += 1;
+        }
+    };
+
+    const allocator = std.testing.allocator;
+    const source = try tiny.Model.init(allocator, .{ .block_size = 4, .n_layer = 1, .n_head = 2, .n_embd = 8 }, 123);
+    var session = try TextSession.initModel(allocator, source, .{ .device = .cpu });
+    defer session.deinit();
+    var writer: DisconnectingWriter = .{};
+
+    try std.testing.expectError(
+        error.ClientDisconnected,
+        session.generate("ab", .{ .max_tokens = 10, .temperature = 0 }, &writer),
+    );
+    try std.testing.expectEqual(@as(usize, 1), writer.written);
+    try std.testing.expect(session.token_buffer.items.len < 12);
 }
 
 test "checkpoint header parser is fuzzable" {

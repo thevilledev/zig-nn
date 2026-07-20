@@ -7,6 +7,7 @@ const tiny = @import("tiny_gpt.zig");
 const TextSession = nn.Inference.TextSession;
 
 const max_body_bytes = 64 * 1024;
+const max_generation_tokens = 4096;
 const system_fingerprint = "zig-nn-tiny-gpt";
 
 const ServerOptions = struct {
@@ -63,6 +64,57 @@ const PromptList = struct {
         for (self.owned_text) |text| allocator.free(text);
         allocator.free(self.owned_text);
         allocator.free(self.items);
+    }
+};
+
+const StreamKind = enum { completion, chat };
+
+const SseTokenWriter = struct {
+    allocator: std.mem.Allocator,
+    output: *std.Io.Writer,
+    flush_context: ?*anyopaque,
+    flush_fn: ?*const fn (*anyopaque) anyerror!void,
+    kind: StreamKind,
+    model_name: []const u8,
+    created: i64,
+    stop_sequences: []const []const u8,
+    pending: std.ArrayList(u8) = .empty,
+    stopped: bool = false,
+
+    fn deinit(self: *SseTokenWriter) void {
+        self.pending.deinit(self.allocator);
+    }
+
+    pub fn writeByte(self: *SseTokenWriter, byte: u8) !void {
+        try self.pending.append(self.allocator, byte);
+        if (firstStopIndex(self.pending.items, self.stop_sequences)) |stop_index| {
+            try self.emit(self.pending.items[0..stop_index]);
+            self.pending.clearRetainingCapacity();
+            self.stopped = true;
+            return error.StopGeneration;
+        }
+
+        const keep = longestStopPrefixSuffix(self.pending.items, self.stop_sequences);
+        const emit_len = self.pending.items.len - keep;
+        try self.emit(self.pending.items[0..emit_len]);
+        if (emit_len > 0) {
+            std.mem.copyForwards(u8, self.pending.items, self.pending.items[emit_len..]);
+            self.pending.shrinkRetainingCapacity(keep);
+        }
+    }
+
+    fn flushPending(self: *SseTokenWriter) !void {
+        try self.emit(self.pending.items);
+        self.pending.clearRetainingCapacity();
+    }
+
+    fn emit(self: *SseTokenWriter, bytes: []const u8) !void {
+        for (bytes) |byte| {
+            try writeSseTokenEvent(self.output, self.kind, self.model_name, self.created, byte);
+            if (self.flush_context) |context| {
+                try self.flush_fn.?(context);
+            }
+        }
     }
 };
 
@@ -201,20 +253,135 @@ fn handleConnection(
     var api_error: ?ApiError = null;
     const stream_response = wantsStream(parsed.value);
     if (std.mem.eql(u8, path, "/v1/chat/completions")) {
+        if (stream_response) {
+            return streamChatCompletion(allocator, &request, model, options, parsed.value, &api_error) catch |err| {
+                if (api_error) |value| return respondApiError(&request, value);
+                return err;
+            };
+        }
         const response = chatCompletionResponse(allocator, model, options, parsed.value, &api_error) catch |err| {
             return respondApiError(&request, api_error orelse fallbackApiError(err));
         };
         defer allocator.free(response);
-        if (stream_response) return respondEventStream(allocator, &request, response);
         return respondJson(&request, response, .ok);
     }
 
+    if (stream_response) {
+        return streamCompletion(allocator, &request, model, options, parsed.value, &api_error) catch |err| {
+            if (api_error) |value| return respondApiError(&request, value);
+            return err;
+        };
+    }
     const response = completionResponse(allocator, model, options, parsed.value, &api_error) catch |err| {
         return respondApiError(&request, api_error orelse fallbackApiError(err));
     };
     defer allocator.free(response);
-    if (stream_response) return respondEventStream(allocator, &request, response);
     return respondJson(&request, response, .ok);
+}
+
+fn streamCompletion(
+    allocator: std.mem.Allocator,
+    request: *http.Server.Request,
+    model: *TextSession,
+    options: ServerOptions,
+    request_value: json.Value,
+    api_error: *?ApiError,
+) !void {
+    if (request_value != .object) return requestFail(api_error, .{
+        .code = "invalid_request",
+        .message = "Request body must be a JSON object.",
+    });
+    var settings = try parseRequestSettings(allocator, request_value.object, options, api_error);
+    defer settings.deinit(allocator);
+    var prompts = try parseCompletionPrompts(allocator, request_value.object, api_error);
+    defer prompts.deinit(allocator);
+    if (prompts.items.len != 1) return requestFail(api_error, .{
+        .code = "unsupported_parameter",
+        .message = "Streaming accepts one string prompt.",
+        .param = "prompt",
+    });
+    return streamText(request, model, prompts.items[0], settings, .completion);
+}
+
+fn streamChatCompletion(
+    allocator: std.mem.Allocator,
+    request: *http.Server.Request,
+    model: *TextSession,
+    options: ServerOptions,
+    request_value: json.Value,
+    api_error: *?ApiError,
+) !void {
+    if (request_value != .object) return requestFail(api_error, .{
+        .code = "invalid_request",
+        .message = "Request body must be a JSON object.",
+    });
+    var settings = try parseRequestSettings(allocator, request_value.object, options, api_error);
+    defer settings.deinit(allocator);
+    const messages_value = request_value.object.get("messages") orelse return requestFail(api_error, .{
+        .code = "missing_required_parameter",
+        .message = "Missing required parameter: messages.",
+        .param = "messages",
+    });
+    if (messages_value != .array) return requestFail(api_error, .{
+        .code = "invalid_type",
+        .message = "messages must be an array.",
+        .param = "messages",
+    });
+    const prompt = try promptFromMessages(allocator, messages_value.array.items, api_error);
+    defer allocator.free(prompt);
+    return streamText(request, model, prompt, settings, .chat);
+}
+
+fn streamText(
+    request: *http.Server.Request,
+    model: *TextSession,
+    prompt: []const u8,
+    settings: RequestSettings,
+    kind: StreamKind,
+) !void {
+    var response_buffer: [4096]u8 = undefined;
+    var body = try request.respondStreaming(&response_buffer, .{
+        .respond_options = .{
+            .status = .ok,
+            .keep_alive = false,
+            .extra_headers = &event_stream_headers,
+        },
+    });
+    const created = unixSeconds();
+    var token_writer: SseTokenWriter = .{
+        .allocator = model.allocator,
+        .output = &body.writer,
+        .flush_context = @ptrCast(&body),
+        .flush_fn = flushEventStream,
+        .kind = kind,
+        .model_name = settings.model_name,
+        .created = created,
+        .stop_sequences = settings.stop_sequences,
+    };
+    defer token_writer.deinit();
+
+    _ = try model.generate(prompt, .{
+        .max_tokens = settings.max_tokens,
+        .temperature = settings.temperature,
+        .top_k = settings.top_k,
+        .top_p = settings.top_p,
+        .seed = settings.seed,
+    }, &token_writer);
+    try token_writer.flushPending();
+    try writeSseFinishEvent(
+        &body.writer,
+        kind,
+        settings.model_name,
+        created,
+        if (token_writer.stopped) "stop" else "length",
+    );
+    try body.writer.writeAll("data: [DONE]\n\n");
+    try body.end();
+}
+
+fn flushEventStream(context: *anyopaque) !void {
+    const body: *http.BodyWriter = @ptrCast(@alignCast(context));
+    try body.flush();
 }
 
 fn readBody(request: *http.Server.Request, body_buf: []u8) ![]const u8 {
@@ -370,7 +537,19 @@ fn parseRequestSettings(
 ) !RequestSettings {
     try rejectUnsupportedSettings(object, api_error);
 
-    const max_tokens = usizeField(object, "max_tokens") orelse options.max_tokens;
+    const max_tokens = if (object.get("max_tokens") != null)
+        usizeField(object, "max_tokens") orelse return requestFail(api_error, .{
+            .code = "invalid_type",
+            .message = "max_tokens must be a non-negative integer.",
+            .param = "max_tokens",
+        })
+    else
+        options.max_tokens;
+    if (max_tokens > max_generation_tokens) return requestFail(api_error, .{
+        .code = "request_limit_exceeded",
+        .message = "max_tokens must not exceed 4096.",
+        .param = "max_tokens",
+    });
     const temperature = floatField(object, "temperature") orelse options.temperature;
     const top_k = usizeField(object, "top_k") orelse options.top_k;
     const top_p = floatField(object, "top_p") orelse options.top_p;
@@ -655,6 +834,22 @@ fn firstStopIndex(text: []const u8, stop_sequences: []const []const u8) ?usize {
     return best;
 }
 
+fn longestStopPrefixSuffix(text: []const u8, stop_sequences: []const []const u8) usize {
+    var longest: usize = 0;
+    for (stop_sequences) |stop| {
+        if (stop.len <= 1) continue;
+        const max_prefix = @min(text.len, stop.len - 1);
+        var prefix_len = max_prefix;
+        while (prefix_len > longest) : (prefix_len -= 1) {
+            if (std.mem.eql(u8, text[text.len - prefix_len ..], stop[0..prefix_len])) {
+                longest = prefix_len;
+                break;
+            }
+        }
+    }
+    return longest;
+}
+
 fn isSupportedRole(role: []const u8) bool {
     return std.mem.eql(u8, role, "developer") or
         std.mem.eql(u8, role, "system") or
@@ -684,7 +879,12 @@ fn usizeField(object: json.ObjectMap, name: []const u8) ?usize {
     const value = object.get(name) orelse return null;
     return switch (value) {
         .integer => |number| if (number >= 0) @intCast(number) else null,
-        .float => |number| if (number >= 0.0) @intFromFloat(number) else null,
+        .float => |number| if (std.math.isFinite(number) and
+            number >= 0.0 and number == @floor(number) and
+            number <= @as(f64, @floatFromInt(std.math.maxInt(usize))))
+            @intFromFloat(number)
+        else
+            null,
         else => null,
     };
 }
@@ -722,20 +922,61 @@ fn respondJson(request: *http.Server.Request, body: []const u8, status: http.Sta
     });
 }
 
-fn respondEventStream(allocator: std.mem.Allocator, request: *http.Server.Request, response: []const u8) !void {
-    var body: std.Io.Writer.Allocating = .init(allocator);
-    defer body.deinit();
-    try body.writer.writeAll("data: ");
-    try body.writer.writeAll(response);
-    try body.writer.writeAll("\n\ndata: [DONE]\n\n");
-    try request.respond(body.writer.buffered(), .{
-        .status = .ok,
-        .extra_headers = &[_]http.Header{
-            .{ .name = "Content-Type", .value = "text/event-stream" },
-            .{ .name = "Cache-Control", .value = "no-cache" },
-            .{ .name = "Access-Control-Allow-Origin", .value = "*" },
-        },
-    });
+fn writeSseTokenEvent(
+    writer: *std.Io.Writer,
+    kind: StreamKind,
+    model_name: []const u8,
+    created: i64,
+    byte: u8,
+) !void {
+    try writer.writeAll("data: {\"id\":");
+    if (kind == .completion) {
+        try writer.print("\"cmpl-{d}\"", .{created});
+    } else {
+        try writer.print("\"chatcmpl-{d}\"", .{created});
+    }
+    try writer.writeAll(",\"object\":");
+    try writeJsonString(writer, if (kind == .completion) "text_completion" else "chat.completion.chunk");
+    try writer.print(",\"created\":{d},\"model\":", .{created});
+    try writeJsonString(writer, model_name);
+    try writer.writeAll(",\"choices\":[{");
+    if (kind == .completion) {
+        try writer.writeAll("\"text\":");
+        try writeJsonString(writer, (&[_]u8{byte})[0..]);
+        try writer.writeAll(",\"index\":0,\"finish_reason\":null");
+    } else {
+        try writer.writeAll("\"index\":0,\"delta\":{\"content\":");
+        try writeJsonString(writer, (&[_]u8{byte})[0..]);
+        try writer.writeAll("},\"finish_reason\":null");
+    }
+    try writer.writeAll("}]}\n\n");
+}
+
+fn writeSseFinishEvent(
+    writer: *std.Io.Writer,
+    kind: StreamKind,
+    model_name: []const u8,
+    created: i64,
+    finish_reason: []const u8,
+) !void {
+    try writer.writeAll("data: {\"id\":");
+    if (kind == .completion) {
+        try writer.print("\"cmpl-{d}\"", .{created});
+    } else {
+        try writer.print("\"chatcmpl-{d}\"", .{created});
+    }
+    try writer.writeAll(",\"object\":");
+    try writeJsonString(writer, if (kind == .completion) "text_completion" else "chat.completion.chunk");
+    try writer.print(",\"created\":{d},\"model\":", .{created});
+    try writeJsonString(writer, model_name);
+    try writer.writeAll(",\"choices\":[{");
+    if (kind == .completion) {
+        try writer.writeAll("\"text\":\"\",\"index\":0,\"finish_reason\":");
+    } else {
+        try writer.writeAll("\"index\":0,\"delta\":{},\"finish_reason\":");
+    }
+    try writeJsonString(writer, finish_reason);
+    try writer.writeAll("}]}\n\n");
 }
 
 fn respondApiError(request: *http.Server.Request, err: ApiError) !void {
@@ -763,6 +1004,12 @@ const cors_headers = [_]http.Header{
     .{ .name = "Access-Control-Allow-Origin", .value = "*" },
     .{ .name = "Access-Control-Allow-Headers", .value = "Content-Type, Authorization" },
     .{ .name = "Access-Control-Allow-Methods", .value = "GET, POST, OPTIONS" },
+};
+
+const event_stream_headers = [_]http.Header{
+    .{ .name = "Content-Type", .value = "text/event-stream" },
+    .{ .name = "Cache-Control", .value = "no-cache" },
+    .{ .name = "Access-Control-Allow-Origin", .value = "*" },
 };
 
 fn pathOnly(target: []const u8) []const u8 {
@@ -974,6 +1221,20 @@ test "request settings accept nucleus sampling" {
     try std.testing.expectApproxEqAbs(@as(f64, 0.85), settings.top_p, 1e-12);
 }
 
+test "request settings enforce the generation token limit" {
+    const allocator = std.testing.allocator;
+    for ([_][]const u8{ "{\"max_tokens\":-1}", "{\"max_tokens\":1.5}", "{\"max_tokens\":4097}" }) |body| {
+        const parsed = try json.parseFromSlice(json.Value, allocator, body, .{});
+        defer parsed.deinit();
+        var api_error: ?ApiError = null;
+        try std.testing.expectError(
+            error.OpenAIRequestError,
+            parseRequestSettings(allocator, parsed.value.object, .{}, &api_error),
+        );
+        try std.testing.expectEqualStrings("max_tokens", api_error.?.param.?);
+    }
+}
+
 test "request settings reject invalid nucleus mass" {
     const allocator = std.testing.allocator;
     const parsed = try json.parseFromSlice(json.Value, allocator, "{\"top_p\":1.2}", .{});
@@ -990,6 +1251,44 @@ test "request settings reject invalid nucleus mass" {
 test "stop sequences choose earliest match" {
     const stops = [_][]const u8{ "world", "lo" };
     try std.testing.expectEqual(@as(?usize, 3), firstStopIndex("hello world", &stops));
+}
+
+test "streaming stop sequences hold partial matches" {
+    const allocator = std.testing.allocator;
+    var output: std.Io.Writer.Allocating = .init(allocator);
+    defer output.deinit();
+    const stops = [_][]const u8{"ab"};
+    var stream: SseTokenWriter = .{
+        .allocator = allocator,
+        .output = &output.writer,
+        .flush_context = null,
+        .flush_fn = null,
+        .kind = .completion,
+        .model_name = "tiny-gpt-zig",
+        .created = 123,
+        .stop_sequences = &stops,
+    };
+    defer stream.deinit();
+
+    try stream.writeByte('x');
+    try stream.writeByte('a');
+    try std.testing.expectError(error.StopGeneration, stream.writeByte('b'));
+    try std.testing.expect(stream.stopped);
+    try std.testing.expect(std.mem.indexOf(u8, output.writer.buffered(), "\"text\":\"x\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.writer.buffered(), "\"text\":\"a\"") == null);
+}
+
+test "streaming events use OpenAI chunk shapes" {
+    const allocator = std.testing.allocator;
+    var output: std.Io.Writer.Allocating = .init(allocator);
+    defer output.deinit();
+
+    try writeSseTokenEvent(&output.writer, .chat, "tiny-gpt-zig", 123, '\n');
+    try writeSseFinishEvent(&output.writer, .chat, "tiny-gpt-zig", 123, "length");
+    const body = output.writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, body, "\"object\":\"chat.completion.chunk\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "\"delta\":{\"content\":\"\\n\"}") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "\"delta\":{},\"finish_reason\":\"length\"") != null);
 }
 
 test "models response has OpenAI-compatible list shape" {

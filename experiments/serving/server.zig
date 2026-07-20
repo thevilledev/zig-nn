@@ -8,6 +8,7 @@ const net = std.Io.net;
 const testing = std.testing;
 
 const max_body_bytes = 64 * 1024;
+const max_batch_size = 1024;
 
 const ServerOptions = struct {
     host: []const u8 = "127.0.0.1",
@@ -191,11 +192,11 @@ fn handleConnection(
     defer parsed.deinit();
 
     const response_body = predictionResponse(allocator, inference, parsed.value) catch |err| switch (err) {
-        error.UnsupportedBatchSize => {
+        error.InvalidBatchSize => {
             return respondApiError(&request, .{
                 .status = .bad_request,
-                .code = "unsupported_batch_size",
-                .message = "batch_size must be 1 for /predict.",
+                .code = "invalid_batch_size",
+                .message = "batch_size must be between 1 and 1024.",
             });
         },
         error.InvalidInputDimensions => {
@@ -221,10 +222,13 @@ fn readBody(request: *http.Server.Request, body_buf: []u8) ![]const u8 {
 }
 
 fn predictionResponse(allocator: std.mem.Allocator, inference: *DenseSession, request: Request) ![]u8 {
-    if (request.batch_size != 1) return error.UnsupportedBatchSize;
-    if (request.input.len != inference.inputSize()) return error.InvalidInputDimensions;
+    if (request.batch_size == 0 or request.batch_size > max_batch_size) return error.InvalidBatchSize;
+    const batch_size: usize = @intCast(request.batch_size);
+    const expected_input = std.math.mul(usize, batch_size, inference.inputSize()) catch
+        return error.InvalidInputDimensions;
+    if (request.input.len != expected_input) return error.InvalidInputDimensions;
 
-    const prediction = try inference.predictAlloc(request.input, 1);
+    const prediction = try inference.predictAlloc(request.input, batch_size);
     defer allocator.free(prediction);
 
     var body: std.Io.Writer.Allocating = .init(allocator);
@@ -312,6 +316,42 @@ test "request parsing defaults batch size" {
     defer parsed.deinit();
 
     try testing.expectEqual(@as(u32, 1), parsed.value.batch_size);
+}
+
+test "prediction response supports validated batches" {
+    const allocator = testing.allocator;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const model_path = try std.fs.path.join(allocator, &.{ ".zig-cache", "tmp", tmp.sub_path[0..], "batch.znn" });
+    defer allocator.free(model_path);
+
+    var network = nn.Network.init(allocator, 0.1, .MeanSquaredError);
+    defer network.deinit();
+    try network.addLayer(2, 1, nn.Activation.linear, nn.Activation.linear_derivative);
+    try network.saveToFile(model_path);
+    var inference = try DenseSession.init(allocator, model_path, .{ .device = .cpu });
+    defer inference.deinit();
+
+    var batch_input = [_]f32{ 0, 1, 1, 0 };
+    const response_body = try predictionResponse(allocator, &inference, .{
+        .input = &batch_input,
+        .batch_size = 2,
+    });
+    defer allocator.free(response_body);
+    const parsed = try json.parseFromSlice(Response, allocator, response_body, .{});
+    defer parsed.deinit();
+    try testing.expectEqual(@as(usize, 2), parsed.value.prediction.len);
+
+    var empty_input = [_]f32{};
+    try testing.expectError(error.InvalidBatchSize, predictionResponse(allocator, &inference, .{
+        .input = &empty_input,
+        .batch_size = 0,
+    }));
+    var invalid_input = [_]f32{ 0, 1, 1 };
+    try testing.expectError(error.InvalidInputDimensions, predictionResponse(allocator, &inference, .{
+        .input = &invalid_input,
+        .batch_size = 2,
+    }));
 }
 
 test "response formatting" {
