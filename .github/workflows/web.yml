@@ -29,6 +29,8 @@ jobs:
         run: npm ci
       - name: Check Svelte and TypeScript
         run: npm run check
+      - name: Lint frontend sources
+        run: npm run lint
       - name: Run unit and component tests
         run: npm test
       - name: Measure coverage

@@ -435,6 +435,13 @@ fn checkTextSessionAllocationFailure(allocator: Allocator, path: []const u8) !vo
     _ = try session.generate("ab", .{ .max_tokens = 1, .temperature = 0 }, &writer);
 }
 
+fn checkDenseSessionAllocationFailure(allocator: Allocator, path: []const u8) !void {
+    var session = try DenseSession.init(allocator, path, .{ .device = .cpu });
+    defer session.deinit();
+    var output: [1]f32 = undefined;
+    _ = try session.predictInto(&.{ 0.25, -0.5 }, 1, &output);
+}
+
 fn fuzzModelHeader(_: void, smith: *std.testing.Smith) !void {
     @disableInstrumentation();
     var buffer: [96]u8 = undefined;
@@ -444,6 +451,25 @@ fn fuzzModelHeader(_: void, smith: *std.testing.Smith) !void {
         .rangeAtMost(u8, 'A', 'Z', 2),
     });
     _ = inspectModelBytes(buffer[0..len]) catch {};
+}
+
+fn fuzzCheckpointLoaders(_: void, smith: *std.testing.Smith) !void {
+    @disableInstrumentation();
+    var buffer: [512]u8 = undefined;
+    const len = smith.sliceWeightedBytes(&buffer, &.{
+        .rangeAtMost(u8, 0, 255, 1),
+        .value(u8, 0, 3),
+        .rangeAtMost(u8, 'A', 'Z', 2),
+    });
+    const bytes = buffer[0..len];
+    if (network_mod.Network.loadFromBytes(std.testing.allocator, bytes)) |network_value| {
+        var network = network_value;
+        network.deinit();
+    } else |_| {}
+    if (tiny.Model.loadFromBytes(std.testing.allocator, bytes)) |model_value| {
+        var model = model_value;
+        model.deinit();
+    } else |_| {}
 }
 
 test "dense session predicts into caller storage and reports CPU telemetry" {
@@ -465,6 +491,9 @@ test "dense session predicts into caller storage and reports CPU telemetry" {
     try std.testing.expectEqual(backend_mod.BackendType.CPU, session.backendType());
     try std.testing.expectEqual(@as(usize, 1), stats.execution.uploads);
     try std.testing.expectEqual(@as(usize, 1), stats.execution.readbacks);
+    try std.testing.expectError(error.EmptyInput, session.predictInto(&.{}, 0, &output));
+    try std.testing.expectError(error.InvalidInputDimensions, session.predictInto(&.{1}, 1, output[0..1]));
+    try std.testing.expectError(error.InvalidOutputDimensions, session.predictInto(&.{ 1, 2 }, 1, output[0..0]));
 }
 
 test "text session reuses a loaded decoder and deterministic greedy generation" {
@@ -531,8 +560,74 @@ test "text session cleans up every allocation failure" {
     try std.testing.checkAllAllocationFailures(allocator, checkTextSessionAllocationFailure, .{path});
 }
 
+test "dense session cleans up every load and inference allocation failure" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try temporaryModelPath(allocator, &tmp, "allocation.znn");
+    defer allocator.free(path);
+    var network = network_mod.Network.init(allocator, 0.1, .MeanSquaredError);
+    defer network.deinit();
+    try network.addLayer(2, 1, @import("activation.zig").Activation.linear, @import("activation.zig").Activation.linear_derivative);
+    try network.saveToFile(path);
+    try std.testing.checkAllAllocationFailures(allocator, checkDenseSessionAllocationFailure, .{path});
+}
+
+test "seeded dense and text inference match every available backend" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dense_path = try temporaryModelPath(allocator, &tmp, "parity.znn");
+    defer allocator.free(dense_path);
+    const text_path = try temporaryModelPath(allocator, &tmp, "parity.tgpt");
+    defer allocator.free(text_path);
+
+    var network = network_mod.Network.init(allocator, 0.1, .MeanSquaredError);
+    defer network.deinit();
+    try network.addLayer(2, 3, @import("activation.zig").Activation.relu, @import("activation.zig").Activation.relu_derivative);
+    try network.addLayer(3, 1, @import("activation.zig").Activation.linear, @import("activation.zig").Activation.linear_derivative);
+    try network.saveToFile(dense_path);
+    var model = try tiny.Model.init(allocator, .{ .block_size = 4, .n_layer = 1, .n_head = 2, .n_embd = 8 }, 77);
+    defer model.deinit();
+    try model.saveToFile(text_path);
+
+    var dense_cpu = try DenseSession.init(allocator, dense_path, .{ .device = .cpu });
+    defer dense_cpu.deinit();
+    const dense_expected = try dense_cpu.predictAlloc(&.{ 0.25, -0.5 }, 1);
+    defer allocator.free(dense_expected);
+    var text_cpu = try TextSession.init(allocator, text_path, .{ .device = .cpu });
+    defer text_cpu.deinit();
+    var text_expected = try text_cpu.generateAlloc("ab", .{ .max_tokens = 6, .temperature = 0, .seed = 42 });
+    defer text_expected.deinit();
+
+    for ([_]tensor_mod.DevicePreference{ .metal, .cuda, .rocm }) |preference| {
+        var dense = DenseSession.init(allocator, dense_path, .{ .device = preference }) catch |err| switch (err) {
+            error.BackendUnavailable => continue,
+            else => return err,
+        };
+        defer dense.deinit();
+        const dense_actual = try dense.predictAlloc(&.{ 0.25, -0.5 }, 1);
+        defer allocator.free(dense_actual);
+        for (dense_expected, dense_actual) |expected, actual| {
+            try std.testing.expectApproxEqAbs(expected, actual, 1e-4);
+        }
+
+        var text = try TextSession.init(allocator, text_path, .{ .device = preference });
+        defer text.deinit();
+        var text_actual = try text.generateAlloc("ab", .{ .max_tokens = 6, .temperature = 0, .seed = 42 });
+        defer text_actual.deinit();
+        try std.testing.expectEqualStrings(text_expected.text, text_actual.text);
+    }
+}
+
 test "checkpoint header parser is fuzzable" {
     try std.testing.fuzz({}, fuzzModelHeader, .{
+        .corpus = &.{ "ZNN\x00", "TGPT", "NOPE", "TGPT\x03\x00\x00\x00" },
+    });
+}
+
+test "ZNN and TGPT checkpoint loaders accept fuzzed bytes" {
+    try std.testing.fuzz({}, fuzzCheckpointLoaders, .{
         .corpus = &.{ "ZNN\x00", "TGPT", "NOPE", "TGPT\x03\x00\x00\x00" },
     });
 }

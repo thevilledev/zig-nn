@@ -19,6 +19,8 @@ pub const Tokenizer = config_mod.Tokenizer;
 pub const LayerNorm = @import("../layer_norm.zig").LayerNorm;
 
 const checkpoint_format_version: u32 = 3;
+const max_checkpoint_parameters: usize = 16 * 1024 * 1024;
+const max_checkpoint_metadata_bytes: usize = 1024 * 1024;
 
 pub const Linear = struct {
     weights: Matrix,
@@ -608,6 +610,17 @@ pub const TinyGPT = struct {
         var file_reader = file.readerStreaming(io, &buffer);
         const reader = &file_reader.interface;
 
+        return loadFromReader(allocator, reader);
+    }
+
+    /// Loads a TinyGPT model from an in-memory checkpoint for fuzzing and
+    /// callers that already own the complete byte stream.
+    pub fn loadFromBytes(allocator: std.mem.Allocator, bytes: []const u8) !TinyGPT {
+        var reader: std.Io.Reader = .fixed(bytes);
+        return loadFromReader(allocator, &reader);
+    }
+
+    fn loadFromReader(allocator: std.mem.Allocator, reader: anytype) !TinyGPT {
         var magic: [4]u8 = undefined;
         @memcpy(&magic, try reader.take(4));
         if (!std.mem.eql(u8, &magic, "TGPT")) return error.InvalidFileFormat;
@@ -628,6 +641,9 @@ pub const TinyGPT = struct {
         {
             return error.UnsupportedVocabulary;
         }
+        if (try checkpointParameterCount(config) > max_checkpoint_parameters) {
+            return error.ModelTooLarge;
+        }
 
         var model = try TinyGPT.init(allocator, config, 0);
         errdefer model.deinit();
@@ -646,6 +662,7 @@ pub const TinyGPT = struct {
         try readLinearInto(reader, &model.lm_head);
         if (version >= 2) {
             const metadata_len = try reader.takeInt(u32, .little);
+            if (metadata_len > max_checkpoint_metadata_bytes) return error.ModelTooLarge;
             if (metadata_len > 0) _ = try reader.take(metadata_len);
         }
 
@@ -725,6 +742,30 @@ pub const TinyGPT = struct {
         );
     }
 };
+
+fn checkpointParameterCount(config: Config) !usize {
+    if (config.block_size == 0 or config.n_layer == 0 or config.n_head == 0 or
+        config.n_embd == 0 or config.n_embd % config.n_head != 0)
+    {
+        return error.InvalidConfig;
+    }
+    const n = config.n_embd;
+    const embeddings = try checkedMul(try checkedAdd(config.vocab_size, config.block_size), n);
+    const projection_weights = try checkedMul(12, try checkedMul(n, n));
+    const projection_biases_and_norms = try checkedMul(13, n);
+    const blocks = try checkedMul(config.n_layer, try checkedAdd(projection_weights, projection_biases_and_norms));
+    const final_norm = try checkedMul(2, n);
+    const head = try checkedAdd(try checkedMul(n, config.vocab_size), config.vocab_size);
+    return checkedAdd(try checkedAdd(embeddings, blocks), try checkedAdd(final_norm, head));
+}
+
+fn checkedMul(a: usize, b: usize) !usize {
+    return std.math.mul(usize, a, b) catch error.ModelTooLarge;
+}
+
+fn checkedAdd(a: usize, b: usize) !usize {
+    return std.math.add(usize, a, b) catch error.ModelTooLarge;
+}
 
 pub fn forwardDeviceTokens(
     allocator: std.mem.Allocator,

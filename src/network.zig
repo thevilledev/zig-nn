@@ -16,6 +16,9 @@ fn unixMilliTimestamp() i64 {
 }
 
 const persistence_version: u32 = 3;
+const max_checkpoint_layers: usize = 4096;
+const max_checkpoint_dimension: usize = 1 << 20;
+const max_checkpoint_parameters: usize = 16 * 1024 * 1024;
 
 const TemporaryModelFile = struct {
     file: std.Io.File,
@@ -2115,6 +2118,18 @@ pub const Network = struct {
         var file_reader = file.readerStreaming(io, &buffer);
         const reader = &file_reader.interface;
 
+        return loadFromReader(allocator, reader);
+    }
+
+    /// Loads a network from an in-memory checkpoint. Keeping the parser free
+    /// of filesystem state makes the complete loader suitable for fuzzing.
+    pub fn loadFromBytes(allocator: Allocator, bytes: []const u8) !Network {
+        var reader: std.Io.Reader = .fixed(bytes);
+        return loadFromReader(allocator, &reader);
+    }
+
+    fn loadFromReader(allocator: Allocator, reader: anytype) !Network {
+
         // Read and validate magic number
         var magic: [4]u8 = undefined;
         @memcpy(&magic, try reader.take(4));
@@ -2148,12 +2163,17 @@ pub const Network = struct {
         const file_input_size = try reader.takeInt(u32, .little);
         const file_output_size = try reader.takeInt(u32, .little);
         const layer_count = try reader.takeInt(u32, .little);
-        if (file_input_size == 0 or file_output_size == 0 or layer_count == 0) {
+        if (file_input_size == 0 or file_output_size == 0 or layer_count == 0 or
+            file_input_size > max_checkpoint_dimension or
+            file_output_size > max_checkpoint_dimension or
+            layer_count > max_checkpoint_layers)
+        {
             return error.InvalidFileFormat;
         }
 
         var network = Network.init(allocator, learning_rate, loss_function);
         errdefer network.deinit();
+        var parameter_count: usize = 0;
 
         // Read each layer
         for (0..layer_count) |layer_index| {
@@ -2161,6 +2181,32 @@ pub const Network = struct {
             const layer_input_size = try reader.takeInt(u32, .little);
             const layer_output_size = try reader.takeInt(u32, .little);
             const activation_type = try reader.takeByte();
+
+            if (layer_input_size == 0 or layer_output_size == 0 or
+                layer_input_size > max_checkpoint_dimension or
+                layer_output_size > max_checkpoint_dimension)
+            {
+                return error.InvalidFileFormat;
+            }
+            const weight_count = std.math.mul(
+                usize,
+                @intCast(layer_input_size),
+                @intCast(layer_output_size),
+            ) catch return error.ModelTooLarge;
+            const projection_count: usize = switch (layer_type) {
+                0 => 1,
+                1 => 2,
+                else => return error.InvalidLayerType,
+            };
+            const layer_parameters = std.math.mul(usize, weight_count, projection_count) catch
+                return error.ModelTooLarge;
+            const bias_parameters = std.math.mul(usize, @intCast(layer_output_size), projection_count) catch
+                return error.ModelTooLarge;
+            parameter_count = std.math.add(usize, parameter_count, layer_parameters) catch
+                return error.ModelTooLarge;
+            parameter_count = std.math.add(usize, parameter_count, bias_parameters) catch
+                return error.ModelTooLarge;
+            if (parameter_count > max_checkpoint_parameters) return error.ModelTooLarge;
 
             if (layer_index == 0) {
                 if (layer_input_size != file_input_size) return error.InvalidFileFormat;
@@ -3233,4 +3279,28 @@ test "model persistence loads version 1 and version 2 files" {
     try testing.expectApproxEqAbs(@as(f64, 0.025), version_2_network.learning_rate, 1e-12);
     try testing.expectEqual(LossFunction.CrossEntropy, version_2_network.loss_function);
     try testing.expect(version_2_network.layers.items[0].Standard.activation_fn == Activation.sigmoid);
+}
+
+test "model persistence rejects truncated in-memory checkpoints" {
+    const allocator = testing.allocator;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try temporaryModelPath(allocator, &tmp, "truncated.bin");
+    defer allocator.free(path);
+    var network = Network.init(allocator, 0.1, .MeanSquaredError);
+    defer network.deinit();
+    try network.addLayer(2, 1, Activation.linear, Activation.linear_derivative);
+    try network.saveToFile(path);
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(std.Options.debug_io, path, allocator, .limited(1024 * 1024));
+    defer allocator.free(bytes);
+
+    var loaded = try Network.loadFromBytes(allocator, bytes);
+    loaded.deinit();
+    for ([_]usize{ 0, 3, 8, 24, 37, bytes.len - 1 }) |length| {
+        if (Network.loadFromBytes(allocator, bytes[0..length])) |loaded_value| {
+            var unexpected = loaded_value;
+            unexpected.deinit();
+            return error.ExpectedTruncatedCheckpointFailure;
+        } else |_| {}
+    }
 }
