@@ -6,7 +6,7 @@ require (
 	github.com/spf13/cobra v1.10.2
 	github.com/verda-cloud/verdacloud-sdk-go v1.4.2
 	github.com/zalando/go-keyring v0.2.8
-	modernc.org/sqlite v1.54.0
+	modernc.org/sqlite v1.55.0
 )
 
 require (
