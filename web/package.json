@@ -20,7 +20,7 @@
     "@types/node": "26.1.2",
     "@vitest/coverage-v8": "4.1.10",
     "@typescript/native": "npm:typescript@7.0.2",
-    "jsdom": "29.1.1",
+    "jsdom": "30.0.0",
     "oxlint": "1.76.0",
     "svelte-check": "4.7.4",
     "typescript": "npm:@typescript/typescript6@6.0.2",
