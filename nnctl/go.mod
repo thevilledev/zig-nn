@@ -4,7 +4,7 @@ go 1.26
 
 require (
 	github.com/spf13/cobra v1.10.2
-	github.com/verda-cloud/verdacloud-sdk-go v1.4.3
+	github.com/verda-cloud/verdacloud-sdk-go v1.5.0
 	github.com/zalando/go-keyring v0.2.8
 	modernc.org/sqlite v1.58.0
 )
