@@ -3,27 +3,27 @@ updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
     cooldown:
-      default-days: 7
+      default-days: 14
 
   - package-ecosystem: gomod
     directory: /nnctl
     schedule:
-      interval: weekly
+      interval: monthly
     cooldown:
-      default-days: 7
+      default-days: 14
 
   - package-ecosystem: npm
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
     cooldown:
-      default-days: 7
+      default-days: 14
 
   - package-ecosystem: npm
     directory: /web
     schedule:
-      interval: weekly
+      interval: monthly
     cooldown:
-      default-days: 7
+      default-days: 14
